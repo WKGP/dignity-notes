@@ -894,7 +894,10 @@ function loginText(username, password) {
 function openTesters() {
   const s = sheet(`${sheetHead("People")}
     <p class="small muted" style="margin:0">People you add can sign in on their own phone and try the app. Their notes stay on their phone. Removing someone signs them out straight away.</p>
-    <div class="card"><div class="list" id="tList"><div class="empty">Loading testers…</div></div></div>
+    <div class="card"><div class="list" id="tList"><div class="empty">Loading people…</div></div></div>
+    <div class="card"><div class="card-h"><h3>Sign-in history</h3><span class="muted small">Last 90 days</span></div>
+      <div class="list" id="tLog"><div class="empty">Loading…</div></div>
+      <p class="tiny muted" style="margin:8px 0 0">Location is estimated from the internet connection, so it may show a nearby town.</p></div>
     <form class="card" id="tForm" style="display:grid;gap:12px"><h3 style="font-size:17px">Add a person</h3>
       <label class="f">Name<input type="text" id="tName" placeholder="Mary Smith" autocomplete="off"></label>
       <label class="f">Username<input type="text" id="tUser" placeholder="mary.smith" autocapitalize="none" spellcheck="false" autocomplete="off"></label>
@@ -930,6 +933,18 @@ function openTesters() {
       }));
     } catch (e) { listEl.innerHTML = `<div class="empty">Couldn't load testers: ${esc(e.message)}</div>`; }
   };
+  const loadLog = async () => {
+    const el = $("#tLog", s.root);
+    try {
+      const { logins } = await relay("/admin/logins", {});
+      el.innerHTML = logins.length ? logins.slice(0, 50).map((l) => `<div class="item">
+        <div class="when" style="min-width:64px"><div>${fmtTime(l.t)}</div><div class="tiny muted" style="font-weight:400">${esc(new Date(l.t).toLocaleDateString("en-GB", { day: "numeric", month: "short" }))}</div></div>
+        <div class="body"><div><strong>${esc(l.u)}</strong> ${l.ok ? '<span class="chip accent">Signed in</span>' : '<span class="chip incident">Wrong password</span>'}</div>
+        <div class="small muted">${esc(l.device)} · ${esc(l.place)}</div><div class="tiny muted">IP ${esc(l.ip)}</div></div></div>`).join("")
+        : '<div class="empty">No sign-ins recorded yet.</div>';
+    } catch (e) { el.innerHTML = `<div class="empty">Couldn't load sign-in history: ${esc(e.message)}</div>`; }
+  };
+  loadLog();
   $("#tGen").onclick = () => { $("#tPass").value = suggestPassword(); };
   $("#tPass").value = suggestPassword();
   $("#tForm").onsubmit = async (e) => {
