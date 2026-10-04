@@ -5,8 +5,11 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#5B3F8C">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Nana Care">
-<title>Nana Care</title>
+<meta name="apple-mobile-web-app-title" content="Dignity Notes">
+<title>Dignity Notes</title>
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Literata:opsz,wght@7..72,400;7..72,500&family=Source+Sans+3:wght@400;500;600;700&display=swap">
@@ -191,7 +194,7 @@ textarea.note-edit{font-family:var(--f-note);font-size:16.5px;min-height:170px}
 
 <header class="top">
   <div class="wrap">
-    <div class="brand"><h1 id="clientName">Nana</h1><p>Live-in care record</p></div>
+    <div class="brand"><h1 id="clientName">Nana</h1><p>Dignity Notes · personal care record</p></div>
     <button class="duty" id="dutyBtn" aria-label="Change carer on duty"><span class="avatar" id="dutyAvatar">A</span><span id="dutyName">Ann</span></button>
     <button class="icon-btn" id="settingsBtn" aria-label="Settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
   </div>
@@ -250,7 +253,13 @@ function toast(msg) {
 }
 
 /* ---------- store ---------- */
-const KEY = "nanacare.v3";
+// Relay address, filled in after `npx wrangler deploy`. While empty, the sign-in screen asks for it.
+const RELAY_URL = "";
+const SESSION_KEY = "nanacare.session";
+let session = null;
+try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch {}
+const relayBase = () => (RELAY_URL || (session && session.relayUrl) || "").replace(/\/+$/, "");
+let KEY = "nanacare.v3";
 let S;
 function seed() {
   const at = (h, m, dayOffset = 0) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.getTime() + dayOffset * 864e5; };
@@ -287,7 +296,9 @@ function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); return true; }
   catch { toast("Couldn't save on this phone. Storage may be full."); return false; }
 }
-S = load() || seed();
+S = seed(); // replaced by the signed-in person's own data in loadUser()
+// Each person who signs in on this phone gets their own notes.
+function loadUser() { KEY = "nanacare.v3." + session.username; S = load() || seed(); }
 const carer = (id) => S.carers.find((c) => c.id === id) || { name: "Unknown", shift: "" };
 const onDuty = () => carer(S.onDuty);
 const openFlags = () => S.flags.filter((f) => f.status === "open");
@@ -310,18 +321,17 @@ const audioDB = (() => {
 })();
 
 /* ---------- AI: relay first, basic offline rules as fallback ---------- */
-async function relay(path, body) {
-  const { relayUrl, accessCode } = S.settings;
-  if (!relayUrl || !accessCode) throw new Error("AI not connected");
+async function relay(path, body, { auth = true } = {}) {
+  const base = relayBase();
+  if (!base) throw new Error("AI not connected");
   if (!navigator.onLine) throw new Error("No internet connection");
   const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 60000);
   try {
-    const r = await fetch(relayUrl.replace(/\/+$/, "") + path, {
-      method: "POST", signal: ctl.signal,
-      headers: { "Content-Type": "application/json", "X-Access-Code": accessCode },
-      body: JSON.stringify(body),
-    });
+    const headers = { "Content-Type": "application/json" };
+    if (auth && session && session.token) headers.Authorization = "Bearer " + session.token;
+    const r = await fetch(base + path, { method: "POST", signal: ctl.signal, headers, body: JSON.stringify(body || {}) });
     const j = await r.json().catch(() => ({}));
+    if (r.status === 401 && auth && session && !session.local) signedOut("Your sign-in has ended. Sign in again to carry on.");
     if (!r.ok) throw new Error(j.error || "Error " + r.status);
     return j;
   } catch (e) { throw new Error(e.name === "AbortError" ? "AI took too long" : e.message); }
@@ -661,11 +671,11 @@ function openEventSheet() {
 function openSettings() {
   const c = S.consent;
   const s = sheet(`${sheetHead("Settings")}
-    <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">AI note writing</h3>
-      <p class="small muted" style="margin:0">Connect to the Nana Care relay for AI-written notes. Without it the app still works offline with a basic tidy.</p>
-      <label class="f">Relay address<input type="text" id="stUrl" value="${esc(S.settings.relayUrl)}" placeholder="https://nana-care-relay.example.workers.dev" autocomplete="off" inputmode="url"></label>
-      <label class="f">Access code<input type="password" id="stCode" value="${esc(S.settings.accessCode)}" autocomplete="off"></label>
-      <button class="btn secondary" id="stTest">Save and test connection</button><div class="small" id="stMsg"></div></div>
+    <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Your account</h3>
+      <p class="small" style="margin:0">Signed in as <strong>${esc(session.name)}</strong> <span class="muted">(${esc(session.username)} · ${session.role === "admin" ? "Administrator" : "Tester"})</span></p>
+      ${session.role === "admin" ? '<button class="btn primary" id="stTesters">Manage testers</button>' : ""}
+      <button class="btn secondary" id="stTest">Check AI connection</button><div class="small" id="stMsg"></div>
+      <button class="btn ghost" id="stOut">Sign out</button></div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">People</h3>
       <label class="f">Client's name<input type="text" id="stClient" value="${esc(S.client.name)}" autocomplete="off"></label>
       ${S.carers.map((x, i) => `<div class="row"><label class="f" style="flex:1 1 120px">Carer ${i + 1}<input type="text" data-cn="${x.id}" value="${esc(x.name)}" autocomplete="off"></label><label class="f" style="flex:1 1 160px">Shift<input type="text" data-cs="${x.id}" value="${esc(x.shift)}" autocomplete="off"></label></div>`).join("")}
@@ -676,13 +686,17 @@ function openSettings() {
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Demo data</h3>
       <p class="small muted" style="margin:0">Start again with the example day. Deletes all notes and recordings on this phone.</p>
       <button class="btn ghost" id="stReset">Reset demo</button><button class="btn danger" id="stResetYes" hidden>Yes, delete everything</button></div>
-    <p class="tiny muted" style="margin:0;text-align:center">Nana Care prototype V3 · fictional test use only · not a secure care record yet</p>`);
+    <p class="tiny muted" style="margin:0;text-align:center">Dignity Notes prototype V3.1 · fictional test use only · not a secure care record yet</p>`);
   $("#stTest").onclick = async () => {
-    S.settings.relayUrl = $("#stUrl").value.trim(); S.settings.accessCode = $("#stCode").value.trim(); save();
-    const m = $("#stMsg"); m.textContent = "Testing…";
-    try { const out = await relay("/tidy", { transcript: "Connection test. Nana had a cup of tea.", client: "Nana", carer: "Test", time: "now" }); if (!validTidy(out)) throw new Error("that address isn't the Nana Care relay"); m.textContent = "Connected. Notes will be written by AI."; m.style.color = "var(--accent)"; }
-    catch (e) { m.textContent = "Not connected: " + e.message; m.style.color = "var(--incident)"; }
+    const m = $("#stMsg"); m.textContent = "Checking…"; m.style.color = "";
+    try { const me = await relay("/me", {}); if (!me.username) throw new Error("that address isn't the Dignity Notes relay"); m.textContent = "Connected. Notes will be written by AI."; m.style.color = "var(--accent)"; }
+    catch (e) { m.textContent = "Not connected: " + e.message + ". Notes will use the basic offline tidy."; m.style.color = "var(--incident)"; }
   };
+  if ($("#stTesters")) $("#stTesters").onclick = () => { s.close(); openTesters(); };
+  $("#stOut").onclick = async (e) => confirmInline(e.currentTarget, async () => {
+    if (!session.local) relay("/logout", {}).catch(() => {});
+    s.close(); signedOut("You've signed out.");
+  });
   $("#stPeople").onclick = () => {
     S.client.name = $("#stClient").value.trim() || "Nana";
     s.root.querySelectorAll("[data-cn]").forEach((i) => (carer(i.dataset.cn).name = i.value.trim() || carer(i.dataset.cn).name));
@@ -818,13 +832,127 @@ async function openReview({ transcript, blob, typed }) {
   else run();
 }
 
+/* ---------- sign-in ---------- */
+const lastRelay = () => { try { return localStorage.getItem("nanacare.relay") || ""; } catch { return ""; } };
+function saveSession() {
+  try { if (session && session.relayUrl) localStorage.setItem("nanacare.relay", session.relayUrl); } catch {}
+  try { session ? localStorage.setItem(SESSION_KEY, JSON.stringify(session)) : localStorage.removeItem(SESSION_KEY); } catch {} }
+function signedOut(msg) {
+  session = null; saveSession(); $("#sheetRoot").innerHTML = ""; handoverDraft = familySummary = null; showLogin(msg);
+}
+function showLogin(msg) {
+  const local = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  const root = $("#fullRoot");
+  root.innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap" style="max-width:440px">
+    <div style="display:grid;gap:6px;margin-top:4vh"><img src="icon-192.png" alt="" width="84" height="84" style="border-radius:22px;box-shadow:var(--shadow);margin-bottom:10px"><span class="eyebrow">Dignity Notes</span>
+      <h2 style="font-size:32px;line-height:1.1">Sign in</h2>
+      <p class="muted" style="margin:0">Spoken care notes for people who care for older adults at home. Use the username and password you were given.</p></div>
+    ${msg ? `<div class="warn">${esc(msg)}</div>` : ""}
+    <form id="lgForm" style="display:grid;gap:14px">
+      <label class="f">Username<input type="text" id="lgUser" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+      <label class="f">Password<input type="password" id="lgPass" autocomplete="current-password" required></label>
+      ${RELAY_URL ? "" : `<label class="f">Relay address<input type="text" id="lgRelay" inputmode="url" autocomplete="off" placeholder="https://nana-care-relay.example.workers.dev" value="${esc((session && session.relayUrl) || lastRelay())}"></label>`}
+      <button class="btn primary block" id="lgGo">Sign in</button>
+      <div class="small" id="lgMsg" role="alert" style="color:var(--incident)"></div>
+    </form>
+    ${local ? '<button class="link" id="lgLocal" style="justify-self:center">Continue without signing in (local testing only)</button>' : ""}
+    <p class="tiny muted" style="margin:0;text-align:center">Prototype for evaluation with fictional information only. Ask the person who invited you if you need a login.</p>
+  </div></div>`;
+  $("#lgForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $("#lgGo"), m = $("#lgMsg"); m.textContent = "";
+    const username = $("#lgUser").value.trim().toLowerCase(), password = $("#lgPass").value;
+    const relayUrl = RELAY_URL || ($("#lgRelay") ? $("#lgRelay").value.trim() : "");
+    if (!relayUrl) { m.textContent = "Enter the relay address."; return; }
+    btn.disabled = true; btn.textContent = "Signing in…";
+    session = { relayUrl };
+    try {
+      const out = await relay("/login", { username, password }, { auth: false });
+      if (!out.token) throw new Error("That address isn't the Dignity Notes relay.");
+      session = { token: out.token, username: out.username, role: out.role, name: out.name, relayUrl };
+      saveSession(); loadUser(); root.innerHTML = ""; go("today"); showConsent();
+    } catch (err) {
+      session = null; btn.disabled = false; btn.textContent = "Sign in";
+      m.textContent = /fetch|network|load failed/i.test(err.message) ? "Couldn't reach the server. Check your internet connection and the relay address." : err.message;
+    }
+  };
+  if ($("#lgLocal")) $("#lgLocal").onclick = () => {
+    session = { username: "local", role: "admin", name: "Local tester", local: true, relayUrl: "" };
+    saveSession(); loadUser(); root.innerHTML = ""; go("today"); showConsent();
+  };
+  setTimeout(() => $("#lgUser") && $("#lgUser").focus(), 50);
+}
+
+const WORDS = ["plum", "rose", "maple", "river", "cloud", "lemon", "harbour", "meadow", "pebble", "willow", "copper", "sunny", "garden", "breeze", "orchard", "velvet"];
+function suggestPassword() {
+  const r = crypto.getRandomValues(new Uint32Array(4));
+  return `${WORDS[r[0] % WORDS.length]}-${WORDS[r[1] % WORDS.length]}-${WORDS[r[2] % WORDS.length]}-${10 + (r[3] % 90)}`;
+}
+function loginText(username, password) {
+  return `Dignity Notes test login\nLink: ${location.href.split("#")[0]}\nUsername: ${username}\nPassword: ${password}`;
+}
+function openTesters() {
+  const s = sheet(`${sheetHead("Testers")}
+    <p class="small muted" style="margin:0">People you add can sign in on their own phone and try the app. Their notes stay on their phone. Removing someone signs them out straight away.</p>
+    <div class="card"><div class="list" id="tList"><div class="empty">Loading testers…</div></div></div>
+    <form class="card" id="tForm" style="display:grid;gap:12px"><h3 style="font-size:17px">Add a tester</h3>
+      <label class="f">Name<input type="text" id="tName" placeholder="Mary Smith" autocomplete="off"></label>
+      <label class="f">Username<input type="text" id="tUser" placeholder="mary.smith" autocapitalize="none" spellcheck="false" autocomplete="off"></label>
+      <label class="f">Password<span class="row"><input type="text" id="tPass" style="flex:1 1 170px" autocomplete="off" spellcheck="false"><button class="btn ghost" type="button" id="tGen" style="flex:0 0 auto">Suggest</button></span></label>
+      <button class="btn primary">Add tester</button><div class="small" id="tMsg"></div></form>`);
+  const listEl = $("#tList", s.root);
+  const showShare = (el, username, password, label) => {
+    el.innerHTML = `<div class="warn" style="display:grid;gap:8px"><span><strong>${esc(label)}</strong> Send these details to the tester yourself:</span>
+      <code style="white-space:pre-wrap;font-size:13px">${esc(loginText(username, password))}</code>
+      <button class="btn secondary" type="button">Copy details</button></div>`;
+    el.querySelector("button").onclick = async () => {
+      try { await navigator.clipboard.writeText(loginText(username, password)); toast("Copied"); }
+      catch { const r = document.createRange(); r.selectNodeContents(el.querySelector("code")); getSelection().removeAllRanges(); getSelection().addRange(r); toast("Selected. Copy it from the menu."); }
+    };
+  };
+  const load = async () => {
+    try {
+      const { users } = await relay("/admin/users", {});
+      listEl.innerHTML = users.length ? users.sort((a, b) => a.name.localeCompare(b.name)).map((u) => `<div class="item" style="flex-wrap:wrap">
+        <span class="avatar">${esc((u.name || u.username).charAt(0).toUpperCase())}</span>
+        <div class="body"><strong>${esc(u.name || u.username)}</strong><div class="small muted">${esc(u.username)}${u.createdAt ? " · added " + esc(new Date(u.createdAt).toLocaleDateString("en-GB")) : ""}</div></div>
+        <button class="link" data-reset="${esc(u.username)}">New password</button>
+        <button class="link" style="color:var(--record)" data-remove="${esc(u.username)}">Remove</button>
+        <div data-slot="${esc(u.username)}" style="flex-basis:100%"></div></div>`).join("") : '<div class="empty">No testers yet. Add the first one below.</div>';
+      listEl.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
+        try { await relay("/admin/remove", { username: b.dataset.remove }); toast("Removed"); load(); } catch (e) { toast(e.message); }
+      })));
+      listEl.querySelectorAll("[data-reset]").forEach((b) => (b.onclick = async () => {
+        const password = suggestPassword(); const slot = listEl.querySelector(`[data-slot="${CSS.escape(b.dataset.reset)}"]`);
+        try { await relay("/admin/reset", { username: b.dataset.reset, password }); showShare(slot, b.dataset.reset, password, "Password changed."); }
+        catch (e) { toast(e.message); }
+      }));
+    } catch (e) { listEl.innerHTML = `<div class="empty">Couldn't load testers: ${esc(e.message)}</div>`; }
+  };
+  $("#tGen").onclick = () => { $("#tPass").value = suggestPassword(); };
+  $("#tPass").value = suggestPassword();
+  $("#tForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const name = $("#tName").value.trim(), username = $("#tUser").value.trim().toLowerCase(), password = $("#tPass").value.trim(), m = $("#tMsg");
+    m.textContent = ""; m.style.color = "var(--incident)";
+    if (!name || !username) { m.textContent = "Enter a name and a username."; return; }
+    try {
+      await relay("/admin/add", { name, username, password });
+      showShare(m, username, password, "Tester added.");
+      $("#tName").value = $("#tUser").value = ""; $("#tPass").value = suggestPassword(); load();
+    } catch (err) { m.textContent = err.message; }
+  };
+  load();
+}
+
 /* ---------- consent (first run) ---------- */
 function showConsent() {
   if (S.consent) return;
   const root = $("#fullRoot");
   root.innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap">
+    <img src="icon-192.png" alt="" width="56" height="56" style="border-radius:15px;box-shadow:var(--shadow)">
     <span class="eyebrow">Before you start</span>
-    <h2 style="font-size:30px;line-height:1.15">Using Nana Care in this home</h2>
+    <h2 style="font-size:30px;line-height:1.15">Using Dignity Notes in this home</h2>
     <p class="muted" style="margin:0">Carers record short voice notes about ${esc(S.client.name)}'s day. The app keeps the original recording, writes a tidy note and builds the handover for the next carer.</p>
     <div class="card small" style="display:grid;gap:8px">
       <div><strong>What is recorded:</strong> the carer's voice. Other voices nearby may be picked up.</div>
@@ -834,9 +962,9 @@ function showConsent() {
     <p class="small" style="margin:0">The client, or the person holding Lasting Power of Attorney for health and welfare, should agree before this is used.</p>
     <label class="f">Name of the person agreeing<input type="text" id="cnName" autocomplete="off"></label>
     <label class="f">They are<select id="cnRole"><option>The client</option><option>Lasting Power of Attorney (health and welfare)</option><option>Other authorised family member</option></select></label>
-    <label class="check"><input type="checkbox" id="cnOk"><span>I agree to Nana Care being used to keep care notes and voice recordings in this home.</span></label>
+    <label class="check"><input type="checkbox" id="cnOk"><span>I agree to Dignity Notes being used to keep care notes and voice recordings in this home.</span></label>
     <label class="f">Who is on duty now?<select id="cnDuty">${S.carers.map((c) => `<option value="${c.id}" ${c.id === S.onDuty ? "selected" : ""}>${esc(c.name)} · ${esc(c.shift)}</option>`).join("")}</select></label>
-    <button class="btn primary block" id="cnGo" disabled>Start using Nana Care</button>
+    <button class="btn primary block" id="cnGo" disabled>Start using Dignity Notes</button>
     <p class="tiny muted" style="margin:0;text-align:center">Prototype for testing with fictional information only.</p>
   </div></div>`;
   const check = () => ($("#cnGo").disabled = !($("#cnOk").checked && $("#cnName").value.trim()));
@@ -848,8 +976,8 @@ function showConsent() {
 }
 
 /* ---------- boot ---------- */
-render();
-showConsent();
+if (session && (session.token || session.local)) { loadUser(); render(); showConsent(); }
+else { render(); showLogin(); }
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
 </body>
