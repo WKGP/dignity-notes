@@ -181,14 +181,15 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
 <!-- 3 -->
 <section class="s" id="client">
   <h2><span class="n">3</span>Choosing who you care for</h2>
-  <p class="lede">After signing in, choose the person you're caring for (the "client"). If there's only one, the app opens them straight away.</p>
+  <p class="lede">After signing in, choose the person you're caring for (the "client"). You only see the clients an administrator has put you on. If there's only one, the app opens them straight away.</p>
   <div class="step"><div>
     <h3>Pick a client</h3>
     <ol>
       <li>Under <strong>Who are you caring for?</strong>, tap the person's name.</li>
       <li>The app opens their Today screen.</li>
     </ol>
-    <p>Each client shows who agreed to Dignity Notes being used, and when. That agreement was given once, when the client was added, so you won't be asked for it again.</p>
+    <p>Each client shows who agreed to Dignity Notes being used, and when, and which carers look after them. That agreement was given once, when the client was added, so you won't be asked for it again.</p>
+    <p>Someone missing from your list? Ask your administrator to add you to that client.</p>
     <p class="tip">To change client later, go to <strong>Settings</strong> (the cog, top right), then <strong>Switch or add client</strong>.</p>
   </div><figure><img src="manual/04-choose-client.jpg" alt="Client list showing Arthur and Nana, each with who agreed and when" loading="lazy" width="469" height="1015"><figcaption>Choose who you're caring for</figcaption></figure></div>
   <div class="step"><div>
@@ -201,7 +202,7 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
       <li>Type the <strong>name of the person agreeing</strong> and choose who they are: the client, their attorney, or another authorised family member.</li>
       <li>Tick the agreement box and tap <span class="btnref p">Add client and start</span>.</li>
     </ol>
-    <p>The agreement is saved once, for everyone. Every carer who signs in will see it.</p>
+    <p>The agreement is saved once, for everyone. You're added as the client's carer automatically, and an administrator can add the other carers.</p>
   </div><figure><img src="manual/05-add-client.jpg" alt="New client form with client's name, explanation, name of the person agreeing, who they are, and agreement tick box" loading="lazy" width="469" height="1015"><figcaption>Adding a client records their agreement</figcaption></figure></div>
 </section>
 
@@ -348,16 +349,16 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
 <!-- 11 -->
 <section class="s" id="duty">
   <h2><span class="n">11</span>Who's on duty</h2>
-  <p class="lede">Every note is stamped with the carer on duty, so make sure it's you.</p>
+  <p class="lede">Every note is stamped with the carer on duty. When you open the app, that's you.</p>
   <div class="step"><div>
     <h3>Change the carer on duty</h3>
     <ol>
-      <li>Tap the name button at the top (for example <strong>Ann</strong>).</li>
-      <li>Tap your name.</li>
+      <li>Tap the name button at the top.</li>
+      <li>Tap the carer who is now on duty. This is only needed when carers share one phone.</li>
     </ol>
-    <p>At the end of a shift, use <a href="#handover">Handover</a> instead: it passes on properly and switches the carer for you.</p>
-    <p class="tip">Carer names and shift times are set in <strong>Settings</strong>.</p>
-  </div><figure><img src="manual/18-on-duty.jpg" alt="Who's on duty list: Ann on duty, Joy, Grace" loading="lazy" width="469" height="1015"><figcaption>Choosing who's on duty</figcaption></figure></div>
+    <p>The list shows the carers an administrator has put on this client. Each time the app is opened, the person signed in is on duty again. At the end of a shift, use <a href="#handover">Handover</a> to pass on properly.</p>
+    <p class="tip">Shift times are set in <strong>Settings</strong>.</p>
+  </div><figure><img src="manual/18-on-duty.jpg" alt="Who's on duty list: Jo Carer on duty, Sam, with their shifts" loading="lazy" width="469" height="1015"><figcaption>Choosing who's on duty</figcaption></figure></div>
 </section>
 
 <!-- 12 -->
@@ -370,10 +371,12 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
       <li>Tap <strong>Handover</strong> at the bottom.</li>
       <li>Tap <span class="btnref p">Prepare handover</span>. It takes a few seconds.</li>
       <li>Read it. It has three parts: <strong>How the shift went</strong>, <strong>Concerns for the next carer</strong> and <strong>Coming up</strong>. Tap to change anything.</li>
-      <li>Under <strong>Handing over to</strong>, choose the next carer.</li>
+      <li>Under <strong>Handing over to</strong>, choose the next carer from the carers on this client.</li>
       <li>Tap <span class="btnref p">Approve and hand over</span>.</li>
     </ol>
-    <p>The next carer becomes the carer on duty and sees your handover on their Today screen. Past handovers are under <strong>Recent handovers</strong>.</p>
+    <p>The handover is saved in the record log and shown under <strong>Previous handover</strong> on the Today screen. Past handovers are under <strong>Recent handovers</strong>.</p>
+    <p>If you're the only carer on this client so far, there's no one to choose: the handover is saved for the next carer.</p>
+    <div class="callout info"><strong>In this pilot</strong>Notes and handovers stay on the phone they were made on. The next carer sees your handover if they use the same phone; otherwise, share it with them as you do now. Sharing between phones is planned for a later version.</div>
   </div><figure><img src="manual/12-handover.jpg" alt="Handover screen with the written handover, Handing over to, and Approve and hand over" loading="lazy" width="469" height="1015"><figcaption>Check, then Approve and hand over</figcaption></figure></div>
 </section>
 
@@ -410,9 +413,9 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
     <ul>
       <li><strong>Your account:</strong> shows who you're signed in as. <strong>Check AI connection</strong> tells you whether notes will be written by AI. <strong>Sign out</strong> signs you out of this phone.</li>
       <li><strong>Client:</strong> <strong>Switch or add client</strong> takes you back to the client list.</li>
-      <li><strong>Carers:</strong> change carer names and shift times, then tap <strong>Save names</strong>.</li>
+      <li><strong>Carers for</strong> the client: everyone who looks after them. Type each person's shift (for example "Day · 08:00–20:00") and tap <strong>Save shifts</strong>. Every carer on the client sees the same shifts.</li>
     </ul>
-  </div><figure><img src="manual/20-settings.jpg" alt="Settings: your account, client, carers" loading="lazy" width="469" height="1015"><figcaption>Settings, top</figcaption></figure></div>
+  </div><figure><img src="manual/20-settings.jpg" alt="Settings: your account, client, and the carers for Nana with their shifts" loading="lazy" width="469" height="1015"><figcaption>Settings, top</figcaption></figure></div>
   <div class="step"><div>
     <h3>Further down</h3>
     <ul>
@@ -459,15 +462,18 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
       <li>Go to <strong>Settings</strong>, then tap <span class="btnref p">Manage people</span>.</li>
       <li>Each person shows their username, when they were added, and whether they've accepted the privacy notice.</li>
       <li>A red <strong>⚠ 2 devices</strong> badge means the account has been used on more than one phone. Tap <strong>Devices</strong> to see which phones and where.</li>
+      <li><strong>Cares for:</strong> tick the clients each person looks after. Carers only see the clients ticked for them, and appear in that client's carers, handover and shifts. Administrators can open every client; tick a client for them too if they also do shifts.</li>
     </ol>
+    <p class="tip">From a client's <strong>Settings</strong>, <strong>Change who cares for</strong> brings you straight here.</p>
     <ul>
       <li><strong>Lock to first device:</strong> refuses sign-ins from any other phone.</li>
       <li><strong>Reset devices:</strong> the next phone they sign in on becomes their home phone.</li>
       <li><strong>New password:</strong> makes a new password for you to send them.</li>
-      <li><strong>Remove:</strong> signs them out straight away and deletes their account (tap twice to confirm).</li>
+      <li><strong>Remove:</strong> signs them out straight away, deletes their account and takes them off their clients (tap twice to confirm).</li>
     </ul>
+    <p>The main administrator (the first login, set up with the relay) also appears here so you can tick their clients. Their password and device lock are managed outside the app.</p>
     <p><strong>Sign-in history</strong> lists every sign-in from the last 90 days, including wrong passwords and blocked phones.</p>
-  </div><figure><img src="manual/24-people.jpg" alt="People list with account details, device count, lock option, new password and remove" loading="lazy" width="469" height="1015"><figcaption>The people list</figcaption></figure></div>
+  </div><figure><img src="manual/24-people.jpg" alt="People list with account details, the clients each person cares for, lock option, new password and remove" loading="lazy" width="469" height="1015"><figcaption>The people list</figcaption></figure></div>
   <div class="step"><div>
     <h3>Add a person</h3>
     <ol>
@@ -514,7 +520,9 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
   <details class="faq"><summary>I can't see notes from another carer's phone</summary>
     <p>In this pilot, notes and recordings stay on the phone that made them. The handover is how information passes between carers. Sharing notes between phones is planned for a later version.</p></details>
   <details class="faq"><summary>The client I was using has disappeared</summary>
-    <p>An administrator has removed that client, for example because the agreement was withdrawn. The app takes you back to the client list. Speak to your administrator.</p></details>
+    <p>An administrator has taken you off that client, or removed the client, for example because the agreement was withdrawn. The app takes you back to the client list. Speak to your administrator.</p></details>
+  <details class="faq"><summary>A client I care for isn't in my list</summary>
+    <p>You haven't been added to that client yet. Ask your administrator to tick the client for you in <strong>Manage people</strong>. It appears the next time you open the app.</p></details>
   <details class="faq"><summary>Who can see what I record?</summary>
     <p>Notes and recordings stay on your phone. Only the <strong>words</strong> of a note (never the recording) are sent to the AI to be tidied, and they aren't kept. Administrators can see the list of people, sign-ins and feedback reports, but not your notes. The exception is a screenshot you choose to send with feedback: the administrators and the AI helper see whatever it shows. Read the full privacy notice in <strong>Settings</strong>.</p></details>
   <details class="faq"><summary>Something else is wrong</summary>

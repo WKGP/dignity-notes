@@ -316,9 +316,22 @@ function loadUser() {
     S.client = { name: session.client.name }; S.consent = session.client.consent;
     if (save() && S === old) try { localStorage.removeItem(legacy); } catch {}
   }
-  S.client = { name: session.client.name }; S.consent = session.client.consent; save();
+  // Kept with the notes too, so the client list can be shown from this phone when offline.
+  S.client = { name: session.client.name, carers: session.client.carers || [] }; S.consent = session.client.consent;
+  // The person signed in on this phone is on duty whenever the app opens, so notes carry the right name.
+  S.onDuty = myId();
+  save();
 }
-const carer = (id) => S.carers.find((c) => c.id === id) || { name: "Unknown", shift: "" };
+const myId = () => (session && (session.meId || session.username)) || "me";
+// The client's carers are real accounts, set by an administrator in Manage people (relay /clients),
+// identified by private ids rather than login usernames. Demo names (S.carers) only label example entries.
+function roster() {
+  const list = ((session && session.client && session.client.carers) || []).map((c) => ({ id: c.id, name: c.name, shift: c.shift || "" }));
+  // Someone not on the roster (e.g. an administrator visiting) is still listed, so their notes carry their own name.
+  if (!list.some((c) => c.id === myId())) list.push({ id: myId(), name: (session && (session.meName || session.name || session.username)) || "Me", shift: "", notOnRoster: true });
+  return list;
+}
+const carer = (id) => roster().find((c) => c.id === id) || S.carers.find((c) => c.id === id) || { id, name: "Unknown", shift: "" };
 const onDuty = () => carer(S.onDuty);
 const openFlags = () => S.flags.filter((f) => f.status === "open");
 const activeTransfer = () => S.transfers.find((t) => !t.backTs);
@@ -552,7 +565,7 @@ function renderLog() {
     }
     if (it.type === "out") return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip follow">Out of carer's care</span></div><div class="small">${esc(S.client.name)} went out with <strong>${esc(it.t.withWhom)}</strong>${it.t.relationship ? " (" + esc(it.t.relationship) + ")" : ""}${it.t.purpose ? " for " + esc(it.t.purpose) : ""}. Logged by ${esc(carer(it.t.carerId).name)}.</div></div>`;
     if (it.type === "back") return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Back in carer's care</span></div><div class="small">Returned from ${esc(it.t.withWhom)}.${it.t.backNote ? " " + esc(it.t.backNote) : ""}</div></div>`;
-    return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Handover</span><span class="muted">${esc(carer(it.h.fromId).name)} → ${esc(carer(it.h.toId).name)}</span></div><details><summary>Read handover</summary><p class="small" style="white-space:pre-line;margin:0">${esc(it.h.text)}</p></details></div>`;
+    return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Handover</span><span class="muted">${esc(carer(it.h.fromId).name)} → ${esc(it.h.toId ? carer(it.h.toId).name : "next carer")}</span></div><details><summary>Read handover</summary><p class="small" style="white-space:pre-line;margin:0">${esc(it.h.text)}</p></details></div>`;
   }).join("");
   v.innerHTML = `<div class="hello"><h2>Record log</h2><p>Every saved note, outing and handover, newest first.</p></div>
     <div class="seg" role="group" aria-label="Filter">${[["all", "Everything"], ["incident", "Incidents"], ["follow", "Follow-ups"]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${logFilter === k}">${l}</button>`).join("")}</div>
@@ -569,27 +582,29 @@ let handoverDraft = null;
 function renderHandover() {
   const v = $("#view-handover");
   const past = [...S.handovers].sort((a, b) => b.ts - a.ts).slice(0, 5);
-  const others = S.carers.filter((c) => c.id !== S.onDuty);
+  const others = roster().filter((c) => c.id !== S.onDuty);
   v.innerHTML = `<div class="hello"><h2>End-of-shift handover</h2><p>Built from your saved notes and open flags. Nothing to write twice.</p></div>
     <div class="card">
       <div class="card-h"><h3>This shift</h3><span class="muted small">${shiftNotes().length} notes · ${openFlags().length} open flags</span></div>
       ${handoverDraft ? `
         ${sourceTag(handoverDraft.source, handoverDraft.reason)}
         <label class="f" style="margin-top:10px">Handover (edit if needed)<textarea id="hoText" class="note-edit">${esc(handoverDraft.text)}</textarea></label>
-        <label class="f" style="margin-top:12px">Handing over to<select id="hoTo">${others.map((c) => `<option value="${c.id}">${esc(c.name)} · ${esc(c.shift)}</option>`).join("")}</select></label>
+        ${others.length ? `<label class="f" style="margin-top:12px">Handing over to<select id="hoTo">${others.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}${c.shift ? " · " + esc(c.shift) : ""}</option>`).join("")}</select></label>`
+          : `<p class="small muted" style="margin:12px 0 0">No other carers are on ${esc(S.client.name)} yet. The handover is saved for the next carer. An administrator can add carers in Manage people.</p>`}
         <div class="row" style="margin-top:14px"><button class="btn ghost" id="hoRedo">Prepare again</button><button class="btn primary" id="hoSave">Approve and hand over</button></div>`
       : `<p class="small muted" style="margin:0 0 12px">When your shift ends, prepare the handover. You can edit it before approving.</p>
         <button class="btn primary block" id="hoPrep">Prepare handover</button>`}
     </div>
     <div class="card"><div class="card-h"><h3>Recent handovers</h3></div><div class="list">
-      ${past.map((h) => `<div class="item"><div class="when">${fmtTime(h.ts)}</div><div class="body"><div class="small"><strong>${esc(carer(h.fromId).name)} → ${esc(carer(h.toId).name)}</strong> <span class="muted">· ${dayLabel(h.ts)}</span></div><details><summary>Read</summary><p class="small" style="white-space:pre-line;margin:0">${esc(h.text)}</p></details></div></div>`).join("") || '<div class="empty">None yet.</div>'}</div></div>`;
+      ${past.map((h) => `<div class="item"><div class="when">${fmtTime(h.ts)}</div><div class="body"><div class="small"><strong>${esc(carer(h.fromId).name)} → ${esc(h.toId ? carer(h.toId).name : "next carer")}</strong> <span class="muted">· ${dayLabel(h.ts)}</span></div><details><summary>Read</summary><p class="small" style="white-space:pre-line;margin:0">${esc(h.text)}</p></details></div></div>`).join("") || '<div class="empty">None yet.</div>'}</div></div>`;
+  if ($("#hoText")) $("#hoText").oninput = (e) => { handoverDraft.text = e.target.value; };
   const prep = async (btn) => { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:3px"></span> Preparing…'; handoverDraft = await summarise("handover"); renderHandover(); };
   if ($("#hoPrep")) $("#hoPrep").onclick = (e) => prep(e.currentTarget);
   if ($("#hoRedo")) $("#hoRedo").onclick = (e) => prep(e.currentTarget);
   if ($("#hoSave")) $("#hoSave").onclick = () => {
-    const toId = $("#hoTo").value; const text = $("#hoText").value.trim(); if (!text) return toast("The handover is empty");
+    const toId = $("#hoTo") ? $("#hoTo").value : null; const text = $("#hoText").value.trim(); if (!text) return toast("The handover is empty");
     S.handovers.push({ id: uid(), ts: Date.now(), fromId: S.onDuty, toId, text, source: handoverDraft.source });
-    S.onDuty = toId; handoverDraft = null; save(); go("today"); toast(`Handed over to ${carer(toId).name}`);
+    handoverDraft = null; save(); go("today"); toast(toId ? `Handed over to ${carer(toId).name}` : "Handover saved for the next carer");
   };
 }
 
@@ -645,8 +660,8 @@ const sheetHead = (title) => `<div class="sheet-h"><h2>${title}</h2><button clas
 
 function openCarerSheet() {
   const s = sheet(`${sheetHead("Who's on duty?")}
-    <div class="list card">${S.carers.map((c) => `<button class="item" data-c="${c.id}" style="border-left:0;border-right:0;border-bottom:0;background:none;text-align:left;width:100%;align-items:center"><span class="avatar">${esc(c.name.charAt(0))}</span><span class="body"><strong>${esc(c.name)}</strong><div class="small muted">${esc(c.shift)}</div></span>${c.id === S.onDuty ? '<span class="chip accent">On duty</span>' : ""}</button>`).join("")}</div>
-    <p class="small muted" style="margin:0">Every note is stamped with the carer on duty. Use Handover at the end of a shift to pass on properly.</p>`);
+    <div class="list card">${roster().map((c) => `<button class="item" data-c="${esc(c.id)}" style="border-left:0;border-right:0;border-bottom:0;background:none;text-align:left;width:100%;align-items:center"><span class="avatar">${esc(c.name.charAt(0))}</span><span class="body"><strong>${esc(c.name)}</strong><div class="small muted">${esc(c.shift || "No shift set")}</div></span>${c.id === S.onDuty ? '<span class="chip accent">On duty</span>' : ""}</button>`).join("")}</div>
+    <p class="small muted" style="margin:0">Every note is stamped with the carer on duty. Use Handover at the end of a shift to pass on properly. Who cares for ${esc(S.client.name)} is set by an administrator in Manage people.</p>`);
   s.root.querySelectorAll("[data-c]").forEach((b) => (b.onclick = () => { S.onDuty = b.dataset.c; save(); s.close(); render(); toast(`${onDuty().name} is now on duty`); }));
 }
 
@@ -700,9 +715,11 @@ function openSettings() {
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Client</h3>
       <p class="small" style="margin:0">Notes are for <strong>${esc(S.client.name)}</strong>.</p>
       <button class="btn secondary" id="stSwitch">Switch or add client</button></div>
-    <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Carers</h3>
-      ${S.carers.map((x, i) => `<div class="row"><label class="f" style="flex:1 1 120px">Carer ${i + 1}<input type="text" data-cn="${x.id}" value="${esc(x.name)}" autocomplete="off"></label><label class="f" style="flex:1 1 160px">Shift<input type="text" data-cs="${x.id}" value="${esc(x.shift)}" autocomplete="off"></label></div>`).join("")}
-      <button class="btn secondary" id="stPeople">Save names</button></div>
+    <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Carers for ${esc(S.client.name)}</h3>
+      ${roster().filter((x) => !x.notOnRoster).map((x) => `<label class="f">${esc(x.name)}<input type="text" data-cs="${esc(x.id)}" data-was="${esc(x.shift)}" value="${esc(x.shift)}" placeholder="Shift, e.g. Day · 08:00–20:00" maxlength="40" autocomplete="off"></label>`).join("") || `<p class="small muted" style="margin:0">No carers are on ${esc(S.client.name)} yet.</p>`}
+      ${roster().some((x) => x.notOnRoster) ? `<p class="tiny muted" style="margin:0">You're not one of ${esc(S.client.name)}'s carers, so you aren't listed here.</p>` : ""}
+      ${roster().some((x) => !x.notOnRoster) ? '<button class="btn secondary" id="stPeople">Save shifts</button>' : ""}
+      ${session.role === "admin" ? `<button class="link" id="stWho" style="justify-self:start">Change who cares for ${esc(S.client.name)}</button>` : `<p class="tiny muted" style="margin:0">An administrator decides who cares for ${esc(S.client.name)}.</p>`}</div>
     <div class="card small"><h3 style="font-size:17px;margin-bottom:6px">Consent</h3>
       ${c ? `Agreed by <strong>${esc(c.name)}</strong> (${esc(c.role)}) on ${fmtDay(c.ts)} at ${fmtTime(c.ts)}.` : "Not recorded."}
       <p class="muted" style="margin:8px 0 0">Notes and recordings are kept on this phone only in this demo. Only the words of a note (never the recording) are sent to the AI to tidy.</p></div>
@@ -723,10 +740,18 @@ function openSettings() {
     s.close(); signedOut("You've signed out.");
   });
   $("#stSwitch").onclick = () => { s.close(); handoverDraft = familySummary = null; showClients(true); };
-  $("#stPeople").onclick = () => {
-    s.root.querySelectorAll("[data-cn]").forEach((i) => (carer(i.dataset.cn).name = i.value.trim() || carer(i.dataset.cn).name));
-    s.root.querySelectorAll("[data-cs]").forEach((i) => (carer(i.dataset.cs).shift = i.value.trim()));
-    save(); render(); toast("Saved");
+  if ($("#stWho")) $("#stWho").onclick = () => { s.close(); openTesters(); };
+  if ($("#stPeople")) $("#stPeople").onclick = async (e) => {
+    // Only what this person changed, so an older view doesn't overwrite someone else's update.
+    const shifts = {}; s.root.querySelectorAll("[data-cs]").forEach((i) => { if (i.value.trim() !== i.dataset.was) shifts[i.dataset.cs] = i.value.trim(); });
+    if (!Object.keys(shifts).length) return toast("Nothing changed");
+    const btn = e.currentTarget; btn.disabled = true;
+    try {
+      if (session.local) session.client.carers = roster().filter((c) => !c.notOnRoster).map((c) => ({ id: c.id, name: c.name, shift: shifts[c.id] ?? c.shift }));
+      else session.client.carers = (await relay("/clients/shifts", { id: session.client.id, shifts })).client.carers;
+      saveSession(); loadUser(); render(); toast("Shifts saved");
+    } catch (err) { toast(err.message); }
+    btn.disabled = false;
   };
   $("#stReset").onclick = () => { $("#stResetYes").hidden = false; };
   $("#stResetYes").onclick = async () => { const keep = S.settings; await audioDB.del(S.notes.map((n) => n.audioId).filter(Boolean)); S = seed(); S.settings = keep; save(); loadUser(); s.close(); handoverDraft = familySummary = null; go("today"); };
@@ -858,9 +883,9 @@ async function openReview({ transcript, blob, typed }) {
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-04.2";
+const PRIVACY_VERSION = "2026-10-04.3";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 2 · 4 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 3 · 4 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -871,16 +896,17 @@ const PRIVACY_HTML = `
 <li><strong>Sign-in records:</strong> the time of each sign-in attempt, your IP address, your approximate location worked out from that address (town and country), your type of device and browser, and a random ID that this app stores on your device. We use these to keep accounts secure and to detect when a login is shared or used on another device.</li>
 <li><strong>Your agreement:</strong> when you accepted this notice.</li>
 <li><strong>Clients:</strong> the name of each person being cared for, and the name and role of the person who agreed to Dignity Notes being used, with the date. This is kept on our relay so every carer sees the same agreement.</li>
+<li><strong>Carers for each client:</strong> which clients you care for, and your shift times for each. Administrators set who cares for whom. The other carers on the same client can see your name and shift.</li>
 <li><strong>Feedback:</strong> if you report a problem or suggest an idea, your messages and the helper's replies, any screenshot you add, your name, username and role, which screen and page you were on, and the summary and analysis the AI writes for the developer. A screenshot shows whatever was on your screen, so avoid screens that show care notes.</li>
 </ul>
 <h3>What stays on your device</h3>
 <p>Care notes, voice recordings, handovers, messages and settings are kept <strong>on your device only</strong>. We don't receive them, except as described below. Deleting the app's data on your device, or tapping Reset demo, removes them.</p>
 <h3>AI note writing</h3>
 <p>When you use the feedback helper, your messages and any screenshot are also sent to Anthropic, so the helper can ask questions and write a summary for the developer. Email addresses and phone numbers are removed automatically before a report is stored.</p>
-<p>When you ask the app to write a note, handover or summary, the <strong>words</strong> of your note (never the recording) are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
+<p>When you ask the app to write a note, handover or summary, the <strong>words</strong> of your note (never the recording), and the names of the carers involved, are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
 <h3>Who else handles data for us</h3>
 <ul>
-<li><strong>Cloudflare:</strong> runs our relay and stores accounts, sign-in records, clients and feedback reports.</li>
+<li><strong>Cloudflare:</strong> runs our relay and stores accounts, sign-in records, clients, who cares for each client and their shifts, and feedback reports.</li>
 <li><strong>GitHub (Microsoft):</strong> hosts the app's web pages.</li>
 <li><strong>Anthropic:</strong> AI note writing, as described above.</li>
 </ul>
@@ -896,7 +922,7 @@ const PRIVACY_HTML = `
 <li><strong>Clients:</strong> until an administrator removes the client. A record of who removed it and when is kept.</li>
 </ul>
 <h3>Who can see your information</h3>
-<p>Pilot administrators can see the people list, which devices each account has used, the sign-in history and feedback reports. They can't see the notes on your device, unless a note appears in a screenshot you send with feedback.</p>
+<p>Pilot administrators can see the people list, who cares for each client, which devices each account has used, the sign-in history and feedback reports. Carers on the same client see each other's names and shifts. They can't see the notes on your device, unless a note appears in a screenshot you send with feedback.</p>
 <h3>Your rights</h3>
 <p>You can ask to see, correct or delete the information we hold about you, or object to how we use it. Ask the administrator who invited you, who will pass your request to Workgroup (WA) Pty Ltd. If you're unhappy, you can complain to the UK Information Commissioner's Office (ico.org.uk) or, in Australia, the Office of the Australian Information Commissioner (oaic.gov.au).</p>
 <h3>Changes</h3>
@@ -1008,7 +1034,7 @@ function loginText(username, password) {
 }
 function openTesters() {
   const s = sheet(`${sheetHead("People")}
-    <p class="small muted" style="margin:0">People you add can sign in on their own phone and try the app. Their notes stay on their phone. Removing someone signs them out straight away.</p>
+    <p class="small muted" style="margin:0">People you add can sign in on their own phone and try the app. Tick the clients each person cares for: carers only see those clients. Their notes stay on their phone. Removing someone signs them out straight away.</p>
     <div class="card"><div class="list" id="tList"><div class="empty">Loading people…</div></div></div>
     <div class="card"><div class="card-h"><h3>Sign-in history</h3><span class="muted small">Last 90 days</span></div>
       <div class="list" id="tLog"><div class="empty">Loading…</div></div>
@@ -1031,7 +1057,7 @@ function openTesters() {
   };
   const load = async () => {
     try {
-      const { users } = await relay("/admin/users", {});
+      const { users, clients = [] } = await relay("/admin/users", {});
       listEl.innerHTML = users.length ? users.sort((a, b) => a.name.localeCompare(b.name)).map((u) => `<div class="item" style="flex-wrap:wrap">
         <span class="avatar">${esc((u.name || u.username).charAt(0).toUpperCase())}</span>
         <div class="body" style="flex:1 1 220px"><strong>${esc(u.name || u.username)}</strong>${u.role === "admin" ? ' <span class="chip accent">Admin</span>' : ""}
@@ -1039,11 +1065,23 @@ function openTesters() {
           ${u.locked ? '<span class="chip follow">Locked to first device</span>' : ""}
           <div class="small muted">${esc(u.username)}${u.createdAt ? " · added " + esc(new Date(u.createdAt).toLocaleDateString("en-GB")) : ""} · ${u.agreedAt ? "privacy notice accepted " + esc(new Date(u.agreedAt).toLocaleDateString("en-GB")) : "privacy notice not yet accepted"}</div>
           ${u.devices.length ? `<details style="margin-top:4px"><summary>Devices</summary>${u.devices.map((d, i) => `<div class="small" style="padding:4px 0"><strong>${i === 0 ? "Home device" : "Other device"}:</strong> ${esc(d.device)} · ${esc(d.place)}<br><span class="tiny muted">First ${esc(new Date(d.first).toLocaleString("en-GB"))} · last ${esc(new Date(d.last).toLocaleString("en-GB"))}</span></div>`).join("")}</details>` : ""}
-          <label class="check small" style="margin-top:6px"><input type="checkbox" data-lock="${esc(u.username)}" ${u.locked ? "checked" : ""}><span>Lock to first device (refuse sign-ins from any other device)</span></label>
+          <div class="small" style="margin-top:8px"><strong>Cares for</strong>${u.role === "admin" ? ' <span class="muted">(administrators can open every client)</span>' : ""}
+            <div class="chips" style="margin-top:4px">${clients.length ? clients.map((c) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" data-assign="${esc(u.username)}" value="${esc(c.id)}" ${u.clients.includes(c.id) ? "checked" : ""} style="accent-color:var(--accent)">${esc(c.name)}</label>`).join("") : '<span class="muted">No clients yet</span>'}</div></div>
+          ${u.main ? '<p class="tiny muted" style="margin:6px 0 0">Main administrator: signs in with the relay settings, so the password and device lock aren\'t managed here.</p>' : `<label class="check small" style="margin-top:6px"><input type="checkbox" data-lock="${esc(u.username)}" ${u.locked ? "checked" : ""}><span>Lock to first device (refuse sign-ins from any other device)</span></label>`}
           ${u.devices.length ? `<button class="link small" data-devreset="${esc(u.username)}">Reset devices (next sign-in becomes the home device)</button>` : ""}</div>
-        <button class="link" data-reset="${esc(u.username)}">New password</button>
-        <button class="link" style="color:var(--record)" data-remove="${esc(u.username)}">Remove</button>
+        ${u.main ? "" : `<button class="link" data-reset="${esc(u.username)}">New password</button>
+        <button class="link" style="color:var(--record)" data-remove="${esc(u.username)}">Remove</button>`}
         <div data-slot="${esc(u.username)}" style="flex-basis:100%"></div></div>`).join("") : '<div class="empty">No testers yet. Add the first one below.</div>';
+      listEl.querySelectorAll("[data-assign]").forEach((c) => (c.onchange = async () => {
+        const who = c.dataset.assign; const boxes = [...listEl.querySelectorAll("[data-assign]")];
+        const ids = boxes.filter((x) => x.dataset.assign === who && x.checked).map((x) => x.value);
+        boxes.forEach((x) => (x.disabled = true)); // one change at a time, so two quick ticks can't overwrite each other
+        try {
+          await relay("/admin/assign", { username: who, clientIds: ids }); toast("Saved");
+          if (session.client && c.value === session.client.id) checkClient(); // the client open on this phone changed
+        } catch (e) { toast(e.message); c.checked = !c.checked; }
+        boxes.forEach((x) => (x.disabled = false));
+      }));
       listEl.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
         try { await relay("/admin/remove", { username: b.dataset.remove }); toast("Removed"); load(); } catch (e) { toast(e.message); }
       })));
@@ -1271,9 +1309,14 @@ async function openFeedbackReport(id) {
 const LOCAL_CLIENTS = "dignitynotes.localclients";
 const localClients = () => { try { return JSON.parse(localStorage.getItem(LOCAL_CLIENTS) || "[]"); } catch { return []; } };
 const clientsApi = {
-  list: async () => (session.local ? localClients() : (await relay("/clients", {})).clients),
+  list: async () => {
+    if (session.local) return localClients();
+    const out = await relay("/clients", {});
+    if (session && out.meId) { session.meId = out.meId; session.meName = out.meName; saveSession(); }
+    return out.clients;
+  },
   add: async (name, consent) => {
-    if (!session.local) return (await relay("/clients/add", { name, consent })).client;
+    if (!session.local) { const out = await relay("/clients/add", { name, consent }); if (out.meId) session.meId = out.meId; return out.client; }
     const client = { id: uid(), name, consent: { name: consent.name, role: consent.role, ts: Date.now(), by: session.username }, createdAt: Date.now(), createdBy: session.username };
     localStorage.setItem(LOCAL_CLIENTS, JSON.stringify([...localClients(), client]));
     return client;
@@ -1286,9 +1329,9 @@ function savedClients() {
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (!k.startsWith(prefix)) continue;
+      if (!k.startsWith(prefix) || k.slice(prefix.length).includes(".")) continue;
       const d = JSON.parse(localStorage.getItem(k));
-      if (d && d.client && d.consent) out.push({ id: k.slice(prefix.length), name: d.client.name, consent: d.consent });
+      if (d && d.client && d.consent) out.push({ id: k.slice(prefix.length), name: d.client.name, consent: d.consent, carers: d.client.carers || [] });
     }
   } catch {}
   return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -1298,13 +1341,19 @@ async function checkClient() {
   if (!session || !session.client || !navigator.onLine) return;
   let clients;
   try { clients = await clientsApi.list(); } catch { return; }
-  if (session && session.client && !clients.some((c) => c.id === session.client.id)) {
-    toast(`${session.client.name} has been removed by an administrator`);
+  if (!session || !session.client) return;
+  const fresh = clients.find((c) => c.id === session.client.id);
+  if (!fresh) {
+    toast(`You're no longer a carer for ${session.client.name}, or it was removed`);
     session.client = null; saveSession(); KEY = null; S = seed(); showClients(false);
+  } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name) {
+    // Carers or shifts changed elsewhere (e.g. an administrator assigned someone): pick that up.
+    session.client = { id: fresh.id, name: fresh.name, consent: fresh.consent, carers: fresh.carers || [] };
+    saveSession(); loadUser(); render();
   }
 }
 function chooseClient(client) {
-  session.client = { id: client.id, name: client.name, consent: client.consent };
+  session.client = { id: client.id, name: client.name, consent: client.consent, carers: client.carers || [] };
   saveSession(); loadUser(); $("#fullRoot").innerHTML = ""; go("today");
 }
 // manual = opened from Settings; otherwise a single client is picked automatically.
@@ -1365,7 +1414,8 @@ async function showClients(manual) {
   listEl.innerHTML = clients.length ? clients.map((c) => `<button class="item" data-client="${esc(c.id)}" style="width:100%;text-align:left;background:none;border:0;cursor:pointer">
       <span class="avatar">${esc(c.name.charAt(0).toUpperCase())}</span>
       <div class="body"><strong>${esc(c.name)}</strong>${session.client && session.client.id === c.id ? ' <span class="chip accent">Current</span>' : ""}
-        <div class="small muted">Agreed by ${esc(c.consent.name)} (${esc(c.consent.role)}) on ${fmtDay(c.consent.ts)}</div></div></button>`).join("")
+        <div class="small muted">Agreed by ${esc(c.consent.name)} (${esc(c.consent.role)}) on ${fmtDay(c.consent.ts)}</div>
+        ${(c.carers || []).length ? `<div class="tiny muted">Carers: ${c.carers.map((x) => esc(x.name)).join(", ")}</div>` : ""}</div></button>`).join("")
     : '<div class="empty">No clients yet. Add the first one below.</div>';
   if (offline) listEl.insertAdjacentHTML("afterbegin", '<div class="warn small">No connection. Showing clients already on this phone.</div>');
   listEl.querySelectorAll("[data-client]").forEach((b) => (b.onclick = () => { handoverDraft = familySummary = null; chooseClient(clients.find((c) => c.id === b.dataset.client)); }));
