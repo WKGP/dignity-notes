@@ -1,0 +1,856 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#5B3F8C">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Nana Care">
+<title>Nana Care</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Literata:opsz,wght@7..72,400;7..72,500&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+<style>
+/* Palette: plum (actions, brand) and rose (record). Layout: phone-first single column, sticky header, fixed bottom tab bar with a raised Record button in the centre. */
+:root{
+  --ground:#F7F5FA; --surface:#FFFFFF; --surface-2:#EFEBF5; --ink:#231B33; --ink-2:#5E5670; --line:#E2DCEB;
+  --accent:#5B3F8C; --accent-ink:#FFFFFF; --accent-soft:#ECE5F6;
+  --record:#D6455D; --record-soft:#FBE6EA;
+  --incident:#B3261E; --incident-soft:#FBE4E1; --follow:#8A5D00; --follow-soft:#FBF0D9;
+  --shadow:0 1px 2px rgba(35,27,51,.06),0 6px 20px rgba(35,27,51,.08);
+  --f-display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
+  --f-body:"Source Sans 3","Segoe UI",system-ui,sans-serif;
+  --f-note:"Literata",Georgia,"Times New Roman",serif;
+  --r:14px; color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#15111C; --surface:#1E1828; --surface-2:#2A2236; --ink:#EDE8F4; --ink-2:#A79EB8; --line:#352C42;
+  --accent:#B79AE8; --accent-ink:#1A1325; --accent-soft:#2E2342;
+  --record:#F07A8E; --record-soft:#3B1E26; --incident:#F28B82; --incident-soft:#3B1D1B; --follow:#E2B550; --follow-soft:#382D14;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.28); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --ground:#15111C; --surface:#1E1828; --surface-2:#2A2236; --ink:#EDE8F4; --ink-2:#A79EB8; --line:#352C42;
+  --accent:#B79AE8; --accent-ink:#1A1325; --accent-soft:#2E2342;
+  --record:#F07A8E; --record-soft:#3B1E26; --incident:#F28B82; --incident-soft:#3B1D1B; --follow:#E2B550; --follow-soft:#382D14;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.28); color-scheme:dark}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--ground);color:var(--ink);font:16px/1.5 var(--f-body);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:8px}
+h1,h2,h3{font-family:var(--f-display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+.wrap{max-width:560px;margin:0 auto;padding-inline:16px}
+
+/* Header */
+.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--ground) 88%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line);padding-top:env(safe-area-inset-top,0px)}
+.top .wrap{display:flex;align-items:center;gap:12px;padding-block:12px}
+.brand{flex:1;min-width:0}
+.brand h1{font-size:22px;line-height:1.1}
+.brand p{margin:0;color:var(--ink-2);font-size:13px}
+.duty{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 12px 6px 6px;font-size:14px;font-weight:600}
+.avatar{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:13px;flex:none}
+.icon-btn{border:0;background:transparent;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;color:var(--ink-2)}
+.icon-btn:hover{background:var(--surface-2)}
+svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+/* Out-of-care banner */
+.banner{background:var(--follow-soft);color:var(--ink);border-bottom:1px solid var(--line)}
+.banner .wrap{display:flex;align-items:center;gap:12px;padding-block:10px;font-size:14px}
+.banner strong{display:block}
+.banner .grow{flex:1;min-width:0}
+
+/* Main */
+main{padding-block:20px calc(110px + env(safe-area-inset-bottom,0px))}
+.view{display:grid;gap:16px}
+.hello h2{font-size:28px;line-height:1.15}
+.hello p{margin:4px 0 0;color:var(--ink-2)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;box-shadow:var(--shadow);min-width:0}
+.card-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:10px}
+.card-h h3{font-size:17px}
+.eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.muted{color:var(--ink-2)}
+.small{font-size:14px}
+.tiny{font-size:12.5px}
+.note-text{font-family:var(--f-note);font-size:16.5px;line-height:1.6;margin:0}
+.link{border:0;background:none;color:var(--accent);font-weight:600;padding:4px 0}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:12px;padding:13px 18px;font-weight:700;font-size:16px;min-height:48px}
+.btn.primary{background:var(--accent);color:var(--accent-ink)}
+.btn.secondary{background:var(--surface-2);color:var(--ink)}
+.btn.ghost{background:transparent;color:var(--ink-2);border:1px solid var(--line)}
+.btn.danger{background:var(--record);color:#fff}
+.btn.block{width:100%}
+.btn:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row>.btn{flex:1 1 140px}
+
+/* Record call-to-action on Today */
+.cta{display:flex;align-items:center;gap:16px;background:var(--accent);color:var(--accent-ink);border:0;border-radius:var(--r);padding:18px;text-align:left;width:100%;box-shadow:var(--shadow)}
+.cta .mic{width:56px;height:56px;border-radius:50%;background:color-mix(in srgb,var(--accent-ink) 18%,transparent);display:grid;place-items:center;flex:none}
+.cta .mic svg{width:28px;height:28px}
+.cta strong{font-family:var(--f-display);font-size:20px;display:block}
+.cta span{opacity:.85;font-size:14px}
+
+/* Lists */
+.list{display:grid;gap:0}
+.item{display:flex;gap:12px;padding:12px 0;border-top:1px solid var(--line);min-width:0}
+.item:first-child{border-top:0;padding-top:2px}
+.item .when{font-weight:700;font-variant-numeric:tabular-nums;min-width:52px}
+.item .body{flex:1;min-width:0}
+.item.past{opacity:.55}
+.flag{display:flex;gap:12px;align-items:flex-start;padding:12px;border-radius:12px;background:var(--follow-soft);border-left:4px solid var(--follow)}
+.flag.incident{background:var(--incident-soft);border-left-color:var(--incident)}
+.flag .body{flex:1;min-width:0}
+.flag strong{display:block}
+.flags{display:grid;gap:8px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:12.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--surface-2);color:var(--ink-2)}
+.chip.incident{background:var(--incident-soft);color:var(--incident)}
+.chip.follow{background:var(--follow-soft);color:var(--follow)}
+.chip.accent{background:var(--accent-soft);color:var(--accent)}
+.empty{padding:14px;border:1px dashed var(--line);border-radius:12px;color:var(--ink-2);font-size:14px;text-align:center}
+
+/* Record log */
+.day-h{font-family:var(--f-display);font-size:15px;color:var(--ink-2);margin:6px 2px -4px}
+.entry{display:grid;gap:8px}
+.entry-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px}
+.entry-top .t{font-weight:700;font-variant-numeric:tabular-nums;font-size:16px}
+.entry.system{background:var(--surface-2);box-shadow:none}
+details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:14px;list-style:none}
+details summary::-webkit-details-marker{display:none}
+details[open] summary{margin-bottom:6px}
+audio{width:100%;height:40px}
+.seg{display:flex;background:var(--surface-2);border-radius:12px;padding:4px;gap:4px}
+.seg button{flex:1;border:0;background:transparent;border-radius:9px;padding:8px;font-weight:600;font-size:14px;color:var(--ink-2)}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+
+/* Forms */
+label.f{display:grid;gap:6px;font-weight:600;font-size:14px}
+input[type=text],input[type=password],select,textarea{width:100%;border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:12px 14px;font-size:16px;font-weight:400}
+textarea{resize:vertical;min-height:120px;line-height:1.55}
+textarea.note-edit{font-family:var(--f-note);font-size:16.5px;min-height:170px}
+.check{display:flex;gap:12px;align-items:flex-start;font-size:15px}
+.check input{width:22px;height:22px;margin-top:2px;accent-color:var(--accent);flex:none}
+.switch{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.switch input{width:46px;height:26px;accent-color:var(--accent);flex:none}
+
+/* Messages */
+.thread{display:grid;gap:8px;max-height:340px;overflow-y:auto;padding:2px}
+.msg{max-width:85%;padding:9px 12px;border-radius:14px;background:var(--surface-2);font-size:15px}
+.msg.carer{justify-self:end;background:var(--accent-soft)}
+.msg .who{font-size:12px;font-weight:700;color:var(--ink-2);display:block}
+.composer{display:flex;gap:8px;margin-top:10px}
+.composer input{flex:1;min-width:0}
+
+/* Tab bar */
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--surface);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+.tabs .wrap{display:grid;grid-template-columns:repeat(5,1fr);align-items:end;padding-inline:8px}
+.tab{border:0;background:none;display:grid;justify-items:center;gap:2px;padding:10px 2px 10px;font-size:11.5px;font-weight:600;color:var(--ink-2);position:relative}
+.tab[aria-current="page"]{color:var(--accent)}
+.tab[aria-current="page"]::before{content:"";position:absolute;top:0;left:30%;right:30%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+.tab .badge{position:absolute;top:6px;left:calc(50% + 6px);min-width:18px;height:18px;border-radius:9px;background:var(--incident);color:#fff;font-size:11px;display:grid;place-items:center;padding:0 5px}
+.tab.rec{transform:translateY(-14px)}
+.tab.rec .disc{width:62px;height:62px;border-radius:50%;background:var(--record);color:#fff;display:grid;place-items:center;box-shadow:0 6px 18px color-mix(in srgb,var(--record) 45%,transparent);border:4px solid var(--surface)}
+.tab.rec .disc svg{width:28px;height:28px}
+
+/* Sheets */
+.scrim{position:fixed;inset:0;background:rgba(21,17,28,.5);z-index:40;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--ground);width:100%;max-width:560px;max-height:92vh;overflow-y:auto;border-radius:20px 20px 0 0;padding:8px 16px calc(20px + env(safe-area-inset-bottom,0px));display:grid;gap:16px;animation:up .22s ease-out}
+.sheet .grab{width:44px;height:5px;border-radius:3px;background:var(--line);margin:4px auto 0}
+.sheet-h{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.sheet-h h2{font-size:22px}
+@keyframes up{from{transform:translateY(30px);opacity:.6}to{transform:none;opacity:1}}
+.full{position:fixed;inset:0;z-index:50;background:var(--ground);overflow-y:auto;padding-top:env(safe-area-inset-top,0px)}
+.full .wrap{padding-block:28px 40px;display:grid;gap:18px}
+
+/* Recorder */
+.recorder{display:grid;justify-items:center;gap:14px;text-align:center;padding:10px 0 4px}
+.big-mic{width:120px;height:120px;border-radius:50%;border:0;background:var(--record);color:#fff;display:grid;place-items:center;box-shadow:0 10px 30px color-mix(in srgb,var(--record) 40%,transparent)}
+.big-mic svg{width:48px;height:48px}
+.big-mic.on{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--record) 45%,transparent)}50%{box-shadow:0 0 0 22px color-mix(in srgb,var(--record) 0%,transparent)}}
+.timer{font-variant-numeric:tabular-nums;font-size:28px;font-family:var(--f-display)}
+.live{width:100%;min-height:96px;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-family:var(--f-note);line-height:1.55}
+.live .interim{color:var(--ink-2)}
+.spinner{width:42px;height:42px;border-radius:50%;border:4px solid var(--accent-soft);border-top-color:var(--accent);animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.source{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--ink-2)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.dot.basic{background:var(--follow)}
+.warn{background:var(--follow-soft);border-radius:12px;padding:10px 12px;font-size:14px}
+
+.toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--ground);padding:10px 16px;border-radius:12px;font-weight:600;font-size:14px;z-index:60;max-width:calc(100% - 32px);box-shadow:var(--shadow)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><h1 id="clientName">Nana</h1><p>Live-in care record</p></div>
+    <button class="duty" id="dutyBtn" aria-label="Change carer on duty"><span class="avatar" id="dutyAvatar">A</span><span id="dutyName">Ann</span></button>
+    <button class="icon-btn" id="settingsBtn" aria-label="Settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+  </div>
+</header>
+
+<div class="banner" id="outBanner" hidden>
+  <div class="wrap">
+    <svg class="i" viewBox="0 0 24 24"><path d="M10 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+    <div class="grow"><strong id="outTitle">Out with someone else</strong><span class="muted small" id="outSub"></span></div>
+    <button class="btn secondary" id="returnBtn" style="min-height:40px;padding:8px 12px;font-size:14px">Back in my care</button>
+  </div>
+</div>
+
+<main class="wrap">
+  <section class="view" id="view-today"></section>
+  <section class="view" id="view-log" hidden></section>
+  <section class="view" id="view-handover" hidden></section>
+  <section class="view" id="view-family" hidden></section>
+</main>
+
+<nav class="tabs" aria-label="Main">
+  <div class="wrap">
+    <button class="tab" data-tab="today" aria-current="page"><svg class="i" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V20h14V9.5"/></svg>Today<span class="badge" id="flagBadge" hidden></span></button>
+    <button class="tab" data-tab="log"><svg class="i" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/></svg>Record log</button>
+    <button class="tab rec" id="recTab" aria-label="Record a care note"><span class="disc"><svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></span>Record</button>
+    <button class="tab" data-tab="handover"><svg class="i" viewBox="0 0 24 24"><path d="M7 16H3V12"/><path d="M3 16a9 9 0 0 0 16.5-3"/><path d="M17 8h4v4"/><path d="M21 8A9 9 0 0 0 4.5 11"/></svg>Handover</button>
+    <button class="tab" data-tab="family"><svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9.5" r="2.5"/><path d="M16 14.2c3 .2 5 2.6 5 5.8"/></svg>Family</button>
+  </div>
+</nav>
+
+<div id="sheetRoot"></div>
+<div id="fullRoot"></div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+"use strict";
+/* ---------- helpers ---------- */
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
+const fmtTime = (ts) => new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+const fmtDay = (ts) => new Date(ts).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
+const isToday = (ts) => sameDay(ts, Date.now());
+const dayLabel = (ts) => isToday(ts) ? "Today" : sameDay(ts, Date.now() - 864e5) ? "Yesterday" : sameDay(ts, Date.now() + 864e5) ? "Tomorrow" : fmtDay(ts);
+const ICON = {
+  mic: '<svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+  stop: '<svg class="i" viewBox="0 0 24 24" style="fill:currentColor;stroke:none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  out: '<svg class="i" viewBox="0 0 24 24"><path d="M10 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>',
+  close: '<svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+};
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.hidden = false;
+  clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), 2600);
+}
+
+/* ---------- store ---------- */
+const KEY = "nanacare.v3";
+let S;
+function seed() {
+  const at = (h, m, dayOffset = 0) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.getTime() + dayOffset * 864e5; };
+  return {
+    version: 3,
+    client: { name: "Nana" },
+    consent: null,
+    carers: [
+      { id: "c1", name: "Ann", shift: "Day · 04:00–16:00" },
+      { id: "c2", name: "Joy", shift: "Afternoon · agency" },
+      { id: "c3", name: "Grace", shift: "Night · 16:00–04:00" },
+    ],
+    onDuty: "c1",
+    schedule: [
+      { id: "s1", when: at(10, 30), label: "Church in London", detail: "Collected by family" },
+      { id: "s2", when: at(12, 45), label: "Lunch out at The Duck", detail: "" },
+      { id: "s3", when: at(10, 0, 1), label: "Doctor's appointment", detail: "COVID injection at Hop House" },
+    ],
+    notes: [{
+      id: "n0", ts: at(6, 30), carerId: "c1", source: "example", audioId: null,
+      transcript: "Example entry from the prototype. There is no recording for this one.",
+      note: "Nana got up at approximately 6:30 am and appeared to be in a very good mood. She had a bath and her hair washed, got dressed and came downstairs for breakfast. She required assistance taking her tablets, including placing the tablets into her mouth and helping guide the glass of water to her mouth. She drank a full cup of water with CosmoCol and also had a cup of tea.",
+      categories: ["Personal care", "Hair and dressing", "Meals", "Medication", "Fluids", "Mood"],
+    }],
+    flags: [{ id: "f0", ts: at(3, 40), kind: "follow_up", title: "Encourage fluids", detail: "Night carer asked for fluids to be encouraged through the day.", status: "open", noteId: null }],
+    transfers: [],
+    handovers: [{ id: "h0", ts: at(4, 0), fromId: "c3", toId: "c1", text: "Nana settled well overnight. Please continue to encourage fluids and note any changes in mood, mobility or assistance needed." }],
+    messages: [{ id: "m0", ts: at(7, 15), from: "family", name: "Family", text: "Morning! Is Nana still up for church today? I'll collect her at 10:15." }],
+    settings: { relayUrl: "", accessCode: "", familyAlerts: false },
+  };
+}
+function load() { try { const raw = localStorage.getItem(KEY); if (raw) return JSON.parse(raw); } catch {} return null; }
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(S)); return true; }
+  catch { toast("Couldn't save on this phone. Storage may be full."); return false; }
+}
+S = load() || seed();
+const carer = (id) => S.carers.find((c) => c.id === id) || { name: "Unknown", shift: "" };
+const onDuty = () => carer(S.onDuty);
+const openFlags = () => S.flags.filter((f) => f.status === "open");
+const activeTransfer = () => S.transfers.find((t) => !t.backTs);
+
+/* ---------- audio store (IndexedDB) ---------- */
+const audioDB = (() => {
+  let dbp;
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open("nanacare-audio", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("clips");
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const tx = async (mode, fn) => { const db = await open(); return new Promise((res, rej) => { const t = db.transaction("clips", mode); const req = fn(t.objectStore("clips")); t.oncomplete = () => res(req && req.result); t.onerror = t.onabort = () => rej(t.error || new Error("Storage failed")); }); };
+  return {
+    put: (id, blob) => tx("readwrite", (s) => s.put(blob, id)).then(() => true, () => false),
+    get: (id) => tx("readonly", (s) => s.get(id)).catch(() => null),
+    clear: () => tx("readwrite", (s) => s.clear()).catch(() => null),
+  };
+})();
+
+/* ---------- AI: relay first, basic offline rules as fallback ---------- */
+async function relay(path, body) {
+  const { relayUrl, accessCode } = S.settings;
+  if (!relayUrl || !accessCode) throw new Error("AI not connected");
+  if (!navigator.onLine) throw new Error("No internet connection");
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 60000);
+  try {
+    const r = await fetch(relayUrl.replace(/\/+$/, "") + path, {
+      method: "POST", signal: ctl.signal,
+      headers: { "Content-Type": "application/json", "X-Access-Code": accessCode },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "Error " + r.status);
+    return j;
+  } catch (e) { throw new Error(e.name === "AbortError" ? "AI took too long" : e.message); }
+  finally { clearTimeout(timer); }
+}
+
+const CAT_RULES = [
+  ["Personal care", /\b(bath|bathed|shower|showered|wash|washed|strip wash|teeth|shave|shaved|personal care)\b/i],
+  ["Hair and dressing", /\b(hair|dress|dressed|clothes|nightie|pyjamas)\b/i],
+  ["Meals", /\b(breakfast|lunch|dinner|supper|ate|eat|eaten|meal|snack|toast|porridge|food|soup|sandwich)\b/i],
+  ["Fluids", /\b(drink|drank|drinks|water|tea|coffee|juice|fluids?|cup|glass)\b/i],
+  ["Medication", /\b(meds|medication|medicine|tablets?|pills?|cosmocol|dose|inhaler|eye drops)\b/i],
+  ["Mood", /\b(mood|happy|cheerful|low|tearful|upset|content|good spirits|chatty|smiling)\b/i],
+  ["Behaviour", /\b(agitated|aggressive|confused|anxious|wandering|shouting|restless|behaviour)\b/i],
+  ["Mobility", /\b(walk|walked|walking|frame|stick|wheelchair|stairs|steps|transfer|hoist|mobility|stood|standing)\b/i],
+  ["Skin and bruising", /\b(bruis\w*|skin|sore|redness|cut|bleed\w*|blood|dressing|cream)\b/i],
+  ["Toileting", /\b(toilet|pad|commode|wee|bowels?|continence|accident|soiled)\b/i],
+  ["Appointment", /\b(doctor|gp|appointment|nurse|hospital|dentist|injection|optician|podiatrist)\b/i],
+  ["Activity or outing", /\b(church|outing|went out|garden|lunch out|visit|visited|visitor|tv|puzzle)\b/i],
+];
+const FLAG_RULES = [
+  ["incident", "New bruise", /\bbruis\w*/i],
+  ["incident", "Bleeding", /\b(bleed\w*|blood|skin tear)\b/i],
+  ["incident", "Fall", /\b(fell|fall|fallen|tumble|tumbled|slipped)\b/i],
+  ["incident", "Loss of consciousness", /\b(unconscious|passed out|fainted|collapsed|unresponsive)\b/i],
+  ["incident", "Aggression", /\b(aggressive|aggression|hit me|lashed out|kicked|scratched me)\b/i],
+  ["incident", "Soiling accident", /\b(f(a)?ecal|soiled|bowel accident|accident in)\b/i],
+  ["follow_up", "Medication refused", /\b(refused|wouldn'?t take|didn'?t take|spat out)\b[^.]*\b(meds|medication|tablets?|pills?)\b|\b(meds|medication|tablets?|pills?)\b[^.]*\brefused\b/i],
+  ["follow_up", "Low food or fluid intake", /\b(not (drinking|eating)|didn'?t (drink|eat)|hardly (drank|ate|drinking|eating)|poor (intake|appetite)|not enough fluids?)\b/i],
+  ["follow_up", "Pad or dressing change", /\bneeds? (a )?(pad|dressing) change\b/i],
+  ["follow_up", "Task not completed", /\b(didn'?t have|missed|no|refused) (her |his |a )?(bath|shower|wash)\b/i],
+  ["follow_up", "Next carer to check", /\b(remember to|don'?t forget|next carer|please check|keep an eye)\b/i],
+];
+function basicTidy(transcript) {
+  let t = " " + transcript.replace(/\s+/g, " ").trim() + " ";
+  t = t.replace(/\b(um+|uh+|erm+|er|ah|you know|i mean|sort of|kind of)\b[,]?\s*/gi, "").replace(/\s+([,.!?])/g, "$1").trim();
+  const sentences = (t.match(/[^.!?]+[.!?]*/g) || [t]).map((s) => s.trim()).filter(Boolean)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1)).map((s) => /[.!?]$/.test(s) ? s : s + ".");
+  const note = sentences.join(" ");
+  const categories = CAT_RULES.filter(([, re]) => re.test(note)).map(([c]) => c);
+  const flags = [];
+  for (const [kind, title, re] of FLAG_RULES) {
+    const detail = sentences.find((s) => re.test(s)) || note;
+    if (re.test(note) && !flags.some((f) => f.detail === detail)) flags.push({ kind, title, detail });
+  }
+  if (flags.some((f) => f.kind === "follow_up") && !categories.includes("Follow-up")) categories.push("Follow-up");
+  return { note, categories, flags, unclear: [] };
+}
+const validTidy = (o) => o && typeof o.note === "string" && o.note.trim() && Array.isArray(o.categories) && Array.isArray(o.flags);
+async function tidy(transcript) {
+  try {
+    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()) });
+    if (!validTidy(out)) throw new Error("Unexpected reply from the relay");
+    return { unclear: [], ...out, source: "ai" };
+  } catch (e) {
+    return { ...basicTidy(transcript), source: "basic", reason: e.message };
+  }
+}
+function shiftNotes() {
+  const since = Date.now() - 12 * 36e5;
+  return S.notes.filter((n) => n.ts >= since).sort((a, b) => a.ts - b.ts);
+}
+function summaryPayload(mode, toId) {
+  return {
+    mode, client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
+    notes: shiftNotes().map((n) => ({ time: fmtTime(n.ts), carer: carer(n.carerId).name, note: n.note })),
+    flags: openFlags().map((f) => ({ kind: f.kind === "incident" ? "Incident" : "Follow-up", title: f.title, detail: f.detail })),
+    transfers: S.transfers.filter((t) => isToday(t.outTs)).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
+    schedule: S.schedule.filter((s) => s.when > Date.now()).sort((a, b) => a.when - b.when).slice(0, 4).map((s) => `${dayLabel(s.when)} ${fmtTime(s.when)}: ${s.label}${s.detail ? " - " + s.detail : ""}`),
+  };
+}
+function basicSummary(p) {
+  const first = (s) => (s.match(/[^.!?]+[.!?]/) || [s])[0].trim();
+  if (p.mode === "family") {
+    const lines = p.notes.map((n) => first(n.note));
+    const inc = p.flags.filter((f) => f.kind === "Incident");
+    return (lines.length ? lines.join(" ") : `No notes recorded yet today for ${p.client}.`) + (inc.length ? `\n\nTo note: ${inc.map((f) => f.detail).join(" ")}` : "");
+  }
+  return [
+    "How the shift went", ...(p.notes.length ? p.notes.map((n) => `- ${n.time} ${first(n.note)}`) : ["- No notes recorded this shift."]),
+    ...(p.transfers.length ? p.transfers.map((t) => `- ${t}`) : []),
+    "", "Concerns for the next carer", ...(p.flags.length ? p.flags.map((f) => `- ${f.title}: ${f.detail}`) : ["No concerns."]),
+    "", "Coming up", ...(p.schedule.length ? p.schedule.map((s) => `- ${s}`) : ["- Nothing scheduled."]),
+  ].join("\n");
+}
+async function summarise(mode, toId) {
+  const p = summaryPayload(mode, toId);
+  try {
+    const out = await relay("/summarise", p);
+    if (!out || typeof out.text !== "string" || !out.text.trim()) throw new Error("Unexpected reply from the relay");
+    return { text: out.text, source: "ai" };
+  }
+  catch (e) { return { text: basicSummary(p), source: "basic", reason: e.message }; }
+}
+const sourceTag = (src, reason) => src === "ai"
+  ? '<span class="source"><span class="dot"></span>Tidied by AI. Check it before saving.</span>'
+  : src === "basic" ? `<span class="source"><span class="dot basic"></span>Basic tidy (offline${reason ? ": " + esc(reason) : ""})</span>` : "";
+
+/* ---------- navigation ---------- */
+let tab = "today";
+function go(name) {
+  tab = name;
+  document.querySelectorAll(".tab[data-tab]").forEach((b) => b.setAttribute("aria-current", b.dataset.tab === name ? "page" : "false"));
+  ["today", "log", "handover", "family"].forEach((v) => ($("#view-" + v).hidden = v !== name));
+  render(); window.scrollTo({ top: 0 });
+}
+document.querySelectorAll(".tab[data-tab]").forEach((b) => b.addEventListener("click", () => go(b.dataset.tab)));
+$("#recTab").addEventListener("click", () => openRecorder());
+$("#dutyBtn").addEventListener("click", () => openCarerSheet());
+$("#settingsBtn").addEventListener("click", () => openSettings());
+$("#returnBtn").addEventListener("click", () => openReturnSheet());
+
+/* ---------- render ---------- */
+function render() {
+  $("#clientName").textContent = S.client.name;
+  $("#dutyName").textContent = onDuty().name;
+  $("#dutyAvatar").textContent = onDuty().name.charAt(0).toUpperCase();
+  const n = openFlags().length; const badge = $("#flagBadge"); badge.hidden = !n; badge.textContent = n;
+  const tr = activeTransfer();
+  $("#outBanner").hidden = !tr;
+  if (tr) {
+    $("#outTitle").textContent = `${S.client.name} is out with ${tr.withWhom}`;
+    $("#outSub").textContent = `Since ${fmtTime(tr.outTs)}${tr.purpose ? " · " + tr.purpose : ""}. Not in your care.`;
+  }
+  ({ today: renderToday, log: renderLog, handover: renderHandover, family: renderFamily })[tab]();
+}
+
+function flagHTML(f, actions = true) {
+  return `<div class="flag ${f.kind === "incident" ? "incident" : ""}">
+    <div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "Follow-up"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}</span>
+    <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div>
+    ${actions ? `<button class="link" data-resolve="${f.id}">Resolved</button>` : ""}</div>`;
+}
+function bindResolve(root) {
+  root.querySelectorAll("[data-resolve]").forEach((b) => b.addEventListener("click", () => {
+    const f = S.flags.find((x) => x.id === b.dataset.resolve); f.status = "resolved"; f.resolvedTs = Date.now(); f.resolvedBy = S.onDuty;
+    save(); render(); toast("Marked as resolved");
+  }));
+}
+
+function renderToday() {
+  const v = $("#view-today"); const now = new Date(); const h = now.getHours();
+  const greet = h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  const ho = [...S.handovers].sort((a, b) => b.ts - a.ts)[0];
+  const latest = [...S.notes].sort((a, b) => b.ts - a.ts)[0];
+  const sched = [...S.schedule].filter((s) => s.when > Date.now() - 6 * 36e5).sort((a, b) => a.when - b.when);
+  const flags = openFlags().sort((a, b) => (a.kind === "incident" ? -1 : 1) - (b.kind === "incident" ? -1 : 1) || b.ts - a.ts);
+  v.innerHTML = `
+    <div class="hello"><h2>${greet}, ${esc(onDuty().name)}</h2><p>${fmtDay(Date.now())} · ${esc(onDuty().shift)}</p></div>
+    <button class="cta" id="ctaRec"><span class="mic">${ICON.mic}</span><span><strong>Record care note</strong><span>Speak as things happen. You check it before it's saved.</span></span></button>
+    <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="muted small">${flags.length || "None"} open</span></div>
+      <div class="flags">${flags.length ? flags.map((f) => flagHTML(f)).join("") : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div></div>
+    <div class="card"><div class="card-h"><h3>Previous handover</h3>${ho ? `<span class="muted small">${esc(carer(ho.fromId).name)} · ${dayLabel(ho.ts)} ${fmtTime(ho.ts)}</span>` : ""}</div>
+      ${ho ? `<p class="note-text" style="white-space:pre-line">${esc(ho.text)}</p>` : '<div class="empty">No handover yet.</div>'}</div>
+    <div class="card"><div class="card-h"><h3>Today &amp; coming up</h3></div>
+      <div class="list">${sched.length ? sched.map((s) => `<div class="item ${s.when < Date.now() ? "past" : ""}"><div class="when">${fmtTime(s.when)}</div><div class="body"><div><strong>${esc(s.label)}</strong></div><div class="muted small">${dayLabel(s.when)}${s.detail ? " · " + esc(s.detail) : ""}</div></div></div>`).join("") : '<div class="empty">Nothing scheduled.</div>'}</div>
+      <div style="margin-top:10px"><button class="link" id="addEvent">+ Add appointment or plan</button></div></div>
+    <div class="card"><div class="card-h"><h3>Going out with someone else?</h3></div>
+      <p class="small muted" style="margin:0 0 12px">Record when an authorised person takes ${esc(S.client.name)} out, so it's clear they were not in your care.</p>
+      ${activeTransfer() ? `<button class="btn secondary block" id="ctaBack">${ICON.out} Back in my care</button>` : `<button class="btn secondary block" id="ctaOut">${ICON.out} Hand over to someone else</button>`}</div>
+    ${latest ? `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId).name)} · ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p></div>` : ""}`;
+  $("#ctaRec").onclick = () => openRecorder();
+  $("#addEvent").onclick = () => openEventSheet();
+  if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
+  if ($("#ctaBack")) $("#ctaBack").onclick = () => openReturnSheet();
+  bindResolve(v);
+}
+
+let logFilter = "all";
+function renderLog() {
+  const v = $("#view-log");
+  const items = [
+    ...S.notes.map((n) => ({ type: "note", ts: n.ts, n })),
+    ...S.transfers.flatMap((t) => [{ type: "out", ts: t.outTs, t }, ...(t.backTs ? [{ type: "back", ts: t.backTs, t }] : [])]),
+    ...S.handovers.map((h) => ({ type: "handover", ts: h.ts, h })),
+  ].filter((it) => {
+    if (logFilter === "all") return true;
+    if (it.type !== "note") return false;
+    const fl = S.flags.filter((f) => f.noteId === it.n.id);
+    return logFilter === "incident" ? fl.some((f) => f.kind === "incident") : fl.some((f) => f.kind === "follow_up");
+  }).sort((a, b) => b.ts - a.ts);
+  let lastDay = "";
+  const rows = items.map((it) => {
+    const d = dayLabel(it.ts); const head = d !== lastDay ? `<div class="day-h">${esc(d)}</div>` : ""; lastDay = d;
+    if (it.type === "note") {
+      const n = it.n; const fl = S.flags.filter((f) => f.noteId === n.id);
+      return head + `<article class="card entry">
+        <div class="entry-top"><span class="t">${fmtTime(n.ts)}</span><span class="muted">${esc(carer(n.carerId).name)}</span>${n.source === "example" ? '<span class="chip">Example</span>' : ""}</div>
+        ${fl.length ? `<div class="chips">${fl.map((f) => `<span class="chip ${f.kind === "incident" ? "incident" : "follow"}">${esc(f.title)}</span>`).join("")}</div>` : ""}
+        <p class="note-text">${esc(n.note)}</p>
+        <div class="chips">${n.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>
+        <details><summary>${n.audioId ? "Play original recording" : "Original words"}</summary>
+          ${n.audioId ? `<audio controls preload="none" data-audio="${n.audioId}"></audio>` : ""}
+          <p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p>
+          <p class="tiny muted" style="margin:6px 0 0">Approved by ${esc(carer(n.carerId).name)} at ${fmtTime(n.approvedTs || n.ts)}</p></details>
+      </article>`;
+    }
+    if (it.type === "out") return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip follow">Out of carer's care</span></div><div class="small">${esc(S.client.name)} went out with <strong>${esc(it.t.withWhom)}</strong>${it.t.relationship ? " (" + esc(it.t.relationship) + ")" : ""}${it.t.purpose ? " for " + esc(it.t.purpose) : ""}. Logged by ${esc(carer(it.t.carerId).name)}.</div></div>`;
+    if (it.type === "back") return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Back in carer's care</span></div><div class="small">Returned from ${esc(it.t.withWhom)}.${it.t.backNote ? " " + esc(it.t.backNote) : ""}</div></div>`;
+    return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Handover</span><span class="muted">${esc(carer(it.h.fromId).name)} → ${esc(carer(it.h.toId).name)}</span></div><details><summary>Read handover</summary><p class="small" style="white-space:pre-line;margin:0">${esc(it.h.text)}</p></details></div>`;
+  }).join("");
+  v.innerHTML = `<div class="hello"><h2>Record log</h2><p>Every saved note, outing and handover, newest first.</p></div>
+    <div class="seg" role="group" aria-label="Filter">${[["all", "Everything"], ["incident", "Incidents"], ["follow", "Follow-ups"]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${logFilter === k}">${l}</button>`).join("")}</div>
+    ${rows || '<div class="empty">Nothing here yet.</div>'}`;
+  v.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { logFilter = b.dataset.f; renderLog(); }));
+  v.querySelectorAll("details").forEach((d) => d.addEventListener("toggle", async () => {
+    const a = d.querySelector("audio[data-audio]"); if (!d.open || !a || a.src) return;
+    const blob = await audioDB.get(a.dataset.audio);
+    if (blob) a.src = URL.createObjectURL(blob); else a.replaceWith(Object.assign(document.createElement("p"), { className: "tiny muted", textContent: "Recording is stored on the phone that made it." }));
+  }));
+}
+
+let handoverDraft = null;
+function renderHandover() {
+  const v = $("#view-handover");
+  const past = [...S.handovers].sort((a, b) => b.ts - a.ts).slice(0, 5);
+  const others = S.carers.filter((c) => c.id !== S.onDuty);
+  v.innerHTML = `<div class="hello"><h2>End-of-shift handover</h2><p>Built from your saved notes and open flags. Nothing to write twice.</p></div>
+    <div class="card">
+      <div class="card-h"><h3>This shift</h3><span class="muted small">${shiftNotes().length} notes · ${openFlags().length} open flags</span></div>
+      ${handoverDraft ? `
+        ${sourceTag(handoverDraft.source, handoverDraft.reason)}
+        <label class="f" style="margin-top:10px">Handover (edit if needed)<textarea id="hoText" class="note-edit">${esc(handoverDraft.text)}</textarea></label>
+        <label class="f" style="margin-top:12px">Handing over to<select id="hoTo">${others.map((c) => `<option value="${c.id}">${esc(c.name)} · ${esc(c.shift)}</option>`).join("")}</select></label>
+        <div class="row" style="margin-top:14px"><button class="btn ghost" id="hoRedo">Prepare again</button><button class="btn primary" id="hoSave">Approve and hand over</button></div>`
+      : `<p class="small muted" style="margin:0 0 12px">When your shift ends, prepare the handover. You can edit it before approving.</p>
+        <button class="btn primary block" id="hoPrep">Prepare handover</button>`}
+    </div>
+    <div class="card"><div class="card-h"><h3>Recent handovers</h3></div><div class="list">
+      ${past.map((h) => `<div class="item"><div class="when">${fmtTime(h.ts)}</div><div class="body"><div class="small"><strong>${esc(carer(h.fromId).name)} → ${esc(carer(h.toId).name)}</strong> <span class="muted">· ${dayLabel(h.ts)}</span></div><details><summary>Read</summary><p class="small" style="white-space:pre-line;margin:0">${esc(h.text)}</p></details></div></div>`).join("") || '<div class="empty">None yet.</div>'}</div></div>`;
+  const prep = async (btn) => { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:20px;height:20px;border-width:3px"></span> Preparing…'; handoverDraft = await summarise("handover"); renderHandover(); };
+  if ($("#hoPrep")) $("#hoPrep").onclick = (e) => prep(e.currentTarget);
+  if ($("#hoRedo")) $("#hoRedo").onclick = (e) => prep(e.currentTarget);
+  if ($("#hoSave")) $("#hoSave").onclick = () => {
+    const toId = $("#hoTo").value; const text = $("#hoText").value.trim(); if (!text) return toast("The handover is empty");
+    S.handovers.push({ id: uid(), ts: Date.now(), fromId: S.onDuty, toId, text, source: handoverDraft.source });
+    S.onDuty = toId; handoverDraft = null; save(); go("today"); toast(`Handed over to ${carer(toId).name}`);
+  };
+}
+
+let familySummary = null, sendAs = "family";
+function renderFamily() {
+  const v = $("#view-family");
+  const inc = S.flags.filter((f) => f.kind === "incident" && isToday(f.ts));
+  const msgs = [...S.messages].sort((a, b) => a.ts - b.ts);
+  v.innerHTML = `<div class="hello"><h2>Family</h2><p>What the authorised family member sees: a daily summary, incidents and messages. Not every note.</p></div>
+    <div class="card"><div class="card-h"><h3>Today's summary</h3><span class="muted small">${fmtDay(Date.now())}</span></div>
+      ${familySummary ? `${sourceTag(familySummary.source, familySummary.reason)}<p class="note-text" style="white-space:pre-line;margin-top:8px">${esc(familySummary.text)}</p><button class="link" id="famRedo" style="margin-top:8px">Write again</button>`
+      : `<p class="small muted" style="margin:0 0 12px">A short, plain-English update written from today's notes.</p><button class="btn primary block" id="famGen">Write today's summary</button>`}</div>
+    <div class="card"><div class="card-h"><h3>Incidents today</h3></div><div class="flags">${inc.length ? inc.map((f) => flagHTML(f, false)).join("") : '<div class="empty">No incidents today.</div>'}</div></div>
+    <div class="card"><div class="card-h"><h3>Messages</h3><span class="muted small">Reaches whoever is on duty</span></div>
+      <div class="thread" id="thread">${msgs.map((m) => `<div class="msg ${m.from === "carer" ? "carer" : ""}"><span class="who">${esc(m.name)} · ${dayLabel(m.ts)} ${fmtTime(m.ts)}</span>${esc(m.text)}</div>`).join("") || '<div class="empty">No messages yet.</div>'}</div>
+      <div class="seg" style="margin-top:12px" role="group" aria-label="Send as"><button data-as="family" aria-pressed="${sendAs === "family"}">Send as family</button><button data-as="carer" aria-pressed="${sendAs === "carer"}">Send as ${esc(onDuty().name)}</button></div>
+      <form class="composer" id="msgForm"><input type="text" id="msgText" placeholder="Write a message" aria-label="Message" autocomplete="off"><button class="btn primary" style="min-height:46px">Send</button></form>
+      <p class="tiny muted" style="margin:8px 0 0">Demo: both sides are on this phone. In the finished app family use their own login.</p></div>
+    <div class="card"><div class="switch"><div><strong>Alert family about incidents</strong><div class="small muted">Off by default. This is a care record, not a monitoring tool. Family can choose to switch it on.</div></div><input type="checkbox" id="famAlerts" ${S.settings.familyAlerts ? "checked" : ""} aria-label="Alert family about incidents"></div></div>`;
+  const gen = async (btn) => { btn.disabled = true; btn.textContent = "Writing…"; familySummary = await summarise("family"); renderFamily(); };
+  if ($("#famGen")) $("#famGen").onclick = (e) => gen(e.currentTarget);
+  if ($("#famRedo")) $("#famRedo").onclick = (e) => gen(e.currentTarget);
+  v.querySelectorAll("[data-as]").forEach((b) => (b.onclick = () => { sendAs = b.dataset.as; renderFamily(); }));
+  $("#msgForm").onsubmit = (e) => {
+    e.preventDefault(); const text = $("#msgText").value.trim(); if (!text) return;
+    S.messages.push({ id: uid(), ts: Date.now(), from: sendAs, name: sendAs === "family" ? "Family" : onDuty().name, text }); save(); renderFamily();
+    const th = $("#thread"); th.scrollTop = th.scrollHeight;
+  };
+  $("#famAlerts").onchange = (e) => { S.settings.familyAlerts = e.target.checked; save(); toast(e.target.checked ? "Family will be alerted about incidents" : "Family alerts off"); };
+  const th = $("#thread"); th.scrollTop = th.scrollHeight;
+}
+
+/* ---------- sheets ---------- */
+function sheet(html, { onClose, guard } = {}) {
+  const root = $("#sheetRoot");
+  root.innerHTML = `<div class="scrim" id="scrim"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div></div>`;
+  const close = () => { root.innerHTML = ""; onClose && onClose(); };
+  // guard(): true when closing would lose work, so the close button needs a second tap.
+  const tryClose = () => { if (guard && guard()) return confirmInline(root.querySelector("[data-close]"), close); close(); };
+  $("#scrim").addEventListener("click", (e) => { if (e.target.id === "scrim" && !(guard && guard())) close(); });
+  root.querySelectorAll("[data-close]").forEach((b) => (b.onclick = tryClose));
+  return { root: $(".sheet", root), close };
+}
+// Two-tap confirm: the first tap turns the button into "Tap again to discard".
+function confirmInline(btn, action) {
+  if (!btn || btn.dataset.armed) return action();
+  btn.dataset.armed = "1"; const old = btn.innerHTML;
+  btn.innerHTML = '<span style="font-size:13px;font-weight:700;color:var(--record);white-space:nowrap">Tap again to discard</span>';
+  btn.style.width = "auto";
+  setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.innerHTML = old; btn.style.width = ""; } }, 3000);
+}
+const sheetHead = (title) => `<div class="sheet-h"><h2>${title}</h2><button class="icon-btn" data-close aria-label="Close">${ICON.close}</button></div>`;
+
+function openCarerSheet() {
+  const s = sheet(`${sheetHead("Who's on duty?")}
+    <div class="list card">${S.carers.map((c) => `<button class="item" data-c="${c.id}" style="border-left:0;border-right:0;border-bottom:0;background:none;text-align:left;width:100%;align-items:center"><span class="avatar">${esc(c.name.charAt(0))}</span><span class="body"><strong>${esc(c.name)}</strong><div class="small muted">${esc(c.shift)}</div></span>${c.id === S.onDuty ? '<span class="chip accent">On duty</span>' : ""}</button>`).join("")}</div>
+    <p class="small muted" style="margin:0">Every note is stamped with the carer on duty. Use Handover at the end of a shift to pass on properly.</p>`);
+  s.root.querySelectorAll("[data-c]").forEach((b) => (b.onclick = () => { S.onDuty = b.dataset.c; save(); s.close(); render(); toast(`${onDuty().name} is now on duty`); }));
+}
+
+function openTransferSheet() {
+  const s = sheet(`${sheetHead("Hand over to someone else")}
+    <p class="small muted" style="margin:0">Only to a person authorised by the family. ${esc(S.client.name)} will be shown as out of your care until they're back.</p>
+    <label class="f">Who is taking ${esc(S.client.name)}?<input type="text" id="trWho" placeholder="Name, e.g. Peter" autocomplete="off"></label>
+    <label class="f">Relationship<input type="text" id="trRel" placeholder="e.g. Son, family friend" autocomplete="off"></label>
+    <label class="f">Where to<input type="text" id="trWhy" placeholder="e.g. Church" autocomplete="off"></label>
+    <button class="btn primary block" id="trSave">Confirm handover at ${fmtTime(Date.now())}</button>`);
+  $("#trSave").onclick = () => {
+    const who = $("#trWho").value.trim(); if (!who) return toast("Enter who is taking them");
+    S.transfers.push({ id: uid(), outTs: Date.now(), withWhom: who, relationship: $("#trRel").value.trim(), purpose: $("#trWhy").value.trim(), carerId: S.onDuty });
+    save(); s.close(); render(); toast(`${S.client.name} is now with ${who}`);
+  };
+}
+function openReturnSheet() {
+  const t = activeTransfer(); if (!t) return;
+  const s = sheet(`${sheetHead("Back in your care")}
+    <p class="small" style="margin:0">${esc(S.client.name)} went out with <strong>${esc(t.withWhom)}</strong> at ${fmtTime(t.outTs)}.</p>
+    <label class="f">Anything to note on return? (optional)<input type="text" id="bkNote" placeholder="e.g. Had lunch out, seemed tired" autocomplete="off"></label>
+    <button class="btn primary block" id="bkSave">Confirm back at ${fmtTime(Date.now())}</button>`);
+  $("#bkSave").onclick = () => { t.backTs = Date.now(); t.backNote = $("#bkNote").value.trim(); t.backCarerId = S.onDuty; save(); s.close(); render(); toast("Back in your care"); };
+}
+function openEventSheet() {
+  const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1);
+  const pad = (n) => String(n).padStart(2, "0");
+  const s = sheet(`${sheetHead("Add appointment or plan")}
+    <label class="f">What<input type="text" id="evLabel" placeholder="e.g. Hairdresser" autocomplete="off"></label>
+    <label class="f">Details (optional)<input type="text" id="evDetail" placeholder="e.g. Coming to the house" autocomplete="off"></label>
+    <div class="row"><label class="f" style="flex:1">Day<select id="evDay"><option value="0">Today</option><option value="1">Tomorrow</option><option value="2">In 2 days</option></select></label>
+    <label class="f" style="flex:1">Time<input type="text" id="evTime" value="${pad(d.getHours())}:00" inputmode="numeric"></label></div>
+    <button class="btn primary block" id="evSave">Add</button>`);
+  $("#evSave").onclick = () => {
+    const label = $("#evLabel").value.trim(); const m = $("#evTime").value.match(/^(\d{1,2})[:.](\d{2})$/);
+    if (!label) return toast("Enter what it is"); if (!m) return toast("Time should look like 14:30");
+    const w = new Date(); w.setHours(+m[1], +m[2], 0, 0);
+    S.schedule.push({ id: uid(), when: w.getTime() + +$("#evDay").value * 864e5, label, detail: $("#evDetail").value.trim() });
+    save(); s.close(); render(); toast("Added");
+  };
+}
+
+function openSettings() {
+  const c = S.consent;
+  const s = sheet(`${sheetHead("Settings")}
+    <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">AI note writing</h3>
+      <p class="small muted" style="margin:0">Connect to the Nana Care relay for AI-written notes. Without it the app still works offline with a basic tidy.</p>
+      <label class="f">Relay address<input type="text" id="stUrl" value="${esc(S.settings.relayUrl)}" placeholder="https://nana-care-relay.example.workers.dev" autocomplete="off" inputmode="url"></label>
+      <label class="f">Access code<input type="password" id="stCode" value="${esc(S.settings.accessCode)}" autocomplete="off"></label>
+      <button class="btn secondary" id="stTest">Save and test connection</button><div class="small" id="stMsg"></div></div>
+    <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">People</h3>
+      <label class="f">Client's name<input type="text" id="stClient" value="${esc(S.client.name)}" autocomplete="off"></label>
+      ${S.carers.map((x, i) => `<div class="row"><label class="f" style="flex:1 1 120px">Carer ${i + 1}<input type="text" data-cn="${x.id}" value="${esc(x.name)}" autocomplete="off"></label><label class="f" style="flex:1 1 160px">Shift<input type="text" data-cs="${x.id}" value="${esc(x.shift)}" autocomplete="off"></label></div>`).join("")}
+      <button class="btn secondary" id="stPeople">Save names</button></div>
+    <div class="card small"><h3 style="font-size:17px;margin-bottom:6px">Consent</h3>
+      ${c ? `Agreed by <strong>${esc(c.name)}</strong> (${esc(c.role)}) on ${fmtDay(c.ts)} at ${fmtTime(c.ts)}.` : "Not recorded."}
+      <p class="muted" style="margin:8px 0 0">Notes and recordings are kept on this phone only in this demo. Only the words of a note (never the recording) are sent to the AI to tidy.</p></div>
+    <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Demo data</h3>
+      <p class="small muted" style="margin:0">Start again with the example day. Deletes all notes and recordings on this phone.</p>
+      <button class="btn ghost" id="stReset">Reset demo</button><button class="btn danger" id="stResetYes" hidden>Yes, delete everything</button></div>
+    <p class="tiny muted" style="margin:0;text-align:center">Nana Care prototype V3 · fictional test use only · not a secure care record yet</p>`);
+  $("#stTest").onclick = async () => {
+    S.settings.relayUrl = $("#stUrl").value.trim(); S.settings.accessCode = $("#stCode").value.trim(); save();
+    const m = $("#stMsg"); m.textContent = "Testing…";
+    try { const out = await relay("/tidy", { transcript: "Connection test. Nana had a cup of tea.", client: "Nana", carer: "Test", time: "now" }); if (!validTidy(out)) throw new Error("that address isn't the Nana Care relay"); m.textContent = "Connected. Notes will be written by AI."; m.style.color = "var(--accent)"; }
+    catch (e) { m.textContent = "Not connected: " + e.message; m.style.color = "var(--incident)"; }
+  };
+  $("#stPeople").onclick = () => {
+    S.client.name = $("#stClient").value.trim() || "Nana";
+    s.root.querySelectorAll("[data-cn]").forEach((i) => (carer(i.dataset.cn).name = i.value.trim() || carer(i.dataset.cn).name));
+    s.root.querySelectorAll("[data-cs]").forEach((i) => (carer(i.dataset.cs).shift = i.value.trim()));
+    save(); render(); toast("Saved");
+  };
+  $("#stReset").onclick = () => { $("#stResetYes").hidden = false; };
+  $("#stResetYes").onclick = async () => { const keep = S.settings; await audioDB.clear(); S = seed(); S.settings = keep; save(); s.close(); handoverDraft = familySummary = null; go("today"); showConsent(); };
+}
+
+/* ---------- recorder ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const rec = { media: null, chunks: [], stream: null, recog: null, on: false, final: "", interim: "", started: 0, timer: null, blob: null, speechOK: !!SR };
+
+function openRecorder() {
+  if (activeTransfer()) toast(`Note: ${S.client.name} is out with ${activeTransfer().withWhom}`);
+  rec.final = rec.interim = ""; rec.blob = null; rec.speechOK = !!SR; rec.cancelled = false;
+  const s = sheet(`${sheetHead("Record care note")}
+    <div class="recorder">
+      <button class="big-mic" id="micBtn" aria-label="Start recording">${ICON.mic}</button>
+      <div class="timer" id="recTimer">0:00</div>
+      <p class="muted small" id="recHint" style="margin:0">Tap to start. Speak naturally, as if leaving a voice message.</p>
+      <div class="live" id="live" hidden></div>
+    </div>
+    <div class="row"><button class="btn ghost" id="typeBtn">Type instead</button></div>
+    <p class="tiny muted" style="margin:0;text-align:center">Recording as ${esc(onDuty().name)} · ${fmtTime(Date.now())}. The original recording is kept with the note.</p>`,
+    { onClose: () => stopRecording(true), guard: () => rec.on });
+  $("#micBtn").onclick = () => (rec.on ? stopRecording(false) : startRecording());
+  $("#typeBtn").onclick = () => { stopRecording(true); openReview({ transcript: "", typed: true }); };
+}
+
+async function startRecording() {
+  try {
+    rec.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch (e) {
+    $("#recHint").textContent = "The microphone is blocked. Allow microphone access for this site in your browser settings, or use Type instead.";
+    return;
+  }
+  rec.chunks = [];
+  try { rec.media = new MediaRecorder(rec.stream); rec.media.ondataavailable = (e) => e.data.size && rec.chunks.push(e.data); rec.media.start(1000); }
+  catch { rec.media = null; }
+  if (SR) {
+    try {
+      rec.recog = new SR(); rec.recog.lang = "en-GB"; rec.recog.continuous = true; rec.recog.interimResults = true;
+      rec.recog.onresult = (e) => {
+        rec.interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const r = e.results[i];
+          if (r.isFinal) { const seg = r[0].transcript.trim(); if (seg && !rec.final.trimEnd().endsWith(seg)) rec.final += seg + " "; }
+          else rec.interim += r[0].transcript;
+        }
+        drawLive();
+      };
+      rec.recog.onerror = (e) => { if (["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"].includes(e.error)) rec.speechOK = false; };
+      rec.recog.onend = () => { if (rec.on && rec.speechOK) { try { rec.recog.start(); } catch {} } };
+      rec.recog.start();
+    } catch { rec.speechOK = false; }
+  }
+  rec.on = true; rec.started = Date.now();
+  const mic = $("#micBtn"); mic.classList.add("on"); mic.innerHTML = ICON.stop; mic.setAttribute("aria-label", "Stop recording");
+  $("#recHint").textContent = "Recording. Tap the button when you've finished.";
+  $("#live").hidden = false; drawLive();
+  rec.timer = setInterval(() => { const s = Math.floor((Date.now() - rec.started) / 1000); const t = $("#recTimer"); if (t) t.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 250);
+}
+function drawLive() {
+  const l = $("#live"); if (!l) return;
+  l.innerHTML = rec.final || rec.interim ? `${esc(rec.final)}<span class="interim">${esc(rec.interim)}</span>`
+    : `<span class="interim">${rec.speechOK ? "Your words will appear here as you speak…" : "Live words aren't available in this browser. Your recording is still being kept."}</span>`;
+}
+function stopRecording(cancel) {
+  if (cancel) rec.cancelled = true;
+  if (!rec.on) return;
+  rec.on = false; clearInterval(rec.timer);
+  try { rec.recog && rec.recog.stop(); } catch {}
+  const finish = () => {
+    rec.stream && rec.stream.getTracks().forEach((t) => t.stop());
+    if (rec.cancelled) return;
+    rec.blob = rec.chunks.length ? new Blob(rec.chunks, { type: (rec.media && rec.media.mimeType) || "audio/webm" }) : null;
+    // A clip under ~2 KB is silence or a failed capture: don't claim it was kept.
+    if (rec.blob && rec.blob.size < 2000) rec.blob = null;
+    openReview({ transcript: (rec.final + " " + rec.interim).trim(), blob: rec.blob });
+  };
+  const mic = $("#micBtn"); if (mic && !cancel) { mic.disabled = true; $("#recHint").textContent = "Finishing…"; }
+  if (rec.media && rec.media.state !== "inactive") { rec.media.onstop = () => setTimeout(finish, 500); rec.media.stop(); }
+  else setTimeout(finish, 500);
+}
+
+async function openReview({ transcript, blob, typed }) {
+  let draft = null; const blobUrl = blob ? URL.createObjectURL(blob) : null;
+  let saving = false;
+  const s = sheet(`${sheetHead(typed ? "Type a care note" : "Check before saving")}<div id="rv" style="display:grid;gap:14px"></div>`,
+    { guard: () => !saving && (!!blob || !!draft || !!(document.querySelector("#rvTx") || {}).value) });
+  const rv = $("#rv", s.root);
+  const showInput = (msg) => {
+    rv.innerHTML = `${msg ? `<div class="warn">${msg}</div>` : ""}
+      ${blobUrl ? `<audio controls src="${blobUrl}"></audio>` : ""}
+      <label class="f">${typed ? "What happened?" : "What you said"}<textarea id="rvTx" placeholder="e.g. Nana had porridge and a cup of tea, took her tablets with help.">${esc(transcript)}</textarea></label>
+      <button class="btn primary block" id="rvGo">Write the note</button>`;
+    $("#rvGo").onclick = () => { transcript = $("#rvTx").value.trim(); if (!transcript) return toast("Add some words first"); run(); };
+  };
+  const run = async () => {
+    rv.innerHTML = `<div class="recorder"><div class="spinner"></div><p class="muted" style="margin:0">Writing your care note…</p></div>`;
+    draft = await tidy(transcript); showDraft();
+  };
+  const showDraft = () => {
+    rv.innerHTML = `${sourceTag(draft.source, draft.reason)}
+      <label class="f">Care note<textarea id="rvNote" class="note-edit">${esc(draft.note)}</textarea></label>
+      ${draft.unclear && draft.unclear.length ? `<div class="warn"><strong>Check these words:</strong> ${draft.unclear.map(esc).join(", ")}</div>` : ""}
+      <div><div class="eyebrow" style="margin-bottom:6px">Covers</div><div class="chips">${draft.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("") || '<span class="small muted">No categories found</span>'}</div></div>
+      <div><div class="eyebrow" style="margin-bottom:6px">Flags</div><div class="flags" id="rvFlags">${draft.flags.length ? draft.flags.map((f, i) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "Follow-up"}</span><strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div><button class="link" data-rmflag="${i}">Remove</button></div>`).join("") : '<div class="empty">No flags. Nothing needs following up.</div>'}</div></div>
+      <details><summary>What you said</summary>${blobUrl ? `<audio controls src="${blobUrl}" style="margin-bottom:8px"></audio>` : ""}<p class="small muted" style="margin:0">${esc(transcript)}</p></details>
+      <div class="row"><button class="btn ghost" id="rvAgain">Re-record</button><button class="btn primary" id="rvSave">Save to record</button></div>
+      <button class="link" id="rvDiscard" style="justify-self:center;color:var(--ink-2)">Discard</button>`;
+    rv.querySelectorAll("[data-rmflag]").forEach((b) => (b.onclick = () => { draft.flags.splice(+b.dataset.rmflag, 1); draft.note = $("#rvNote").value; showDraft(); }));
+    $("#rvAgain").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); openRecorder(); });
+    $("#rvDiscard").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); toast("Discarded. Nothing was saved."); });
+    $("#rvSave").onclick = async (e) => {
+      if (saving) return;
+      const note = $("#rvNote").value.trim(); if (!note) return toast("The note is empty");
+      saving = true; e.currentTarget.disabled = true; e.currentTarget.textContent = "Saving…";
+      const id = uid(); let audioId = null;
+      if (blob) { audioId = "a_" + id; if (!(await audioDB.put(audioId, blob))) { audioId = null; toast("The recording couldn't be stored. The note is still saved."); } }
+      const ts = Date.now();
+      S.notes.push({ id, ts, approvedTs: ts, carerId: S.onDuty, transcript, note, categories: draft.categories, audioId, source: draft.source });
+      draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
+      if (!save()) { saving = false; return; }
+      s.close(); render();
+      const inc = draft.flags.filter((f) => f.kind === "incident").length;
+      toast(inc ? `Saved. Incident report added to Needs attention.` : "Saved to the record");
+    };
+  };
+  if (typed || !transcript) showInput(!typed ? (blob ? "We couldn't turn your speech into words on this phone. Play it back and type a short version below." : "Nothing was picked up. Check the microphone, try again, or type the note.") : "");
+  else run();
+}
+
+/* ---------- consent (first run) ---------- */
+function showConsent() {
+  if (S.consent) return;
+  const root = $("#fullRoot");
+  root.innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap">
+    <span class="eyebrow">Before you start</span>
+    <h2 style="font-size:30px;line-height:1.15">Using Nana Care in this home</h2>
+    <p class="muted" style="margin:0">Carers record short voice notes about ${esc(S.client.name)}'s day. The app keeps the original recording, writes a tidy note and builds the handover for the next carer.</p>
+    <div class="card small" style="display:grid;gap:8px">
+      <div><strong>What is recorded:</strong> the carer's voice. Other voices nearby may be picked up.</div>
+      <div><strong>Who can see it:</strong> the carer on duty, the authorised family member, and health staff in an emergency.</div>
+      <div><strong>Why:</strong> to keep an accurate record that protects ${esc(S.client.name)} and the carer.</div>
+    </div>
+    <p class="small" style="margin:0">The client, or the person holding Lasting Power of Attorney for health and welfare, should agree before this is used.</p>
+    <label class="f">Name of the person agreeing<input type="text" id="cnName" autocomplete="off"></label>
+    <label class="f">They are<select id="cnRole"><option>The client</option><option>Lasting Power of Attorney (health and welfare)</option><option>Other authorised family member</option></select></label>
+    <label class="check"><input type="checkbox" id="cnOk"><span>I agree to Nana Care being used to keep care notes and voice recordings in this home.</span></label>
+    <label class="f">Who is on duty now?<select id="cnDuty">${S.carers.map((c) => `<option value="${c.id}" ${c.id === S.onDuty ? "selected" : ""}>${esc(c.name)} · ${esc(c.shift)}</option>`).join("")}</select></label>
+    <button class="btn primary block" id="cnGo" disabled>Start using Nana Care</button>
+    <p class="tiny muted" style="margin:0;text-align:center">Prototype for testing with fictional information only.</p>
+  </div></div>`;
+  const check = () => ($("#cnGo").disabled = !($("#cnOk").checked && $("#cnName").value.trim()));
+  $("#cnOk").onchange = check; $("#cnName").oninput = check;
+  $("#cnGo").onclick = () => {
+    S.consent = { name: $("#cnName").value.trim(), role: $("#cnRole").value, ts: Date.now() };
+    S.onDuty = $("#cnDuty").value; save(); root.innerHTML = ""; render();
+  };
+}
+
+/* ---------- boot ---------- */
+render();
+showConsent();
+if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
