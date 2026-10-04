@@ -263,7 +263,7 @@ const SESSION_KEY = "nanacare.session";
 let session = null;
 try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch {}
 const relayBase = () => (RELAY_URL || (session && session.relayUrl) || "").replace(/\/+$/, "");
-let KEY = "nanacare.v3";
+let KEY = null; // set by loadUser() once a person and client are chosen
 let S;
 function seed() {
   const at = (h, m, dayOffset = 0) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.getTime() + dayOffset * 864e5; };
@@ -297,12 +297,26 @@ function seed() {
 }
 function load() { try { const raw = localStorage.getItem(KEY); if (raw) return JSON.parse(raw); } catch {} return null; }
 function save() {
+  if (!KEY) return false;
   try { localStorage.setItem(KEY, JSON.stringify(S)); return true; }
   catch { toast("Couldn't save on this phone. Storage may be full."); return false; }
 }
 S = seed(); // replaced by the signed-in person's own data in loadUser()
-// Each person who signs in on this phone gets their own notes.
-function loadUser() { KEY = "nanacare.v3." + session.username; S = load() || seed(); }
+// Each person who signs in on this phone gets their own notes, kept separately for each client.
+// The client's name and agreement come from the server, so they are the same for everyone.
+function loadUser() {
+  const legacy = "nanacare.v3." + session.username;
+  KEY = legacy + "." + session.client.id;
+  S = load();
+  if (!S) { // first time with this client: carry over notes from before clients existed, once
+    let old = null;
+    try { old = JSON.parse(localStorage.getItem(legacy) || "null"); } catch {}
+    S = old && old.client && old.client.name === session.client.name ? old : seed();
+    S.client = { name: session.client.name }; S.consent = session.client.consent;
+    if (save() && S === old) try { localStorage.removeItem(legacy); } catch {}
+  }
+  S.client = { name: session.client.name }; S.consent = session.client.consent; save();
+}
 const carer = (id) => S.carers.find((c) => c.id === id) || { name: "Unknown", shift: "" };
 const onDuty = () => carer(S.onDuty);
 const openFlags = () => S.flags.filter((f) => f.status === "open");
@@ -320,7 +334,7 @@ const audioDB = (() => {
   return {
     put: (id, blob) => tx("readwrite", (s) => s.put(blob, id)).then(() => true, () => false),
     get: (id) => tx("readonly", (s) => s.get(id)).catch(() => null),
-    clear: () => tx("readwrite", (s) => s.clear()).catch(() => null),
+    del: (ids) => tx("readwrite", (s) => { ids.forEach((id) => s.delete(id)); }).catch(() => null),
   };
 })();
 
@@ -336,7 +350,7 @@ async function relay(path, body, { auth = true } = {}) {
     const r = await fetch(base + path, { method: "POST", signal: ctl.signal, headers, body: JSON.stringify(body || {}) });
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 && auth && session && !session.local) signedOut("Your sign-in has ended. Sign in again to carry on.");
-    if (r.status === 428 && session) { session.privacyAccepted = null; saveSession(); $("#sheetRoot").innerHTML = ""; showPrivacy(() => { $("#fullRoot").innerHTML = ""; render(); }); }
+    if (r.status === 428 && session) { session.privacyAccepted = null; saveSession(); $("#sheetRoot").innerHTML = ""; showPrivacy(() => afterSignIn(true)); }
     if (!r.ok) throw new Error(j.error || "Error " + r.status);
     return j;
   } catch (e) { throw new Error(e.name === "AbortError" ? "AI took too long" : e.message); }
@@ -681,15 +695,17 @@ function openSettings() {
       ${session.role === "admin" ? '<button class="btn primary" id="stTesters">Manage people</button>' : ""}
       <button class="btn secondary" id="stTest">Check AI connection</button><div class="small" id="stMsg"></div>
       <button class="btn ghost" id="stOut">Sign out</button></div>
-    <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">People</h3>
-      <label class="f">Client's name<input type="text" id="stClient" value="${esc(S.client.name)}" autocomplete="off"></label>
+    <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Client</h3>
+      <p class="small" style="margin:0">Notes are for <strong>${esc(S.client.name)}</strong>.</p>
+      <button class="btn secondary" id="stSwitch">Switch or add client</button></div>
+    <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Carers</h3>
       ${S.carers.map((x, i) => `<div class="row"><label class="f" style="flex:1 1 120px">Carer ${i + 1}<input type="text" data-cn="${x.id}" value="${esc(x.name)}" autocomplete="off"></label><label class="f" style="flex:1 1 160px">Shift<input type="text" data-cs="${x.id}" value="${esc(x.shift)}" autocomplete="off"></label></div>`).join("")}
       <button class="btn secondary" id="stPeople">Save names</button></div>
     <div class="card small"><h3 style="font-size:17px;margin-bottom:6px">Consent</h3>
       ${c ? `Agreed by <strong>${esc(c.name)}</strong> (${esc(c.role)}) on ${fmtDay(c.ts)} at ${fmtTime(c.ts)}.` : "Not recorded."}
       <p class="muted" style="margin:8px 0 0">Notes and recordings are kept on this phone only in this demo. Only the words of a note (never the recording) are sent to the AI to tidy.</p></div>
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Demo data</h3>
-      <p class="small muted" style="margin:0">Start again with the example day. Deletes all notes and recordings on this phone.</p>
+      <p class="small muted" style="margin:0">Start again with the example day. Deletes this client's notes and recordings on this phone.</p>
       <button class="btn ghost" id="stReset">Reset demo</button><button class="btn danger" id="stResetYes" hidden>Yes, delete everything</button></div>
     <button class="btn ghost" id="stPrivacy">Read the privacy notice</button>
     <p class="tiny muted" style="margin:0;text-align:center">Dignity Notes pilot · fictional test use only<br>${COPYRIGHT}</p>`);
@@ -704,14 +720,14 @@ function openSettings() {
     if (!session.local) relay("/logout", {}).catch(() => {});
     s.close(); signedOut("You've signed out.");
   });
+  $("#stSwitch").onclick = () => { s.close(); handoverDraft = familySummary = null; showClients(true); };
   $("#stPeople").onclick = () => {
-    S.client.name = $("#stClient").value.trim() || "Nana";
     s.root.querySelectorAll("[data-cn]").forEach((i) => (carer(i.dataset.cn).name = i.value.trim() || carer(i.dataset.cn).name));
     s.root.querySelectorAll("[data-cs]").forEach((i) => (carer(i.dataset.cs).shift = i.value.trim()));
     save(); render(); toast("Saved");
   };
   $("#stReset").onclick = () => { $("#stResetYes").hidden = false; };
-  $("#stResetYes").onclick = async () => { const keep = S.settings; await audioDB.clear(); S = seed(); S.settings = keep; save(); s.close(); handoverDraft = familySummary = null; go("today"); showConsent(); };
+  $("#stResetYes").onclick = async () => { const keep = S.settings; await audioDB.del(S.notes.map((n) => n.audioId).filter(Boolean)); S = seed(); S.settings = keep; save(); loadUser(); s.close(); handoverDraft = familySummary = null; go("today"); };
 }
 
 /* ---------- recorder ---------- */
@@ -908,7 +924,9 @@ function viewPrivacy() {
 }
 // After sign-in (or on opening the app), make sure the current notice has been accepted.
 function afterSignIn(privacyAccepted) {
-  const go2 = () => { loadUser(); $("#fullRoot").innerHTML = ""; go("today"); showConsent(); };
+  if (!session) return;
+  if (privacyAccepted && session.privacyAccepted !== PRIVACY_VERSION) { session.privacyAccepted = PRIVACY_VERSION; saveSession(); }
+  const go2 = () => { if (session.client) { $("#fullRoot").innerHTML = ""; loadUser(); go("today"); checkClient(); } else showClients(false); };
   if (session.local || privacyAccepted || session.privacyAccepted === PRIVACY_VERSION) go2(); else showPrivacy(go2);
 }
 
@@ -926,7 +944,7 @@ function saveSession() {
   try { if (session && session.relayUrl) localStorage.setItem("nanacare.relay", session.relayUrl); } catch {}
   try { session ? localStorage.setItem(SESSION_KEY, JSON.stringify(session)) : localStorage.removeItem(SESSION_KEY); } catch {} }
 function signedOut(msg) {
-  session = null; saveSession(); $("#sheetRoot").innerHTML = ""; handoverDraft = familySummary = null; showLogin(msg);
+  session = null; saveSession(); KEY = null; S = seed(); $("#sheetRoot").innerHTML = ""; handoverDraft = familySummary = null; showLogin(msg);
 }
 function showLogin(msg) {
   const local = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
@@ -967,7 +985,7 @@ function showLogin(msg) {
   };
   if ($("#lgLocal")) $("#lgLocal").onclick = () => {
     session = { username: "local", role: "admin", name: "Local tester", local: true, relayUrl: "" };
-    saveSession(); loadUser(); root.innerHTML = ""; go("today"); showConsent();
+    saveSession(); showClients(false);
   };
   setTimeout(() => $("#lgUser") && $("#lgUser").focus(), 50);
 }
@@ -1065,41 +1083,123 @@ function openTesters() {
   load();
 }
 
-/* ---------- consent (first run) ---------- */
-function showConsent() {
-  if (S.consent) return;
+/* ---------- clients ---------- */
+// The client list lives on the server, so the agreement is asked for once per client, not once per carer.
+// Local testing (no server) keeps the list on this phone.
+const LOCAL_CLIENTS = "dignitynotes.localclients";
+const localClients = () => { try { return JSON.parse(localStorage.getItem(LOCAL_CLIENTS) || "[]"); } catch { return []; } };
+const clientsApi = {
+  list: async () => (session.local ? localClients() : (await relay("/clients", {})).clients),
+  add: async (name, consent) => {
+    if (!session.local) return (await relay("/clients/add", { name, consent })).client;
+    const client = { id: uid(), name, consent: { name: consent.name, role: consent.role, ts: Date.now(), by: session.username }, createdAt: Date.now(), createdBy: session.username };
+    localStorage.setItem(LOCAL_CLIENTS, JSON.stringify([...localClients(), client]));
+    return client;
+  },
+};
+// Clients already used on this phone, for when there's no connection.
+function savedClients() {
+  const prefix = "nanacare.v3." + session.username + ".";
+  const out = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k.startsWith(prefix)) continue;
+      const d = JSON.parse(localStorage.getItem(k));
+      if (d && d.client && d.consent) out.push({ id: k.slice(prefix.length), name: d.client.name, consent: d.consent });
+    }
+  } catch {}
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+// If an administrator removed the client (for example, consent withdrawn), stop using it.
+async function checkClient() {
+  if (!session || !session.client || !navigator.onLine) return;
+  let clients;
+  try { clients = await clientsApi.list(); } catch { return; }
+  if (session && session.client && !clients.some((c) => c.id === session.client.id)) {
+    toast(`${session.client.name} has been removed by an administrator`);
+    session.client = null; saveSession(); KEY = null; S = seed(); showClients(false);
+  }
+}
+function chooseClient(client) {
+  session.client = { id: client.id, name: client.name, consent: client.consent };
+  saveSession(); loadUser(); $("#fullRoot").innerHTML = ""; go("today");
+}
+// manual = opened from Settings; otherwise a single client is picked automatically.
+async function showClients(manual) {
   const root = $("#fullRoot");
+  const canGoBack = manual && session.client;
   root.innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap">
     <div style="background:#FDFAF3;border-radius:16px;padding:10px 12px;box-shadow:var(--shadow);max-width:360px"><img src="logo-wordmark.png" alt="Dignity Notes: Spoken care notes" width="720" height="195" style="width:100%;height:auto;display:block"></div>
-    <span class="eyebrow">Before you start</span>
-    <h2 style="font-size:30px;line-height:1.15">Using Dignity Notes in this home</h2>
-    <p class="muted" style="margin:0">Carers record short voice notes about ${esc(S.client.name)}'s day. The app keeps the original recording, writes a tidy note and builds the handover for the next carer.</p>
-    <div class="card small" style="display:grid;gap:8px">
-      <div><strong>What is recorded:</strong> the carer's voice. Other voices nearby may be picked up.</div>
-      <div><strong>Who can see it:</strong> the carer on duty, the authorised family member, and health staff in an emergency.</div>
-      <div><strong>Why:</strong> to keep an accurate record that protects ${esc(S.client.name)} and the carer.</div>
-    </div>
-    <p class="small" style="margin:0">The client, or the person holding Lasting Power of Attorney for health and welfare, should agree before this is used.</p>
-    <label class="f">Name of the person agreeing<input type="text" id="cnName" autocomplete="off"></label>
-    <label class="f">They are<select id="cnRole"><option>The client</option><option>Lasting Power of Attorney (health and welfare)</option><option>Other authorised family member</option></select></label>
-    <label class="check"><input type="checkbox" id="cnOk"><span>I agree to Dignity Notes being used to keep care notes and voice recordings in this home.</span></label>
-    <label class="f">Who is on duty now?<select id="cnDuty">${S.carers.map((c) => `<option value="${c.id}" ${c.id === S.onDuty ? "selected" : ""}>${esc(c.name)} · ${esc(c.shift)}</option>`).join("")}</select></label>
-    <button class="btn primary block" id="cnGo" disabled>Start using Dignity Notes</button>
+    <span class="eyebrow">Choose client</span>
+    <h2 style="font-size:30px;line-height:1.15">Who are you caring for?</h2>
+    <div class="card"><div class="list" id="clList"><div class="empty">Loading clients…</div></div></div>
+    <button class="btn secondary block" id="clNew">Add a new client</button>
+    <form id="clForm" hidden style="display:grid;gap:14px">
+      <h3 style="font-size:20px;margin:6px 0 0">New client</h3>
+      <label class="f">Client's name<input type="text" id="clName" placeholder="e.g. Nana" autocomplete="off"></label>
+      <p class="muted" style="margin:0">Carers record short voice notes about the client's day. The app keeps the original recording, writes a tidy note and builds the handover for the next carer.</p>
+      <div class="card small" style="display:grid;gap:8px">
+        <div><strong>What is recorded:</strong> the carer's voice. Other voices nearby may be picked up.</div>
+        <div><strong>Who can see it:</strong> the carer on duty, the authorised family member, and health staff in an emergency.</div>
+        <div><strong>Why:</strong> to keep an accurate record that protects the client and the carer.</div>
+      </div>
+      <p class="small" style="margin:0">The client, or the person holding Lasting Power of Attorney for health and welfare, must agree before this is used. This is asked once, when the client is added.</p>
+      <label class="f">Name of the person agreeing<input type="text" id="cnName" autocomplete="off"></label>
+      <label class="f">They are<select id="cnRole"><option>The client</option><option>Lasting Power of Attorney (health and welfare)</option><option>Other authorised family member</option></select></label>
+      <label class="check"><input type="checkbox" id="cnOk"><span>I agree to Dignity Notes being used to keep care notes and voice recordings for this client.</span></label>
+      <button class="btn primary block" id="cnGo" disabled>Add client and start</button>
+      <div class="small" id="clMsg" role="alert" style="color:var(--incident)"></div>
+    </form>
+    ${canGoBack ? `<button class="link" id="clBack" style="justify-self:center">Back to ${esc(session.client.name)}</button>` : ""}
+    <button class="link" id="clOut" style="justify-self:center;color:var(--ink-2)">Sign out</button>
     <p class="tiny muted" style="margin:0;text-align:center">Prototype for testing with fictional information only.</p>
   </div></div>`;
-  const check = () => ($("#cnGo").disabled = !($("#cnOk").checked && $("#cnName").value.trim()));
-  $("#cnOk").onchange = check; $("#cnName").oninput = check;
-  $("#cnGo").onclick = () => {
-    S.consent = { name: $("#cnName").value.trim(), role: $("#cnRole").value, ts: Date.now() };
-    S.onDuty = $("#cnDuty").value; save(); root.innerHTML = ""; render();
+  const listEl = $("#clList");
+  $("#clNew").onclick = () => { $("#clForm").hidden = false; $("#clNew").hidden = true; $("#clName").focus(); };
+  if ($("#clBack")) $("#clBack").onclick = () => { root.innerHTML = ""; };
+  $("#clOut").onclick = () => { if (!session.local) relay("/logout", {}).catch(() => {}); signedOut("You've signed out."); };
+  const check = () => ($("#cnGo").disabled = !($("#cnOk").checked && $("#cnName").value.trim() && $("#clName").value.trim()));
+  $("#cnOk").onchange = check; $("#cnName").oninput = check; $("#clName").oninput = check;
+  $("#clForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const b = $("#cnGo"); b.disabled = true; b.textContent = "Saving…"; $("#clMsg").textContent = "";
+    try {
+      chooseClient(await clientsApi.add($("#clName").value.trim(), { name: $("#cnName").value.trim(), role: $("#cnRole").value, agreed: true }));
+      toast("Client added");
+    } catch (err) { $("#clMsg").textContent = err.message; b.textContent = "Add client and start"; check(); }
   };
+  let clients, offline = false;
+  try { clients = await clientsApi.list(); }
+  catch (e) {
+    if (!session) return; // signed out (e.g. sign-in ended)
+    clients = savedClients(); offline = clients.length > 0;
+    if (!offline) {
+    listEl.innerHTML = `<div class="empty">Couldn't load clients: ${esc(e.message)}<br><button class="btn secondary" id="clRetry" style="margin-top:10px">Try again</button></div>`;
+    $("#clRetry").onclick = () => showClients(manual); return;
+    }
+  }
+  if (!manual && clients.length === 1) return chooseClient(clients[0]);
+  listEl.innerHTML = clients.length ? clients.map((c) => `<button class="item" data-client="${esc(c.id)}" style="width:100%;text-align:left;background:none;border:0;cursor:pointer">
+      <span class="avatar">${esc(c.name.charAt(0).toUpperCase())}</span>
+      <div class="body"><strong>${esc(c.name)}</strong>${session.client && session.client.id === c.id ? ' <span class="chip accent">Current</span>' : ""}
+        <div class="small muted">Agreed by ${esc(c.consent.name)} (${esc(c.consent.role)}) on ${fmtDay(c.consent.ts)}</div></div></button>`).join("")
+    : '<div class="empty">No clients yet. Add the first one below.</div>';
+  if (offline) listEl.insertAdjacentHTML("afterbegin", '<div class="warn small">No connection. Showing clients already on this phone.</div>');
+  listEl.querySelectorAll("[data-client]").forEach((b) => (b.onclick = () => { handoverDraft = familySummary = null; chooseClient(clients.find((c) => c.id === b.dataset.client)); }));
+  if (!clients.length) $("#clNew").click();
 }
 
 /* ---------- boot ---------- */
 if (session && (session.token || session.local)) {
-  loadUser(); render();
-  if (session.local || session.privacyAccepted === PRIVACY_VERSION) showConsent();
-  else relay("/me", {}).then((me) => afterSignIn(me.privacyAccepted)).catch(() => afterSignIn(false));
+  if (session.client) { loadUser(); render(); } else render();
+  if (session.local || session.privacyAccepted === PRIVACY_VERSION) { if (session.client) checkClient(); else showClients(false); }
+  else relay("/me", {}).then((me) => afterSignIn(me.privacyAccepted)).catch((e) => {
+    if (!session) return; // sign-in ended: the login screen is already showing
+    // No signal: carry on with the notes on this phone rather than asking for the privacy notice again.
+    if (/internet|fetch|network|load failed|too long/i.test(e.message)) { if (!session.client) showClients(false); }
+    else afterSignIn(false);
+  });
 }
 else { render(); showLogin(); }
 if ("serviceWorker" in navigator && location.protocol === "https:") {
