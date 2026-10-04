@@ -932,7 +932,7 @@ function showLogin(msg) {
   const local = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
   const root = $("#fullRoot");
   root.innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap" style="max-width:440px">
-    <div style="display:grid;gap:6px;margin-top:4vh"><img src="icon-192.png" alt="" width="84" height="84" style="border-radius:22px;box-shadow:var(--shadow);margin-bottom:10px"><span class="eyebrow">Dignity Notes</span>
+    <div style="display:grid;gap:6px;margin-top:4vh"><div style="background:#FDFAF3;border-radius:18px;padding:12px 14px;box-shadow:var(--shadow);margin-bottom:12px"><img src="logo-wordmark.png" alt="Dignity Notes: Spoken care notes" width="720" height="195" style="width:100%;height:auto;display:block"></div>
       <h2 style="font-size:32px;line-height:1.1">Sign in</h2>
       <p class="muted" style="margin:0">Spoken care notes for people who care for older adults at home. Use the username and password you were given.</p></div>
     ${msg ? `<div class="warn">${esc(msg)}</div>` : ""}
