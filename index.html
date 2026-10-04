@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Dignity Notes">
 <title>Dignity Notes</title>
+<meta name="copyright" content="© 2026 Workgroup (WA) Pty Ltd">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.json">
@@ -186,6 +187,9 @@ textarea.note-edit{font-family:var(--f-note);font-size:16.5px;min-height:170px}
 .dot.basic{background:var(--follow)}
 .warn{background:var(--follow-soft);border-radius:12px;padding:10px 12px;font-size:14px}
 
+.policy h3{font-size:16px;margin-top:12px}
+.policy p,.policy li{font-size:14.5px;line-height:1.55;margin:4px 0}
+.policy ul{padding-left:20px;margin:4px 0}
 .toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--ground);padding:10px 16px;border-radius:12px;font-weight:600;font-size:14px;z-index:60;max-width:calc(100% - 32px);box-shadow:var(--shadow)}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -332,6 +336,7 @@ async function relay(path, body, { auth = true } = {}) {
     const r = await fetch(base + path, { method: "POST", signal: ctl.signal, headers, body: JSON.stringify(body || {}) });
     const j = await r.json().catch(() => ({}));
     if (r.status === 401 && auth && session && !session.local) signedOut("Your sign-in has ended. Sign in again to carry on.");
+    if (r.status === 428 && session) { session.privacyAccepted = null; saveSession(); showPrivacy(() => { $("#fullRoot").innerHTML = ""; render(); }); }
     if (!r.ok) throw new Error(j.error || "Error " + r.status);
     return j;
   } catch (e) { throw new Error(e.name === "AbortError" ? "AI took too long" : e.message); }
@@ -686,7 +691,9 @@ function openSettings() {
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Demo data</h3>
       <p class="small muted" style="margin:0">Start again with the example day. Deletes all notes and recordings on this phone.</p>
       <button class="btn ghost" id="stReset">Reset demo</button><button class="btn danger" id="stResetYes" hidden>Yes, delete everything</button></div>
-    <p class="tiny muted" style="margin:0;text-align:center">Dignity Notes prototype V3.1 · fictional test use only · not a secure care record yet</p>`);
+    <button class="btn ghost" id="stPrivacy">Read the privacy notice</button>
+    <p class="tiny muted" style="margin:0;text-align:center">Dignity Notes pilot · fictional test use only<br>${COPYRIGHT}</p>`);
+  $("#stPrivacy").onclick = () => { s.close(); viewPrivacy(); };
   $("#stTest").onclick = async () => {
     const m = $("#stMsg"); m.textContent = "Checking…"; m.style.color = "";
     try { const me = await relay("/me", {}); if (!me.username) throw new Error("that address isn't the Dignity Notes relay"); m.textContent = "Connected. Notes will be written by AI."; m.style.color = "var(--accent)"; }
@@ -832,7 +839,88 @@ async function openReview({ transcript, blob, typed }) {
   else run();
 }
 
+/* ---------- privacy notice ---------- */
+const PRIVACY_VERSION = "2026-10-04";
+const PRIVACY_HTML = `
+<p class="small muted" style="margin:0">Version 1 · 4 October 2026 · Pilot</p>
+<h3>Who we are</h3>
+<p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
+<h3>Important: use fictional information only</h3>
+<p>During the pilot, <strong>do not record or type real information about real people</strong>, including names, health details, medication, addresses or anything that could identify someone. Use made-up examples. This keeps everyone's health information out of the pilot.</p>
+<h3>What we collect about you</h3>
+<ul>
+<li><strong>Your account:</strong> your name, username and password. We store passwords only in a scrambled (hashed) form that can't be read back.</li>
+<li><strong>Sign-in records:</strong> the time of each sign-in attempt, your IP address, your approximate location worked out from that address (town and country), your type of device and browser, and a random ID that this app stores on your device. We use these to keep accounts secure and to detect when a login is shared or used on another device.</li>
+<li><strong>Your agreement:</strong> when you accepted this notice.</li>
+</ul>
+<h3>What stays on your device</h3>
+<p>Care notes, voice recordings, handovers, messages and settings are kept <strong>on your device only</strong>. We don't receive them, except as described below. Deleting the app's data on your device, or tapping Reset demo, removes them.</p>
+<h3>AI note writing</h3>
+<p>When you ask the app to write a note, handover or summary, the <strong>words</strong> of your note (never the recording) are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
+<h3>Who else handles data for us</h3>
+<ul>
+<li><strong>Cloudflare:</strong> runs our relay and stores accounts and sign-in records.</li>
+<li><strong>GitHub (Microsoft):</strong> hosts the app's web pages.</li>
+<li><strong>Anthropic:</strong> AI note writing, as described above.</li>
+</ul>
+<p>These providers may process data outside the UK and Australia, including in the United States, under their own data protection safeguards.</p>
+<h3>Why we use it</h3>
+<p>To run the pilot, keep accounts secure, stop logins being shared, and improve Dignity Notes. In UK law our grounds are our legitimate interests in running a secure pilot, and your agreement to take part.</p>
+<h3>How long we keep it</h3>
+<ul>
+<li><strong>Sign-in records:</strong> deleted automatically after 90 days.</li>
+<li><strong>Accounts:</strong> until an administrator removes you, or the pilot ends.</li>
+<li><strong>Your agreement record:</strong> for as long as your account exists.</li>
+</ul>
+<h3>Who can see your information</h3>
+<p>Pilot administrators can see the people list, which devices each account has used, and the sign-in history. They can't see the notes on your device.</p>
+<h3>Your rights</h3>
+<p>You can ask to see, correct or delete the information we hold about you, or object to how we use it. Ask the administrator who invited you, who will pass your request to Workgroup (WA) Pty Ltd. If you're unhappy, you can complain to the UK Information Commissioner's Office (ico.org.uk) or, in Australia, the Office of the Australian Information Commissioner (oaic.gov.au).</p>
+<h3>Changes</h3>
+<p>If we change this notice, the app will ask you to read and accept the new version.</p>
+<p class="small muted">© 2026 Workgroup (WA) Pty Ltd. All rights reserved. Dignity Notes, its design, logo and software are the property of Workgroup (WA) Pty Ltd.</p>
+`;
+const COPYRIGHT = "© 2026 Workgroup (WA) Pty Ltd. All rights reserved.";
+function showPrivacy(onAccept) {
+  const root = $("#fullRoot");
+  root.innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap">
+    <img src="icon-192.png" alt="" width="56" height="56" style="border-radius:15px;box-shadow:var(--shadow)">
+    <span class="eyebrow">Before you start</span>
+    <h2 style="font-size:30px;line-height:1.15">Privacy notice</h2>
+    <div class="card policy" style="display:grid;gap:4px">${PRIVACY_HTML}</div>
+    <label class="check"><input type="checkbox" id="pvOk"><span>I've read the privacy notice and agree to take part in the Dignity Notes pilot on these terms.</span></label>
+    <button class="btn primary block" id="pvGo" disabled>Agree and continue</button>
+    <button class="link" id="pvNo" style="justify-self:center;color:var(--ink-2)">I don't agree (sign out)</button>
+    <div class="small" id="pvMsg" style="color:var(--incident)"></div>
+  </div></div>`;
+  $("#pvOk").onchange = (e) => ($("#pvGo").disabled = !e.target.checked);
+  $("#pvNo").onclick = () => { if (!session.local) relay("/logout", {}).catch(() => {}); signedOut("You need to accept the privacy notice to use Dignity Notes."); };
+  $("#pvGo").onclick = async () => {
+    const b = $("#pvGo"); b.disabled = true; b.textContent = "Saving…";
+    try {
+      if (!session.local) await relay("/privacy/accept", { version: PRIVACY_VERSION });
+      session.privacyAccepted = PRIVACY_VERSION; saveSession(); root.innerHTML = ""; onAccept();
+    } catch (e) { $("#pvMsg").textContent = e.message; b.disabled = false; b.textContent = "Agree and continue"; }
+  };
+}
+function viewPrivacy() {
+  sheet(`${sheetHead("Privacy notice")}<div class="card policy" style="display:grid;gap:4px">${PRIVACY_HTML}</div>`);
+}
+// After sign-in (or on opening the app), make sure the current notice has been accepted.
+function afterSignIn(privacyAccepted) {
+  const go2 = () => { loadUser(); $("#fullRoot").innerHTML = ""; go("today"); showConsent(); };
+  if (session.local || privacyAccepted || session.privacyAccepted === PRIVACY_VERSION) go2(); else showPrivacy(go2);
+}
+
 /* ---------- sign-in ---------- */
+// A random ID for this phone, so administrators can spot an account used on more than one device.
+const deviceId = (() => {
+  try {
+    let id = localStorage.getItem("dignitynotes.device");
+    if (!id) { id = uid() + uid(); localStorage.setItem("dignitynotes.device", id); }
+    return id;
+  } catch { return "no-storage"; }
+})();
 const lastRelay = () => { try { return localStorage.getItem("nanacare.relay") || ""; } catch { return ""; } };
 function saveSession() {
   try { if (session && session.relayUrl) localStorage.setItem("nanacare.relay", session.relayUrl); } catch {}
@@ -856,7 +944,7 @@ function showLogin(msg) {
       <div class="small" id="lgMsg" role="alert" style="color:var(--incident)"></div>
     </form>
     ${local ? '<button class="link" id="lgLocal" style="justify-self:center">Continue without signing in (local testing only)</button>' : ""}
-    <p class="tiny muted" style="margin:0;text-align:center">Prototype for evaluation with fictional information only. Ask the person who invited you if you need a login.</p>
+    <p class="tiny muted" style="margin:0;text-align:center">Prototype for evaluation with fictional information only. Ask the person who invited you if you need a login.<br>${COPYRIGHT}</p>
   </div></div>`;
   $("#lgForm").onsubmit = async (e) => {
     e.preventDefault();
@@ -867,10 +955,11 @@ function showLogin(msg) {
     btn.disabled = true; btn.textContent = "Signing in…";
     session = { relayUrl };
     try {
-      const out = await relay("/login", { username, password }, { auth: false });
+      const out = await relay("/login", { username, password, deviceId }, { auth: false });
       if (!out.token) throw new Error("That address isn't the Dignity Notes relay.");
+      if (out.privacyVersion && out.privacyVersion !== PRIVACY_VERSION) throw new Error("A newer version of the app is available. Close and reopen it, then sign in again.");
       session = { token: out.token, username: out.username, role: out.role, name: out.name, relayUrl };
-      saveSession(); loadUser(); root.innerHTML = ""; go("today"); showConsent();
+      saveSession(); afterSignIn(out.privacyAccepted);
     } catch (err) {
       session = null; btn.disabled = false; btn.textContent = "Sign in";
       m.textContent = /fetch|network|load failed/i.test(err.message) ? "Couldn't reach the server. Check your internet connection and the relay address." : err.message;
@@ -919,12 +1008,25 @@ function openTesters() {
       const { users } = await relay("/admin/users", {});
       listEl.innerHTML = users.length ? users.sort((a, b) => a.name.localeCompare(b.name)).map((u) => `<div class="item" style="flex-wrap:wrap">
         <span class="avatar">${esc((u.name || u.username).charAt(0).toUpperCase())}</span>
-        <div class="body"><strong>${esc(u.name || u.username)}</strong>${u.role === "admin" ? ' <span class="chip accent">Admin</span>' : ""}<div class="small muted">${esc(u.username)}${u.createdAt ? " · added " + esc(new Date(u.createdAt).toLocaleDateString("en-GB")) : ""}</div></div>
+        <div class="body"><strong>${esc(u.name || u.username)}</strong>${u.role === "admin" ? ' <span class="chip accent">Admin</span>' : ""}
+          ${u.devices.length > 1 ? `<span class="chip incident">⚠ ${u.devices.length} devices</span>` : u.devices.length ? '<span class="chip">1 device</span>' : '<span class="chip">Not signed in yet</span>'}
+          ${u.locked ? '<span class="chip follow">Locked to first device</span>' : ""}
+          <div class="small muted">${esc(u.username)}${u.createdAt ? " · added " + esc(new Date(u.createdAt).toLocaleDateString("en-GB")) : ""} · ${u.agreedAt ? "privacy notice accepted " + esc(new Date(u.agreedAt).toLocaleDateString("en-GB")) : "privacy notice not yet accepted"}</div>
+          ${u.devices.length ? `<details style="margin-top:4px"><summary>Devices</summary>${u.devices.map((d, i) => `<div class="small" style="padding:4px 0"><strong>${i === 0 ? "Home device" : "Other device"}:</strong> ${esc(d.device)} · ${esc(d.place)}<br><span class="tiny muted">First ${esc(new Date(d.first).toLocaleString("en-GB"))} · last ${esc(new Date(d.last).toLocaleString("en-GB"))}</span></div>`).join("")}</details>` : ""}
+          <label class="check small" style="margin-top:6px"><input type="checkbox" data-lock="${esc(u.username)}" ${u.locked ? "checked" : ""}><span>Lock to first device (refuse sign-ins from any other device)</span></label>
+          ${u.devices.length ? `<button class="link small" data-devreset="${esc(u.username)}">Reset devices (next sign-in becomes the home device)</button>` : ""}</div>
         <button class="link" data-reset="${esc(u.username)}">New password</button>
         <button class="link" style="color:var(--record)" data-remove="${esc(u.username)}">Remove</button>
         <div data-slot="${esc(u.username)}" style="flex-basis:100%"></div></div>`).join("") : '<div class="empty">No testers yet. Add the first one below.</div>';
       listEl.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
         try { await relay("/admin/remove", { username: b.dataset.remove }); toast("Removed"); load(); } catch (e) { toast(e.message); }
+      })));
+      listEl.querySelectorAll("[data-lock]").forEach((c) => (c.onchange = async () => {
+        try { await relay("/admin/lock", { username: c.dataset.lock, locked: c.checked }); toast(c.checked ? "Locked to first device" : "Lock removed"); load(); }
+        catch (e) { toast(e.message); c.checked = !c.checked; }
+      }));
+      listEl.querySelectorAll("[data-devreset]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
+        try { await relay("/admin/devices-reset", { username: b.dataset.devreset }); toast("Devices reset"); load(); } catch (e) { toast(e.message); }
       })));
       listEl.querySelectorAll("[data-reset]").forEach((b) => (b.onclick = async () => {
         const password = suggestPassword(); const slot = listEl.querySelector(`[data-slot="${CSS.escape(b.dataset.reset)}"]`);
@@ -939,7 +1041,7 @@ function openTesters() {
       const { logins } = await relay("/admin/logins", {});
       el.innerHTML = logins.length ? logins.slice(0, 50).map((l) => `<div class="item">
         <div class="when" style="min-width:64px"><div>${fmtTime(l.t)}</div><div class="tiny muted" style="font-weight:400">${esc(new Date(l.t).toLocaleDateString("en-GB", { day: "numeric", month: "short" }))}</div></div>
-        <div class="body"><div><strong>${esc(l.u)}</strong> ${l.ok ? '<span class="chip accent">Signed in</span>' : '<span class="chip incident">Wrong password</span>'}</div>
+        <div class="body"><div><strong>${esc(l.u)}</strong> ${l.blocked ? '<span class="chip incident">Blocked: other device</span>' : l.ok ? '<span class="chip accent">Signed in</span>' : '<span class="chip incident">Wrong password</span>'}${l.nd && !l.blocked ? ' <span class="chip follow">⚠ New device</span>' : ""}</div>
         <div class="small muted">${esc(l.device)} · ${esc(l.place)}</div><div class="tiny muted">IP ${esc(l.ip)}</div></div></div>`).join("")
         : '<div class="empty">No sign-ins recorded yet.</div>';
     } catch (e) { el.innerHTML = `<div class="empty">Couldn't load sign-in history: ${esc(e.message)}</div>`; }
@@ -994,7 +1096,11 @@ function showConsent() {
 }
 
 /* ---------- boot ---------- */
-if (session && (session.token || session.local)) { loadUser(); render(); showConsent(); }
+if (session && (session.token || session.local)) {
+  loadUser(); render();
+  if (session.local || session.privacyAccepted === PRIVACY_VERSION) showConsent();
+  else relay("/me", {}).then((me) => afterSignIn(me.privacyAccepted)).catch(() => afterSignIn(false));
+}
 else { render(); showLogin(); }
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
