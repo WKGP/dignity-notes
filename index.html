@@ -884,7 +884,7 @@ const COPYRIGHT = "© 2026 Workgroup (WA) Pty Ltd. All rights reserved.";
 function showPrivacy(onAccept) {
   const root = $("#fullRoot");
   root.innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap">
-    <img src="icon-192.png" alt="" width="56" height="56" style="border-radius:15px;box-shadow:var(--shadow)">
+    <div style="background:#FDFAF3;border-radius:16px;padding:10px 12px;box-shadow:var(--shadow);max-width:360px"><img src="logo-wordmark.png" alt="Dignity Notes: Spoken care notes" width="720" height="195" style="width:100%;height:auto;display:block"></div>
     <span class="eyebrow">Before you start</span>
     <h2 style="font-size:30px;line-height:1.15">Privacy notice</h2>
     <div class="card policy" style="display:grid;gap:4px">${PRIVACY_HTML}</div>
@@ -1070,7 +1070,7 @@ function showConsent() {
   if (S.consent) return;
   const root = $("#fullRoot");
   root.innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap">
-    <img src="icon-192.png" alt="" width="56" height="56" style="border-radius:15px;box-shadow:var(--shadow)">
+    <div style="background:#FDFAF3;border-radius:16px;padding:10px 12px;box-shadow:var(--shadow);max-width:360px"><img src="logo-wordmark.png" alt="Dignity Notes: Spoken care notes" width="720" height="195" style="width:100%;height:auto;display:block"></div>
     <span class="eyebrow">Before you start</span>
     <h2 style="font-size:30px;line-height:1.15">Using Dignity Notes in this home</h2>
     <p class="muted" style="margin:0">Carers record short voice notes about ${esc(S.client.name)}'s day. The app keeps the original recording, writes a tidy note and builds the handover for the next carer.</p>
