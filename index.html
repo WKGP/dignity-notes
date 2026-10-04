@@ -254,7 +254,7 @@ function toast(msg) {
 
 /* ---------- store ---------- */
 // Relay address, filled in after `npx wrangler deploy`. While empty, the sign-in screen asks for it.
-const RELAY_URL = "";
+const RELAY_URL = "https://dignity-notes-relay.workgroup-works.workers.dev";
 const SESSION_KEY = "nanacare.session";
 let session = null;
 try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch {}
@@ -673,7 +673,7 @@ function openSettings() {
   const s = sheet(`${sheetHead("Settings")}
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Your account</h3>
       <p class="small" style="margin:0">Signed in as <strong>${esc(session.name)}</strong> <span class="muted">(${esc(session.username)} · ${session.role === "admin" ? "Administrator" : "Tester"})</span></p>
-      ${session.role === "admin" ? '<button class="btn primary" id="stTesters">Manage testers</button>' : ""}
+      ${session.role === "admin" ? '<button class="btn primary" id="stTesters">Manage people</button>' : ""}
       <button class="btn secondary" id="stTest">Check AI connection</button><div class="small" id="stMsg"></div>
       <button class="btn ghost" id="stOut">Sign out</button></div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">People</h3>
@@ -851,7 +851,7 @@ function showLogin(msg) {
     <form id="lgForm" style="display:grid;gap:14px">
       <label class="f">Username<input type="text" id="lgUser" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
       <label class="f">Password<input type="password" id="lgPass" autocomplete="current-password" required></label>
-      ${RELAY_URL ? "" : `<label class="f">Relay address<input type="text" id="lgRelay" inputmode="url" autocomplete="off" placeholder="https://nana-care-relay.example.workers.dev" value="${esc((session && session.relayUrl) || lastRelay())}"></label>`}
+      ${RELAY_URL ? "" : `<label class="f">Relay address<input type="text" id="lgRelay" inputmode="url" autocomplete="off" placeholder="https://dignity-notes-relay.example.workers.dev" value="${esc((session && session.relayUrl) || lastRelay())}"></label>`}
       <button class="btn primary block" id="lgGo">Sign in</button>
       <div class="small" id="lgMsg" role="alert" style="color:var(--incident)"></div>
     </form>
@@ -892,14 +892,15 @@ function loginText(username, password) {
   return `Dignity Notes test login\nLink: ${location.href.split("#")[0]}\nUsername: ${username}\nPassword: ${password}`;
 }
 function openTesters() {
-  const s = sheet(`${sheetHead("Testers")}
+  const s = sheet(`${sheetHead("People")}
     <p class="small muted" style="margin:0">People you add can sign in on their own phone and try the app. Their notes stay on their phone. Removing someone signs them out straight away.</p>
     <div class="card"><div class="list" id="tList"><div class="empty">Loading testers…</div></div></div>
-    <form class="card" id="tForm" style="display:grid;gap:12px"><h3 style="font-size:17px">Add a tester</h3>
+    <form class="card" id="tForm" style="display:grid;gap:12px"><h3 style="font-size:17px">Add a person</h3>
       <label class="f">Name<input type="text" id="tName" placeholder="Mary Smith" autocomplete="off"></label>
       <label class="f">Username<input type="text" id="tUser" placeholder="mary.smith" autocapitalize="none" spellcheck="false" autocomplete="off"></label>
       <label class="f">Password<span class="row"><input type="text" id="tPass" style="flex:1 1 170px" autocomplete="off" spellcheck="false"><button class="btn ghost" type="button" id="tGen" style="flex:0 0 auto">Suggest</button></span></label>
-      <button class="btn primary">Add tester</button><div class="small" id="tMsg"></div></form>`);
+      <label class="check"><input type="checkbox" id="tAdmin"><span>Administrator: can add and remove people too</span></label>
+      <button class="btn primary">Add person</button><div class="small" id="tMsg"></div></form>`);
   const listEl = $("#tList", s.root);
   const showShare = (el, username, password, label) => {
     el.innerHTML = `<div class="warn" style="display:grid;gap:8px"><span><strong>${esc(label)}</strong> Send these details to the tester yourself:</span>
@@ -915,7 +916,7 @@ function openTesters() {
       const { users } = await relay("/admin/users", {});
       listEl.innerHTML = users.length ? users.sort((a, b) => a.name.localeCompare(b.name)).map((u) => `<div class="item" style="flex-wrap:wrap">
         <span class="avatar">${esc((u.name || u.username).charAt(0).toUpperCase())}</span>
-        <div class="body"><strong>${esc(u.name || u.username)}</strong><div class="small muted">${esc(u.username)}${u.createdAt ? " · added " + esc(new Date(u.createdAt).toLocaleDateString("en-GB")) : ""}</div></div>
+        <div class="body"><strong>${esc(u.name || u.username)}</strong>${u.role === "admin" ? ' <span class="chip accent">Admin</span>' : ""}<div class="small muted">${esc(u.username)}${u.createdAt ? " · added " + esc(new Date(u.createdAt).toLocaleDateString("en-GB")) : ""}</div></div>
         <button class="link" data-reset="${esc(u.username)}">New password</button>
         <button class="link" style="color:var(--record)" data-remove="${esc(u.username)}">Remove</button>
         <div data-slot="${esc(u.username)}" style="flex-basis:100%"></div></div>`).join("") : '<div class="empty">No testers yet. Add the first one below.</div>';
@@ -937,8 +938,10 @@ function openTesters() {
     m.textContent = ""; m.style.color = "var(--incident)";
     if (!name || !username) { m.textContent = "Enter a name and a username."; return; }
     try {
-      await relay("/admin/add", { name, username, password });
-      showShare(m, username, password, "Tester added.");
+      const role = $("#tAdmin").checked ? "admin" : "tester";
+      await relay("/admin/add", { name, username, password, role });
+      showShare(m, username, password, role === "admin" ? "Administrator added." : "Tester added.");
+      $("#tAdmin").checked = false;
       $("#tName").value = $("#tUser").value = ""; $("#tPass").value = suggestPassword(); load();
     } catch (err) { m.textContent = err.message; }
   };
