@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#5B3F8C">
+<title>Dignity Notes user manual</title>
+<meta name="description" content="Step-by-step guide to Dignity Notes for carers and administrators, with screenshots.">
+<meta name="copyright" content="© 2026 Workgroup (WA) Pty Ltd">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Source+Sans+3:wght@400;500;600;700&display=swap">
+<style>
+/* Same palette and type as the app, so the manual feels like part of it. */
+:root{
+  --ground:#F7F5FA; --surface:#FFFFFF; --surface-2:#EFEBF5; --ink:#231B33; --ink-2:#5E5670; --line:#E2DCEB;
+  --accent:#5B3F8C; --accent-ink:#FFFFFF; --accent-soft:#ECE5F6; --record:#D6455D;
+  --incident:#B3261E; --incident-soft:#FBE4E1; --follow:#8A5D00; --follow-soft:#FBF0D9;
+  --shadow:0 1px 2px rgba(35,27,51,.06),0 6px 20px rgba(35,27,51,.08);
+  --f-display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
+  --f-body:"Source Sans 3","Segoe UI",system-ui,sans-serif; color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#15111C; --surface:#1E1828; --surface-2:#2A2236; --ink:#EDE8F4; --ink-2:#A79EB8; --line:#352C42;
+  --accent:#B79AE8; --accent-ink:#1A1325; --accent-soft:#2E2342; --record:#F07A8E;
+  --incident:#F28B82; --incident-soft:#3B1D1B; --follow:#E2B550; --follow-soft:#382D14;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.28); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --ground:#15111C; --surface:#1E1828; --surface-2:#2A2236; --ink:#EDE8F4; --ink-2:#A79EB8; --line:#352C42;
+  --accent:#B79AE8; --accent-ink:#1A1325; --accent-soft:#2E2342; --record:#F07A8E;
+  --incident:#F28B82; --incident-soft:#3B1D1B; --follow:#E2B550; --follow-soft:#382D14;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 6px 20px rgba(0,0,0,.28); color-scheme:dark}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:72px}
+body{margin:0;background:var(--ground);color:var(--ink);font:17px/1.6 var(--f-body);-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:var(--f-display);letter-spacing:-.01em;text-wrap:balance;margin:0}
+a{color:var(--accent);font-weight:600}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:6px}
+.top{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--ground) 90%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.top .in{max-width:1080px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;gap:12px}
+.top img{height:34px;width:auto;border-radius:8px}
+.top strong{font-family:var(--f-display);font-size:18px;flex:1}
+.back{display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:var(--accent-ink);text-decoration:none;border-radius:10px;padding:8px 14px;font-size:15px}
+.layout{max-width:1080px;margin:0 auto;padding:24px 16px 80px;display:grid;grid-template-columns:240px minmax(0,1fr);gap:40px}
+nav.toc{position:sticky;top:76px;align-self:start;max-height:calc(100vh - 96px);overflow:auto;font-size:15px}
+nav.toc ol{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+nav.toc a{display:block;padding:5px 10px;border-radius:8px;color:var(--ink-2);text-decoration:none;font-weight:500}
+nav.toc a:hover{background:var(--surface-2);color:var(--ink)}
+nav.toc .grp{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);margin:14px 10px 4px}
+main{min-width:0}
+.hero{display:grid;gap:10px;margin-bottom:28px}
+.hero h1{font-size:clamp(32px,5vw,44px);line-height:1.1}
+.hero p{margin:0;color:var(--ink-2);font-size:19px;max-width:60ch}
+.callout{background:var(--follow-soft);border-left:4px solid var(--follow);border-radius:12px;padding:12px 16px;margin:16px 0}
+.callout.info{background:var(--accent-soft);border-left-color:var(--accent)}
+.callout strong{display:block}
+section.s{background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:var(--shadow);padding:24px;margin-bottom:22px}
+section.s>h2{font-size:26px;line-height:1.2;margin-bottom:6px;display:flex;gap:12px;align-items:baseline}
+section.s>h2 .n{font-size:15px;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:2px 10px;flex:none}
+section.s>.lede{color:var(--ink-2);margin:0 0 16px;max-width:62ch}
+.step{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:24px;align-items:start;padding:18px 0;border-top:1px solid var(--line)}
+.step:first-of-type{border-top:0}
+.step h3{font-size:19px;margin-bottom:6px}
+.step ol,.step ul{margin:6px 0;padding-left:22px}
+.step li{margin:4px 0}
+.step p{margin:6px 0}
+figure{margin:0;justify-self:center}
+figure img{display:block;width:240px;max-width:100%;height:auto;border-radius:22px;border:6px solid #241b33;box-shadow:var(--shadow);background:#241b33}
+figcaption{font-size:13.5px;color:var(--ink-2);text-align:center;margin-top:8px;max-width:240px}
+.btnref{display:inline-block;font-weight:700;background:var(--surface-2);border-radius:8px;padding:0 7px;white-space:nowrap}
+.btnref.p{background:var(--accent);color:var(--accent-ink)}
+.btnref.r{background:var(--record);color:#fff}
+kbd{font:inherit;font-weight:700}
+.tip{font-size:15.5px;color:var(--ink-2)}
+.tip::before{content:"Tip: ";font-weight:700;color:var(--ink)}
+details.faq{border-top:1px solid var(--line);padding:12px 0}
+details.faq:first-of-type{border-top:0}
+details.faq summary{cursor:pointer;font-weight:700;font-size:17.5px}
+details.faq p{margin:8px 0 0}
+footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
+@media (max-width:860px){
+  .layout{grid-template-columns:1fr;gap:16px}
+  nav.toc{position:static;max-height:none;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:10px}
+  nav.toc details summary{font-weight:700;cursor:pointer;padding:4px 10px}
+}
+@media (max-width:620px){
+  section.s{padding:18px 16px}
+  .step{grid-template-columns:1fr;gap:14px}
+  figure img{width:220px}
+  .top strong{font-size:16px}
+}
+@media print{.top,nav.toc{display:none}.layout{display:block}section.s{break-inside:avoid-page;box-shadow:none}}
+</style>
+</head>
+<body>
+<header class="top"><div class="in">
+  <img src="icon-192.png" alt="" width="34" height="34">
+  <strong>User manual</strong>
+  <a class="back" href="./">Open the app</a>
+</div></header>
+
+<div class="layout">
+<nav class="toc" aria-label="Contents"><details open><summary>Contents</summary>
+  <div class="grp">Getting started</div>
+  <ol>
+    <li><a href="#start">What Dignity Notes does</a></li>
+    <li><a href="#signin">Signing in</a></li>
+    <li><a href="#client">Choosing who you care for</a></li>
+  </ol>
+  <div class="grp">Every day</div>
+  <ol>
+    <li><a href="#today">The Today screen</a></li>
+    <li><a href="#record">Recording a care note</a></li>
+    <li><a href="#check">Checking and saving a note</a></li>
+    <li><a href="#flags">Things that need attention</a></li>
+    <li><a href="#log">The record log</a></li>
+    <li><a href="#plans">Appointments and plans</a></li>
+    <li><a href="#outing">When someone takes them out</a></li>
+    <li><a href="#duty">Who's on duty</a></li>
+    <li><a href="#handover">End-of-shift handover</a></li>
+    <li><a href="#family">The family page</a></li>
+  </ol>
+  <div class="grp">More</div>
+  <ol>
+    <li><a href="#settings">Settings</a></li>
+    <li><a href="#help">Help and feedback</a></li>
+    <li><a href="#admin">For administrators</a></li>
+    <li><a href="#faq">Problems and questions</a></li>
+  </ol>
+</details></nav>
+
+<main>
+<div class="hero">
+  <h1>Dignity Notes user manual</h1>
+  <p>Speak a short note as things happen. Dignity Notes keeps your words and the recording, writes a tidy care note, and builds the handover for the next carer.</p>
+</div>
+<div class="callout"><strong>This is a pilot. Use made-up information only.</strong>Don't record or type anything real about a real person: no real names, health details, medication or addresses. Use pretend examples like the ones in this guide.</div>
+
+<!-- 1 -->
+<section class="s" id="start">
+  <h2><span class="n">1</span>What Dignity Notes does</h2>
+  <p class="lede">Dignity Notes is for carers who look after an older person at home. It runs in the web browser on your phone, so there's nothing to install.</p>
+  <div class="step"><div>
+    <h3>In a typical shift</h3>
+    <ol>
+      <li>Press the red <span class="btnref r">Record</span> button and say what happened, as if leaving a voice message.</li>
+      <li>Check the tidy note the app writes, then save it.</li>
+      <li>Anything that needs following up, like a new bruise or a missed drink, shows under <strong>Needs attention</strong>.</li>
+      <li>At the end of your shift, the app writes the <strong>handover</strong> for the next carer from your notes.</li>
+    </ol>
+    <p class="tip">Add Dignity Notes to your home screen so it opens like an app. On iPhone, tap the Share button in Safari, then <strong>Add to Home Screen</strong>. On Android, tap the ⋮ menu in Chrome, then <strong>Add to Home screen</strong>.</p>
+  </div></div>
+</section>
+
+<!-- 2 -->
+<section class="s" id="signin">
+  <h2><span class="n">2</span>Signing in</h2>
+  <p class="lede">You need the username and password that your administrator gave you. You stay signed in for 30 days on the same phone.</p>
+  <div class="step"><div>
+    <h3>Sign in</h3>
+    <ol>
+      <li>Open the Dignity Notes link on your phone.</li>
+      <li>Type your <strong>username</strong> and <strong>password</strong>.</li>
+      <li>Tap <span class="btnref p">Sign in</span>.</li>
+    </ol>
+    <p class="tip">Use the same phone each time. Your administrator can see when an account is used on a new phone, and can lock an account to its first phone.</p>
+  </div><figure><img src="manual/01-sign-in.jpg" alt="Sign-in screen with username and password boxes" loading="lazy" width="469" height="1015"><figcaption>The sign-in screen</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>Read and accept the privacy notice</h3>
+    <p>The first time you sign in, and whenever the notice changes, you'll see the privacy notice. It explains what information is kept and who can see it.</p>
+    <ol>
+      <li>Read the notice. Scroll down to the end.</li>
+      <li>Tick <strong>I've read the privacy notice and agree</strong>.</li>
+      <li>Tap <span class="btnref p">Agree and continue</span>.</li>
+    </ol>
+    <p>If you don't agree, tap <strong>I don't agree (sign out)</strong>. You won't be able to use the app.</p>
+  </div><figure><img src="manual/03-privacy-agree.jpg" alt="End of the privacy notice with the agree tick box and Agree and continue button" loading="lazy" width="469" height="1015"><figcaption>Tick the box, then Agree and continue</figcaption></figure></div>
+</section>
+
+<!-- 3 -->
+<section class="s" id="client">
+  <h2><span class="n">3</span>Choosing who you care for</h2>
+  <p class="lede">After signing in, choose the person you're caring for (the "client"). If there's only one, the app opens them straight away.</p>
+  <div class="step"><div>
+    <h3>Pick a client</h3>
+    <ol>
+      <li>Under <strong>Who are you caring for?</strong>, tap the person's name.</li>
+      <li>The app opens their Today screen.</li>
+    </ol>
+    <p>Each client shows who agreed to Dignity Notes being used, and when. That agreement was given once, when the client was added, so you won't be asked for it again.</p>
+    <p class="tip">To change client later, go to <strong>Settings</strong> (the cog, top right), then <strong>Switch or add client</strong>.</p>
+  </div><figure><img src="manual/04-choose-client.jpg" alt="Client list showing Arthur and Nana, each with who agreed and when" loading="lazy" width="469" height="1015"><figcaption>Choose who you're caring for</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>Add a new client (only once per person)</h3>
+    <p>Before Dignity Notes is used for someone new, they must agree, or the person who holds their <strong>Lasting Power of Attorney for health and welfare</strong> must agree for them.</p>
+    <ol>
+      <li>Tap <strong>Add a new client</strong>.</li>
+      <li>Type the <strong>client's name</strong> (a first name is enough).</li>
+      <li>Read the short explanation with them: what is recorded, who can see it, and why.</li>
+      <li>Type the <strong>name of the person agreeing</strong> and choose who they are: the client, their attorney, or another authorised family member.</li>
+      <li>Tick the agreement box and tap <span class="btnref p">Add client and start</span>.</li>
+    </ol>
+    <p>The agreement is saved once, for everyone. Every carer who signs in will see it.</p>
+  </div><figure><img src="manual/05-add-client.jpg" alt="New client form with client's name, explanation, name of the person agreeing, who they are, and agreement tick box" loading="lazy" width="469" height="1015"><figcaption>Adding a client records their agreement</figcaption></figure></div>
+</section>
+
+<!-- 4 -->
+<section class="s" id="today">
+  <h2><span class="n">4</span>The Today screen</h2>
+  <p class="lede">This is home. It shows what matters right now for the person you're caring for.</p>
+  <div class="step"><div>
+    <h3>What's on it</h3>
+    <ul>
+      <li><strong>At the top:</strong> the client's name, the carer on duty, the <strong>?</strong> help button and the <strong>cog</strong> for settings.</li>
+      <li><span class="btnref p">Record care note</span>: the big purple button. The red button at the bottom does the same.</li>
+      <li><strong>Needs attention:</strong> follow-ups and incidents that are still open.</li>
+      <li><strong>Previous handover:</strong> what the last carer passed on to you.</li>
+    </ul>
+    <p>The tabs along the bottom take you to <strong>Today</strong>, <strong>Record log</strong>, <strong>Record</strong>, <strong>Handover</strong> and <strong>Family</strong>. The red number on Today shows how many things need attention.</p>
+  </div><figure><img src="manual/06-today.jpg" alt="Today screen with record button, Needs attention and previous handover" loading="lazy" width="469" height="1015"><figcaption>The Today screen</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>Further down</h3>
+    <ul>
+      <li><strong>Today &amp; coming up:</strong> appointments and plans. See <a href="#plans">Appointments and plans</a>.</li>
+      <li><strong>Going out with someone else?</strong> Use this when family take the client out. See <a href="#outing">When someone takes them out</a>.</li>
+      <li><strong>Latest note:</strong> the most recent saved note.</li>
+    </ul>
+  </div><figure><img src="manual/07-today-more.jpg" alt="Lower part of Today: coming up, going out with someone else, latest note" loading="lazy" width="469" height="1015"><figcaption>Scroll down for plans and outings</figcaption></figure></div>
+</section>
+
+<!-- 5 -->
+<section class="s" id="record">
+  <h2><span class="n">5</span>Recording a care note</h2>
+  <p class="lede">Record as things happen, while the details are fresh. Short notes through the day work better than one long note at the end.</p>
+  <div class="step"><div>
+    <h3>Record your voice</h3>
+    <ol>
+      <li>Tap the red <span class="btnref r">Record</span> button.</li>
+      <li>Tap the big red microphone and start speaking. The first time, your phone asks to use the microphone: tap <strong>Allow</strong>.</li>
+      <li>Speak naturally. You'll see your words appear as you talk.</li>
+      <li>Tap the microphone again to stop.</li>
+    </ol>
+    <p><strong>What to say:</strong> what happened, roughly when, and anything you noticed. For example: <em>"Nana had porridge and half a cup of tea about eight, took her tablets with a full glass of water, she was cheerful. There's a little red mark on her left forearm that wasn't there yesterday."</em></p>
+    <p class="tip">Can't speak out loud right now? Tap <strong>Type instead</strong> and type the note.</p>
+  </div><figure><img src="manual/08-record.jpg" alt="Record care note screen with a large red microphone button and Type instead" loading="lazy" width="469" height="1015"><figcaption>Tap the microphone to start and stop</figcaption></figure></div>
+</section>
+
+<!-- 6 -->
+<section class="s" id="check">
+  <h2><span class="n">6</span>Checking and saving a note</h2>
+  <p class="lede">Nothing is saved until you've checked it. You are always in charge of what goes in the record.</p>
+  <div class="step"><div>
+    <h3>Check before saving</h3>
+    <ol>
+      <li>Read the <strong>Care note</strong>. The app has removed the "ums" and written it clearly. Tap the note to correct anything.</li>
+      <li>If it shows <strong>Check these words</strong>, look at those words: they may have been misheard.</li>
+      <li><strong>Covers</strong> shows the topics the note includes, like Meals or Medication.</li>
+      <li><strong>Flags</strong> shows anything that needs following up. Tap <strong>Remove</strong> if a flag isn't right.</li>
+      <li>Tap <span class="btnref p">Save to record</span>.</li>
+    </ol>
+    <p>Your original words and recording are kept with the note. Tap <strong>What you said</strong> to see them.</p>
+    <p>A small label at the top says how the note was written. <strong>Tidied by AI</strong> means the AI wrote it. <strong>Basic tidy</strong> means there was no internet, so the app did a simpler tidy on the phone.</p>
+    <p class="tip">Not happy? Tap <strong>Re-record</strong> to try again, or <strong>Discard</strong> to throw it away. Both ask you to tap twice, so you don't lose a note by accident.</p>
+  </div><figure><img src="manual/09-review.jpg" alt="Check before saving screen showing the tidy care note, topics covered, an incident flag and Save to record" loading="lazy" width="469" height="1015"><figcaption>Check the note, then Save to record</figcaption></figure></div>
+</section>
+
+<!-- 7 -->
+<section class="s" id="flags">
+  <h2><span class="n">7</span>Things that need attention</h2>
+  <p class="lede">When a note mentions something important, the app adds a flag to the Today screen so it isn't forgotten.</p>
+  <div class="step"><div>
+    <h3>Two kinds of flag</h3>
+    <ul>
+      <li><strong style="color:var(--incident)">Incident</strong> (red): for example a fall, a bruise or skin tear, bleeding, or an accident.</li>
+      <li><strong style="color:var(--follow)">Follow-up</strong> (yellow): for example a refused tablet, not drinking enough, a pad change needed, or something the next carer must check.</li>
+    </ul>
+    <h3 style="margin-top:14px">When it's dealt with</h3>
+    <ol>
+      <li>On the Today screen, find the flag under <strong>Needs attention</strong>.</li>
+      <li>Tap <strong>Resolved</strong>. The app records who resolved it and when.</li>
+    </ol>
+    <div class="callout info"><strong>Incidents and safeguarding</strong>The app helps you record what happened. It does not report anything for you. If someone may be at risk, follow your usual safeguarding steps and contact the right people straight away.</div>
+  </div><figure><img src="manual/10-flags.jpg" alt="Needs attention showing a red incident flag and a yellow follow-up flag, each with a Resolved button" loading="lazy" width="469" height="1015"><figcaption>Open flags on the Today screen</figcaption></figure></div>
+</section>
+
+<!-- 8 -->
+<section class="s" id="log">
+  <h2><span class="n">8</span>The record log</h2>
+  <p class="lede">Every saved note, outing and handover, newest first, grouped by day.</p>
+  <div class="step"><div>
+    <h3>Find a note</h3>
+    <ol>
+      <li>Tap <strong>Record log</strong> at the bottom.</li>
+      <li>Use <strong>Everything</strong>, <strong>Incidents</strong> or <strong>Follow-ups</strong> to filter.</li>
+      <li>Tap <strong>Play original recording</strong> (or <strong>Original words</strong>) under a note to hear or read exactly what was said.</li>
+    </ol>
+    <p>Each note shows the time, the carer who saved it, any flags and the topics it covers.</p>
+    <p class="tip">The original recording protects you as well as the client. If there's ever a question about what happened, your own words are there.</p>
+  </div><figure><img src="manual/11-log.jpg" alt="Record log showing today's note with an incident chip, topics and the original words" loading="lazy" width="469" height="1015"><figcaption>The record log</figcaption></figure></div>
+</section>
+
+<!-- 9 -->
+<section class="s" id="plans">
+  <h2><span class="n">9</span>Appointments and plans</h2>
+  <p class="lede">Keep track of what's coming up, like a doctor's visit or the hairdresser.</p>
+  <div class="step"><div>
+    <h3>Add an appointment</h3>
+    <ol>
+      <li>On the Today screen, scroll to <strong>Today &amp; coming up</strong>.</li>
+      <li>Tap <strong>+ Add appointment or plan</strong>.</li>
+      <li>Type <strong>what</strong> it is and any <strong>details</strong>.</li>
+      <li>Choose the <strong>day</strong> and type the <strong>time</strong> (for example 14:30).</li>
+      <li>Tap <span class="btnref p">Add</span>.</li>
+    </ol>
+    <p>Upcoming plans are also included in the handover, under "Coming up".</p>
+  </div><figure><img src="manual/19-appointment.jpg" alt="Add appointment or plan form: what, details, day and time" loading="lazy" width="469" height="1015"><figcaption>Adding an appointment</figcaption></figure></div>
+</section>
+
+<!-- 10 -->
+<section class="s" id="outing">
+  <h2><span class="n">10</span>When someone takes them out</h2>
+  <p class="lede">When a family member or another authorised person takes the client out, record it. It shows clearly that they were not in your care during that time.</p>
+  <div class="step"><div>
+    <h3>Hand over to someone else</h3>
+    <ol>
+      <li>On the Today screen, tap <strong>Hand over to someone else</strong>.</li>
+      <li>Type <strong>who is taking them</strong>, their <strong>relationship</strong> and <strong>where to</strong>.</li>
+      <li>Tap <span class="btnref p">Confirm handover</span>. The time is recorded automatically.</li>
+    </ol>
+    <p>Only hand over to someone the family has authorised.</p>
+  </div><figure><img src="manual/15-outing.jpg" alt="Hand over to someone else form: who, relationship, where to" loading="lazy" width="469" height="1015"><figcaption>Recording an outing</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>While they're out</h3>
+    <p>A yellow banner at the top shows who they're with and since when. Notes you record still work, and the app reminds you they're out.</p>
+  </div><figure><img src="manual/16-out-banner.jpg" alt="Yellow banner: Nana is out with Peter, since 21:59, not in your care, with Back in my care button" loading="lazy" width="469" height="1015"><figcaption>The "out with" banner</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>When they're back</h3>
+    <ol>
+      <li>Tap <strong>Back in my care</strong> on the banner.</li>
+      <li>Add a note if you like, for example "Had lunch out, seemed tired".</li>
+      <li>Tap <span class="btnref p">Confirm back</span>.</li>
+    </ol>
+    <p>Both times appear in the record log.</p>
+  </div><figure><img src="manual/17-back.jpg" alt="Back in your care form with optional note and Confirm back button" loading="lazy" width="469" height="1015"><figcaption>Confirming they're back</figcaption></figure></div>
+</section>
+
+<!-- 11 -->
+<section class="s" id="duty">
+  <h2><span class="n">11</span>Who's on duty</h2>
+  <p class="lede">Every note is stamped with the carer on duty, so make sure it's you.</p>
+  <div class="step"><div>
+    <h3>Change the carer on duty</h3>
+    <ol>
+      <li>Tap the name button at the top (for example <strong>Ann</strong>).</li>
+      <li>Tap your name.</li>
+    </ol>
+    <p>At the end of a shift, use <a href="#handover">Handover</a> instead: it passes on properly and switches the carer for you.</p>
+    <p class="tip">Carer names and shift times are set in <strong>Settings</strong>.</p>
+  </div><figure><img src="manual/18-on-duty.jpg" alt="Who's on duty list: Ann on duty, Joy, Grace" loading="lazy" width="469" height="1015"><figcaption>Choosing who's on duty</figcaption></figure></div>
+</section>
+
+<!-- 12 -->
+<section class="s" id="handover">
+  <h2><span class="n">12</span>End-of-shift handover</h2>
+  <p class="lede">The app writes the handover from your saved notes and open flags, so you don't have to write anything twice.</p>
+  <div class="step"><div>
+    <h3>Hand over to the next carer</h3>
+    <ol>
+      <li>Tap <strong>Handover</strong> at the bottom.</li>
+      <li>Tap <span class="btnref p">Prepare handover</span>. It takes a few seconds.</li>
+      <li>Read it. It has three parts: <strong>How the shift went</strong>, <strong>Concerns for the next carer</strong> and <strong>Coming up</strong>. Tap to change anything.</li>
+      <li>Under <strong>Handing over to</strong>, choose the next carer.</li>
+      <li>Tap <span class="btnref p">Approve and hand over</span>.</li>
+    </ol>
+    <p>The next carer becomes the carer on duty and sees your handover on their Today screen. Past handovers are under <strong>Recent handovers</strong>.</p>
+  </div><figure><img src="manual/12-handover.jpg" alt="Handover screen with the written handover, Handing over to, and Approve and hand over" loading="lazy" width="469" height="1015"><figcaption>Check, then Approve and hand over</figcaption></figure></div>
+</section>
+
+<!-- 13 -->
+<section class="s" id="family">
+  <h2><span class="n">13</span>The family page</h2>
+  <p class="lede">What the authorised family member sees: a short daily summary, any incidents, and messages. Not every note.</p>
+  <div class="step"><div>
+    <h3>Today's summary</h3>
+    <ol>
+      <li>Tap <strong>Family</strong> at the bottom.</li>
+      <li>Tap <span class="btnref p">Write today's summary</span>. The app writes a short, warm update from today's notes.</li>
+      <li>Tap <strong>Write again</strong> if you want a fresh version.</li>
+    </ol>
+    <p><strong>Incidents today</strong> lists anything serious from today, in plain words.</p>
+  </div><figure><img src="manual/13-family.jpg" alt="Family page showing today's summary and incidents today" loading="lazy" width="469" height="1015"><figcaption>The daily summary for family</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>Messages</h3>
+    <ol>
+      <li>Scroll to <strong>Messages</strong>.</li>
+      <li>Type in <strong>Write a message</strong> and tap <span class="btnref p">Send</span>.</li>
+    </ol>
+    <p>Messages reach whoever is on duty. In this pilot both sides are on the same phone, so you can choose <strong>Send as family</strong> or <strong>Send as</strong> the carer to try it out.</p>
+    <p><strong>Alert family about incidents</strong> is off unless the family chooses to switch it on. Dignity Notes is a care record, not a way of watching the carer.</p>
+  </div><figure><img src="manual/14-messages.jpg" alt="Messages between family and carer, with send-as choice and incident alert switch" loading="lazy" width="469" height="1015"><figcaption>Messages and family alerts</figcaption></figure></div>
+</section>
+
+<!-- 14 -->
+<section class="s" id="settings">
+  <h2><span class="n">14</span>Settings</h2>
+  <p class="lede">Tap the cog at the top right.</p>
+  <div class="step"><div>
+    <h3>What you can do</h3>
+    <ul>
+      <li><strong>Your account:</strong> shows who you're signed in as. <strong>Check AI connection</strong> tells you whether notes will be written by AI. <strong>Sign out</strong> signs you out of this phone.</li>
+      <li><strong>Client:</strong> <strong>Switch or add client</strong> takes you back to the client list.</li>
+      <li><strong>Carers:</strong> change carer names and shift times, then tap <strong>Save names</strong>.</li>
+    </ul>
+  </div><figure><img src="manual/20-settings.jpg" alt="Settings: your account, client, carers" loading="lazy" width="469" height="1015"><figcaption>Settings, top</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>Further down</h3>
+    <ul>
+      <li><strong>Consent:</strong> who agreed to Dignity Notes being used for this client, and when.</li>
+      <li><strong>Demo data:</strong> <strong>Reset demo</strong> deletes this client's notes and recordings on this phone and brings back the example day. It asks you to confirm first.</li>
+      <li><strong>Read the privacy notice</strong> at any time.</li>
+    </ul>
+  </div><figure><img src="manual/21-settings-more.jpg" alt="Settings, lower: consent record, reset demo, privacy notice" loading="lazy" width="469" height="1015"><figcaption>Settings, lower down</figcaption></figure></div>
+</section>
+
+<!-- 15 -->
+<section class="s" id="help">
+  <h2><span class="n">15</span>Help and feedback</h2>
+  <p class="lede">Tap the <strong>?</strong> at the top of any screen to open this manual, report a problem or suggest an idea.</p>
+  <div class="step"><div>
+    <h3>The help menu</h3>
+    <ul>
+      <li><span class="btnref p">Open the user manual</span> opens this guide.</li>
+      <li><strong>Report a problem</strong>: something didn't work as expected.</li>
+      <li><strong>Suggest an idea</strong>: something that would make your day easier.</li>
+    </ul>
+  </div><figure><img src="manual/22-help.jpg" alt="Help menu: open the user manual, report a problem, suggest an idea" loading="lazy" width="469" height="1015"><figcaption>The ? help menu</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>Report a problem or suggest an idea</h3>
+    <ol>
+      <li>Tap <strong>Report a problem</strong> or <strong>Suggest an idea</strong>.</li>
+      <li>Type what happened, or your idea, and tap <strong>Send</strong>.</li>
+      <li>A helper asks one or two short questions so the developer understands. Answer in your own words.</li>
+      <li>If a picture would help, tap <strong>Add screenshot</strong> and choose a screenshot from your photos.</li>
+      <li>When the helper has enough, the <span class="btnref p">Submit</span> button appears. Tap it.</li>
+    </ol>
+    <p>Nothing is sent until you press Submit, and a person reads every report. If you close it halfway, your report is kept on the phone: open <strong>?</strong> again and tap <strong>Carry on with it</strong>.</p>
+    <p class="tip">Leave out real names, addresses, phone numbers and health details. Describe the problem, not the person. Screenshots are seen by the administrators and the AI helper, so avoid screens that show care notes.</p>
+  </div><figure><img src="manual/23-feedback.jpg" alt="Report a problem chat: the carer describes the problem, the helper asks which screen, then says they can press Submit" loading="lazy" width="469" height="1015"><figcaption>The helper asks a few questions, then Submit appears</figcaption></figure></div>
+</section>
+
+<!-- 16 -->
+<section class="s" id="admin">
+  <h2><span class="n">16</span>For administrators</h2>
+  <p class="lede">Administrators can add and remove people, check sign-ins, and read feedback reports. If you're a carer, you can skip this section.</p>
+  <div class="step"><div>
+    <h3>Manage people</h3>
+    <ol>
+      <li>Go to <strong>Settings</strong>, then tap <span class="btnref p">Manage people</span>.</li>
+      <li>Each person shows their username, when they were added, and whether they've accepted the privacy notice.</li>
+      <li>A red <strong>⚠ 2 devices</strong> badge means the account has been used on more than one phone. Tap <strong>Devices</strong> to see which phones and where.</li>
+    </ol>
+    <ul>
+      <li><strong>Lock to first device:</strong> refuses sign-ins from any other phone.</li>
+      <li><strong>Reset devices:</strong> the next phone they sign in on becomes their home phone.</li>
+      <li><strong>New password:</strong> makes a new password for you to send them.</li>
+      <li><strong>Remove:</strong> signs them out straight away and deletes their account (tap twice to confirm).</li>
+    </ul>
+    <p><strong>Sign-in history</strong> lists every sign-in from the last 90 days, including wrong passwords and blocked phones.</p>
+  </div><figure><img src="manual/24-people.jpg" alt="People list with account details, device count, lock option, new password and remove" loading="lazy" width="469" height="1015"><figcaption>The people list</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>Add a person</h3>
+    <ol>
+      <li>Scroll to <strong>Add a person</strong>.</li>
+      <li>Type their <strong>name</strong> and choose a <strong>username</strong> (for example <em>mary.smith</em>).</li>
+      <li>Keep the suggested password, or tap <strong>Suggest</strong> for another.</li>
+      <li>Tick <strong>Administrator</strong> only if they should manage people too.</li>
+      <li>Tap <span class="btnref p">Add person</span>, then <strong>Copy details</strong>, and send the details to them yourself.</li>
+    </ol>
+  </div><figure><img src="manual/25-add-person.jpg" alt="Add a person form: name, username, password with Suggest, administrator tick box" loading="lazy" width="469" height="1015"><figcaption>Adding a person</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>Feedback reports</h3>
+    <ol>
+      <li>Tap <strong>?</strong>, then <strong>Feedback reports (administrators)</strong>.</li>
+      <li>Each report shows whether it's a <strong>Problem</strong> or an <strong>Idea</strong>, how serious it looks, its status, and who sent it.</li>
+      <li>Tap a report to open it.</li>
+    </ol>
+  </div><figure><img src="manual/26-feedback-list.jpg" alt="Feedback reports list with problem, severity and status labels" loading="lazy" width="469" height="1015"><figcaption>All feedback reports</figcaption></figure></div>
+  <div class="step"><div>
+    <h3>Reading a report</h3>
+    <ul>
+      <li>The full <strong>conversation</strong> and any <strong>screenshot</strong>.</li>
+      <li><strong>Analysis:</strong> likely causes, things the carer can do meanwhile, and questions to ask them. These are suggestions to check, not facts.</li>
+      <li><strong>Developer brief:</strong> a work order for the developer. Tap <strong>Copy brief for coding agent</strong> to copy it.</li>
+      <li><strong>Status:</strong> set it to <em>new</em>, <em>in progress</em>, <em>done</em> or <em>won't fix</em>.</li>
+    </ul>
+    <p>The brief usually appears within a couple of minutes. If it says <strong>Brief failed</strong>, tap <strong>Analyse again</strong>; the old brief stays until a new one is ready. Reports are deleted automatically 12 months after they were sent.</p>
+  </div><figure><img src="manual/27-feedback-report.jpg" alt="A feedback report showing analysis, workarounds, the developer brief and Copy brief button" loading="lazy" width="469" height="1015"><figcaption>A report with its developer brief</figcaption></figure></div>
+</section>
+
+<!-- 17 -->
+<section class="s" id="faq">
+  <h2><span class="n">17</span>Problems and questions</h2>
+  <details class="faq"><summary>The app didn't pick up what I said</summary>
+    <p>Check that the phone allowed the microphone (the first time, it asks). Speak a little closer to the phone. If your words still don't appear, the recording is kept: you can play it back and type a short version, or tap <strong>Type instead</strong>. Speech-to-text works best in Chrome on Android and Safari on iPhone.</p></details>
+  <details class="faq"><summary>There's no internet</summary>
+    <p>You can still record and save notes. The app does a simpler <strong>Basic tidy</strong> on the phone instead of the AI note. The handover and family summary also use a basic version until you're back online.</p></details>
+  <details class="faq"><summary>"Your sign-in has ended"</summary>
+    <p>Sign-ins last 30 days. You'll also be signed out if an administrator removed or changed your account. Sign in again, or ask your administrator.</p></details>
+  <details class="faq"><summary>"This account is set up on another device"</summary>
+    <p>Your account is locked to the first phone you used. Ask your administrator to tap <strong>Reset devices</strong> for you, then sign in on the new phone.</p></details>
+  <details class="faq"><summary>I forgot my password</summary>
+    <p>Ask your administrator. They'll make a new one in <strong>Manage people</strong> and send it to you.</p></details>
+  <details class="faq"><summary>I can't see notes from another carer's phone</summary>
+    <p>In this pilot, notes and recordings stay on the phone that made them. The handover is how information passes between carers. Sharing notes between phones is planned for a later version.</p></details>
+  <details class="faq"><summary>The client I was using has disappeared</summary>
+    <p>An administrator has removed that client, for example because the agreement was withdrawn. The app takes you back to the client list. Speak to your administrator.</p></details>
+  <details class="faq"><summary>Who can see what I record?</summary>
+    <p>Notes and recordings stay on your phone. Only the <strong>words</strong> of a note (never the recording) are sent to the AI to be tidied, and they aren't kept. Administrators can see the list of people, sign-ins and feedback reports, but not your notes. The exception is a screenshot you choose to send with feedback: the administrators and the AI helper see whatever it shows. Read the full privacy notice in <strong>Settings</strong>.</p></details>
+  <details class="faq"><summary>Something else is wrong</summary>
+    <p>Tap <strong>?</strong>, then <strong>Report a problem</strong>. A screenshot helps a lot.</p></details>
+</section>
+
+<footer>Dignity Notes pilot · fictional test use only<br>© 2026 Workgroup (WA) Pty Ltd. All rights reserved.</footer>
+</main>
+</div>
+<script>
+// On a phone, start with the contents folded so the guide is the first thing you see; close it after picking a section.
+const toc = document.querySelector("nav.toc details");
+const narrow = matchMedia("(max-width:860px)");
+if (narrow.matches) toc.open = false;
+toc.querySelectorAll("a").forEach((a) => a.addEventListener("click", () => { if (narrow.matches) toc.open = false; }));
+</script>
+</body>
+</html>

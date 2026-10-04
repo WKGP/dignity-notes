@@ -82,7 +82,7 @@ main{padding-block:20px calc(110px + env(safe-area-inset-bottom,0px))}
 .link{border:0;background:none;color:var(--accent);font-weight:600;padding:4px 0}
 
 /* Buttons */
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:12px;padding:13px 18px;font-weight:700;font-size:16px;min-height:48px}
+.btn{display:inline-flex;text-decoration:none;align-items:center;justify-content:center;gap:8px;border:0;border-radius:12px;padding:13px 18px;font-weight:700;font-size:16px;min-height:48px}
 .btn.primary{background:var(--accent);color:var(--accent-ink)}
 .btn.secondary{background:var(--surface-2);color:var(--ink)}
 .btn.ghost{background:transparent;color:var(--ink-2);border:1px solid var(--line)}
@@ -200,6 +200,7 @@ textarea.note-edit{font-family:var(--f-note);font-size:16.5px;min-height:170px}
   <div class="wrap">
     <div class="brand"><h1 id="clientName">Nana</h1><p>Dignity Notes · personal care record</p></div>
     <button class="duty" id="dutyBtn" aria-label="Change carer on duty"><span class="avatar" id="dutyAvatar">A</span><span id="dutyName">Ann</span></button>
+    <button class="icon-btn" id="helpBtn" aria-label="Help and feedback"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8"/><circle cx="12" cy="17" r=".6" style="fill:currentColor"/></svg></button>
     <button class="icon-btn" id="settingsBtn" aria-label="Settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
   </div>
 </header>
@@ -461,6 +462,7 @@ document.querySelectorAll(".tab[data-tab]").forEach((b) => b.addEventListener("c
 $("#recTab").addEventListener("click", () => openRecorder());
 $("#dutyBtn").addEventListener("click", () => openCarerSheet());
 $("#settingsBtn").addEventListener("click", () => openSettings());
+$("#helpBtn").addEventListener("click", () => openHelp());
 $("#returnBtn").addEventListener("click", () => openReturnSheet());
 
 /* ---------- render ---------- */
@@ -856,9 +858,9 @@ async function openReview({ transcript, blob, typed }) {
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-04";
+const PRIVACY_VERSION = "2026-10-04.2";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 1 · 4 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 2 · 4 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -868,14 +870,17 @@ const PRIVACY_HTML = `
 <li><strong>Your account:</strong> your name, username and password. We store passwords only in a scrambled (hashed) form that can't be read back.</li>
 <li><strong>Sign-in records:</strong> the time of each sign-in attempt, your IP address, your approximate location worked out from that address (town and country), your type of device and browser, and a random ID that this app stores on your device. We use these to keep accounts secure and to detect when a login is shared or used on another device.</li>
 <li><strong>Your agreement:</strong> when you accepted this notice.</li>
+<li><strong>Clients:</strong> the name of each person being cared for, and the name and role of the person who agreed to Dignity Notes being used, with the date. This is kept on our relay so every carer sees the same agreement.</li>
+<li><strong>Feedback:</strong> if you report a problem or suggest an idea, your messages and the helper's replies, any screenshot you add, your name, username and role, which screen and page you were on, and the summary and analysis the AI writes for the developer. A screenshot shows whatever was on your screen, so avoid screens that show care notes.</li>
 </ul>
 <h3>What stays on your device</h3>
 <p>Care notes, voice recordings, handovers, messages and settings are kept <strong>on your device only</strong>. We don't receive them, except as described below. Deleting the app's data on your device, or tapping Reset demo, removes them.</p>
 <h3>AI note writing</h3>
+<p>When you use the feedback helper, your messages and any screenshot are also sent to Anthropic, so the helper can ask questions and write a summary for the developer. Email addresses and phone numbers are removed automatically before a report is stored.</p>
 <p>When you ask the app to write a note, handover or summary, the <strong>words</strong> of your note (never the recording) are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
 <h3>Who else handles data for us</h3>
 <ul>
-<li><strong>Cloudflare:</strong> runs our relay and stores accounts and sign-in records.</li>
+<li><strong>Cloudflare:</strong> runs our relay and stores accounts, sign-in records, clients and feedback reports.</li>
 <li><strong>GitHub (Microsoft):</strong> hosts the app's web pages.</li>
 <li><strong>Anthropic:</strong> AI note writing, as described above.</li>
 </ul>
@@ -887,9 +892,11 @@ const PRIVACY_HTML = `
 <li><strong>Sign-in records:</strong> deleted automatically after 90 days.</li>
 <li><strong>Accounts:</strong> until an administrator removes you, or the pilot ends.</li>
 <li><strong>Your agreement record:</strong> for as long as your account exists.</li>
+<li><strong>Feedback reports:</strong> deleted automatically after 12 months, or sooner if an administrator deletes them.</li>
+<li><strong>Clients:</strong> until an administrator removes the client. A record of who removed it and when is kept.</li>
 </ul>
 <h3>Who can see your information</h3>
-<p>Pilot administrators can see the people list, which devices each account has used, and the sign-in history. They can't see the notes on your device.</p>
+<p>Pilot administrators can see the people list, which devices each account has used, the sign-in history and feedback reports. They can't see the notes on your device, unless a note appears in a screenshot you send with feedback.</p>
 <h3>Your rights</h3>
 <p>You can ask to see, correct or delete the information we hold about you, or object to how we use it. Ask the administrator who invited you, who will pass your request to Workgroup (WA) Pty Ltd. If you're unhappy, you can complain to the UK Information Commissioner's Office (ico.org.uk) or, in Australia, the Office of the Australian Information Commissioner (oaic.gov.au).</p>
 <h3>Changes</h3>
@@ -962,6 +969,7 @@ function showLogin(msg) {
       <div class="small" id="lgMsg" role="alert" style="color:var(--incident)"></div>
     </form>
     ${local ? '<button class="link" id="lgLocal" style="justify-self:center">Continue without signing in (local testing only)</button>' : ""}
+    <a class="link" href="manual.html" target="_blank" rel="noopener" style="justify-self:center">Read the user manual</a>
     <p class="tiny muted" style="margin:0;text-align:center">Prototype for evaluation with fictional information only. Ask the person who invited you if you need a login.<br>${COPYRIGHT}</p>
   </div></div>`;
   $("#lgForm").onsubmit = async (e) => {
@@ -1026,7 +1034,7 @@ function openTesters() {
       const { users } = await relay("/admin/users", {});
       listEl.innerHTML = users.length ? users.sort((a, b) => a.name.localeCompare(b.name)).map((u) => `<div class="item" style="flex-wrap:wrap">
         <span class="avatar">${esc((u.name || u.username).charAt(0).toUpperCase())}</span>
-        <div class="body"><strong>${esc(u.name || u.username)}</strong>${u.role === "admin" ? ' <span class="chip accent">Admin</span>' : ""}
+        <div class="body" style="flex:1 1 220px"><strong>${esc(u.name || u.username)}</strong>${u.role === "admin" ? ' <span class="chip accent">Admin</span>' : ""}
           ${u.devices.length > 1 ? `<span class="chip incident">⚠ ${u.devices.length} devices</span>` : u.devices.length ? '<span class="chip">1 device</span>' : '<span class="chip">Not signed in yet</span>'}
           ${u.locked ? '<span class="chip follow">Locked to first device</span>' : ""}
           <div class="small muted">${esc(u.username)}${u.createdAt ? " · added " + esc(new Date(u.createdAt).toLocaleDateString("en-GB")) : ""} · ${u.agreedAt ? "privacy notice accepted " + esc(new Date(u.agreedAt).toLocaleDateString("en-GB")) : "privacy notice not yet accepted"}</div>
@@ -1081,6 +1089,180 @@ function openTesters() {
     } catch (err) { m.textContent = err.message; }
   };
   load();
+}
+
+/* ---------- help and feedback ----------
+ * The ? button opens the user manual and the feedback tool (ported from the WKGP feedback module).
+ * An AI assistant asks a few questions, then Submit appears; a person reads every report.
+ * Drafts are kept on this phone until sent. Administrators see reports with a developer brief.
+ */
+const FB_DRAFT = (kind) => "dignitynotes.fbdraft." + (session ? session.username : "") + "." + kind;
+const fbLoad = (kind) => { try { return JSON.parse(localStorage.getItem(FB_DRAFT(kind)) || "null"); } catch { return null; } };
+const fbSave = (d) => { try { localStorage.setItem(FB_DRAFT(d.kind), JSON.stringify(d)); } catch { try { localStorage.setItem(FB_DRAFT(d.kind), JSON.stringify({ ...d, screenshot: null })); } catch {} } };
+const fbClear = (kind) => { try { localStorage.removeItem(FB_DRAFT(kind)); } catch {} };
+const fbHasDraft = (d) => !!(d && (d.transcript.length || d.screenshot || (d.pending || "").trim()));
+
+function openHelp() {
+  const drafts = ["bug", "idea"].map(fbLoad).filter(fbHasDraft);
+  const s = sheet(`${sheetHead("Help")}
+    <a class="btn primary block" href="manual.html" target="_blank" rel="noopener">Open the user manual</a>
+    ${drafts.map((d) => `<div class="warn" style="display:grid;gap:8px"><span>You have an unsent ${d.kind === "bug" ? "problem report" : "suggestion"}.</span><button class="btn secondary" data-resume="${d.kind}">Carry on with it</button></div>`).join("")}
+    <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Tell us what you think</h3>
+      <p class="small muted" style="margin:0">A helper asks a few short questions so the developer can understand. Nothing is sent until you press Submit, and a person reads every report.</p>
+      <button class="btn secondary" id="hpBug">Report a problem</button>
+      <button class="btn secondary" id="hpIdea">Suggest an idea</button></div>
+    ${session && session.role === "admin" ? '<button class="btn ghost" id="hpAdmin">Feedback reports (administrators)</button>' : ""}`);
+  s.root.querySelectorAll("[data-resume]").forEach((b) => (b.onclick = () => { s.close(); openFeedback(b.dataset.resume); }));
+  // Starting a report of a kind that has a draft carries on with that draft rather than wiping it.
+  $("#hpBug").onclick = () => { s.close(); openFeedback("bug"); };
+  $("#hpIdea").onclick = () => { s.close(); openFeedback("idea"); };
+  if ($("#hpAdmin")) $("#hpAdmin").onclick = () => { s.close(); openFeedbackAdmin(); };
+}
+
+// Phone screenshots are several megabytes: shrink to 1280px JPEG before sending.
+function downscaleImage(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !/^image\//.test(file.type)) return reject(new Error("That isn't a picture"));
+    const url = URL.createObjectURL(file); const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+      let q = 0.72, out = c.toDataURL("image/jpeg", q);
+      while (out.length > 440000 && q > 0.3) { q -= 0.12; out = c.toDataURL("image/jpeg", q); }
+      out.length > 440000 ? reject(new Error("That picture is too large")) : resolve(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read that picture")); };
+    img.src = url;
+  });
+}
+
+function openFeedback(kind) {
+  const saved = fbLoad(kind);
+  // ready: show Submit. modelReady: the helper itself said it had enough (tells the analysis the interview finished).
+  const st = fbHasDraft(saved) ? { modelReady: false, pending: "", ...saved } : { kind, transcript: [], screenshot: null, ready: false, modelReady: false, pending: "" };
+  const title = kind === "bug" ? "Report a problem" : "Suggest an idea";
+  const opener = kind === "bug" ? "What went wrong? Tell me what you were doing and what happened." : "What would make Dignity Notes better for you?";
+  let busy = false;
+  const s = sheet(`${sheetHead(title)}
+    <p class="tiny muted" style="margin:0">Please leave out real names, addresses, phone numbers and health details. Screenshots are seen by the administrators and the AI helper, so avoid screens that show care notes. Nothing is sent until you press Submit.</p>
+    <div class="thread" id="fbThread" style="max-height:44vh"></div>
+    <div id="fbShot"></div>
+    <textarea id="fbText" rows="3" style="min-height:84px" placeholder="Type here…" aria-label="Your message"></textarea>
+    <div class="row">
+      <label class="btn ghost" style="flex:0 0 auto">Add screenshot<input type="file" id="fbFile" accept="image/*" hidden></label>
+      <button class="btn secondary" id="fbSend">Send</button></div>
+    <button class="btn primary block" id="fbSubmit" hidden>Submit</button>
+    <div class="small" id="fbMsg" role="status"></div>`,
+    { onClose: () => document.removeEventListener("paste", onPaste) });
+  const thread = $("#fbThread", s.root), msg = $("#fbMsg", s.root);
+  const persist = () => { if (fbHasDraft(st)) fbSave(st); else fbClear(kind); };
+  const draw = () => {
+    thread.innerHTML = `<div class="msg"><span class="who">Helper</span>${esc(opener)}</div>` + st.transcript.map((t) =>
+      `<div class="msg ${t.role === "user" ? "carer" : ""}"><span class="who">${t.role === "user" ? "You" : "Helper"}</span>${esc(t.content)}</div>`).join("")
+      + (busy ? '<div class="msg"><span class="who">Helper</span><span class="muted">Thinking…</span></div>' : "");
+    thread.scrollTop = thread.scrollHeight;
+    $("#fbShot", s.root).innerHTML = st.screenshot ? `<div class="row" style="align-items:center"><img src="${st.screenshot}" alt="Your screenshot" style="max-height:90px;border-radius:8px;border:1px solid var(--line)"><button class="link" id="fbShotX">Remove screenshot</button></div>` : "";
+    if ($("#fbShotX", s.root)) $("#fbShotX", s.root).onclick = () => { st.screenshot = null; persist(); draw(); };
+    $("#fbSubmit", s.root).hidden = !st.ready; // latches: once shown it stays
+    $("#fbSend", s.root).disabled = busy; $("#fbSubmit", s.root).disabled = busy;
+  };
+  const addShot = async (file) => {
+    try { st.screenshot = await downscaleImage(file); persist(); draw(); toast("Screenshot added"); }
+    catch (e) { toast(e.message); }
+  };
+  const onPaste = (e) => {
+    const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
+    if (item) { e.preventDefault(); addShot(item.getAsFile()); }
+  };
+  document.addEventListener("paste", onPaste);
+  $("#fbFile", s.root).onchange = (e) => e.target.files[0] && addShot(e.target.files[0]);
+  $("#fbText", s.root).value = st.pending || "";
+  $("#fbText", s.root).oninput = (e) => { st.pending = e.target.value.slice(0, 2000); persist(); };
+  $("#fbSend", s.root).onclick = async () => {
+    const text = $("#fbText", s.root).value.trim();
+    if (!text) return toast("Type something first");
+    st.transcript.push({ role: "user", content: text.slice(0, 2000) }); $("#fbText", s.root).value = ""; st.pending = ""; msg.textContent = "";
+    busy = true; persist(); draw();
+    try {
+      const out = await relay("/feedback/chat", { kind, transcript: st.transcript, screenshot: st.screenshot });
+      if (out.text) st.transcript.push({ role: "assistant", content: out.text });
+      if (out.ready || out.degraded) st.ready = true;
+      if (out.ready && !out.degraded) st.modelReady = true;
+      if (out.degraded) msg.textContent = "The helper isn't available just now. You can still press Submit.";
+    } catch (e) {
+      st.ready = true; // never trap someone without a Submit button
+      msg.textContent = /internet/i.test(e.message) ? "No connection. Your report is kept on this phone; press Submit when you're back online." : "The helper isn't available just now. You can still press Submit.";
+    }
+    busy = false; persist(); draw();
+  };
+  $("#fbSubmit", s.root).onclick = async () => {
+    busy = true; draw(); msg.textContent = "Sending…"; msg.style.color = "";
+    try {
+      const out = await relay("/feedback/submit", { kind, transcript: st.transcript, screenshot: st.screenshot, ready: st.modelReady, screen: tab, url: location.href.split("#")[0] });
+      fbClear(kind); s.close(); toast(out.duplicate ? "You've already sent this report. Thank you." : "Thank you. Your report has been sent.");
+    } catch (e) {
+      busy = false; draw(); msg.style.color = "var(--incident)";
+      msg.textContent = /internet/i.test(e.message) ? "No connection. Your report is kept on this phone; try again when you're back online." : "Couldn't send: " + e.message;
+    }
+  };
+  draw();
+  if (!st.transcript.length) setTimeout(() => $("#fbText", s.root)?.focus(), 50);
+}
+
+const FB_STATUSES = ["new", "in progress", "done", "won't fix"];
+const sevChip = (sev, failed) => sev ? `<span class="chip ${sev === "critical" || sev === "high" ? "incident" : sev === "normal" ? "follow" : ""}">${esc(sev)}</span>` : failed ? '<span class="chip incident">Brief failed</span>' : '<span class="chip">Writing brief…</span>';
+async function openFeedbackAdmin() {
+  const s = sheet(`${sheetHead("Feedback reports")}
+    <p class="small muted" style="margin:0">Reports from carers and administrators. Each one gets a developer brief you can copy into a coding agent.</p>
+    <div class="card"><div class="list" id="faList"><div class="empty">Loading reports…</div></div></div>`);
+  const listEl = $("#faList", s.root);
+  try {
+    const { reports } = await relay("/admin/feedback", {});
+    listEl.innerHTML = reports.length ? reports.map((r) => `<button class="item" data-fb="${esc(r.id)}" style="width:100%;text-align:left;background:none;border-left:0;border-right:0;border-bottom:0;cursor:pointer">
+      <div class="body"><div><span class="chip ${r.kind === "bug" ? "incident" : "accent"}">${r.kind === "bug" ? "Problem" : "Idea"}</span> ${sevChip(r.sev, r.failed)} <span class="chip">${esc(r.status)}</span>${r.shot ? ' <span class="chip">Screenshot</span>' : ""}</div>
+        <strong style="display:block;margin-top:4px">${esc(r.summary || "(no summary)")}</strong>
+        <div class="tiny muted">${esc(r.by)} · ${esc(new Date(r.t).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}</div></div></button>`).join("")
+      : '<div class="empty">No reports yet.</div>';
+    listEl.querySelectorAll("[data-fb]").forEach((b) => (b.onclick = () => { s.close(); openFeedbackReport(b.dataset.fb); }));
+  } catch (e) { listEl.innerHTML = `<div class="empty">Couldn't load reports: ${esc(e.message)}</div>`; }
+}
+
+async function openFeedbackReport(id) {
+  const s = sheet(`${sheetHead("Report")}<div id="frBody"><div class="empty">Loading…</div></div>`);
+  const body = $("#frBody", s.root);
+  let r;
+  try { r = (await relay("/admin/feedback/get", { id })).report; }
+  catch (e) { body.innerHTML = `<div class="empty">Couldn't load the report: ${esc(e.message)}</div>`; return; }
+  const a = r.analysis;
+  body.innerHTML = `<div style="display:grid;gap:14px">
+    <div><div class="chips"><span class="chip ${r.kind === "bug" ? "incident" : "accent"}">${r.kind === "bug" ? "Problem" : "Idea"}</span>${sevChip(a && a.severity)}</div>
+      <h3 style="font-size:19px;margin-top:6px">${esc(r.summary)}</h3>
+      <div class="tiny muted">${esc(r.byName)} (${esc(r.by)}, ${esc(r.role)}) · ${esc(new Date(r.createdAt).toLocaleString("en-GB"))}${r.screen ? " · on " + esc(r.screen) : ""}</div></div>
+    <label class="f">Status<select id="frStatus">${FB_STATUSES.map((x) => `<option ${x === r.status ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+    <div class="card"><h3 style="font-size:16px;margin-bottom:8px">Conversation</h3><div class="thread" style="max-height:none">${r.transcript.map((t) =>
+      `<div class="msg ${t.role === "user" ? "carer" : ""}"><span class="who">${t.role === "user" ? "Reporter" : "Helper"}</span>${esc(t.content)}</div>`).join("")}</div></div>
+    ${r.screenshot && /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(r.screenshot) ? `<div class="card"><h3 style="font-size:16px;margin-bottom:8px">Screenshot</h3><img src="${r.screenshot}" alt="Reporter's screenshot" style="width:100%;border-radius:8px"></div>` : ""}
+    ${a ? `<div class="card" style="display:grid;gap:8px"><h3 style="font-size:16px">Analysis</h3>
+      ${a.likelyCauses.length ? `<div class="small"><strong>Likely causes</strong><ul style="margin:4px 0;padding-left:20px">${a.likelyCauses.map((c) => `<li>${esc(c.cause)} <span class="muted">(${esc(c.confidence)})</span></li>`).join("")}</ul></div>` : ""}
+      ${a.workarounds.length ? `<div class="small"><strong>Workarounds</strong><ul style="margin:4px 0;padding-left:20px">${a.workarounds.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+      ${a.clarifyingQuestions.length ? `<div class="small"><strong>Questions to ask</strong><ul style="margin:4px 0;padding-left:20px">${a.clarifyingQuestions.map((q) => `<li>${esc(q)}</li>`).join("")}</ul></div>` : ""}
+      ${a.developerBrief ? `<details><summary>Developer brief</summary><pre style="white-space:pre-wrap;font-size:13px;background:var(--surface-2);padding:10px;border-radius:8px;margin:0">${esc(a.developerBrief)}</pre></details>
+      <button class="btn secondary" id="frCopy">Copy brief for coding agent</button>` : ""}</div>`
+    : r.pending ? '<div class="warn">The developer brief is still being written. Check back in a couple of minutes.</div>'
+    : '<div class="warn">The developer brief couldn\'t be written. Tap Analyse again to retry.</div>'}
+    ${a && r.pending ? '<div class="warn">A new brief is being written. This one stays until it\'s ready.</div>' : ""}
+    <div class="row"><button class="btn ghost" id="frRe">Analyse again</button><button class="btn ghost" id="frDel" style="color:var(--record)">Delete</button></div>
+    <button class="link" id="frBack" style="justify-self:center">Back to all reports</button></div>`;
+  $("#frStatus", s.root).onchange = async (e) => { try { await relay("/admin/feedback/status", { id, status: e.target.value }); toast("Status saved"); } catch (err) { toast(err.message); } };
+  if ($("#frCopy", s.root)) $("#frCopy", s.root).onclick = async () => {
+    try { await navigator.clipboard.writeText(a.developerBrief); toast("Copied"); } catch { toast("Couldn't copy. Open the brief and select it."); }
+  };
+  $("#frRe", s.root).onclick = async () => { try { await relay("/admin/feedback/reanalyse", { id }); toast("Writing a new brief. Check back in a couple of minutes."); } catch (e) { toast(e.message); } };
+  $("#frDel", s.root).onclick = (e) => confirmInline(e.currentTarget, async () => {
+    try { await relay("/admin/feedback/delete", { id }); toast("Deleted"); s.close(); openFeedbackAdmin(); } catch (err) { toast(err.message); }
+  });
+  $("#frBack", s.root).onclick = () => { s.close(); openFeedbackAdmin(); };
 }
 
 /* ---------- clients ---------- */
