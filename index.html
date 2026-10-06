@@ -818,31 +818,43 @@ const planDocs = () => (S.plan && Array.isArray(S.plan.docs) ? S.plan.docs : [])
 const respectDoc = () => planDocs().find((d) => d.kind === "respect");
 const isAdminHere = () => !!(session && session.role === "admin");
 const urgencyPill = (u) => `<span class="chip ${u === "urgent" ? "incident" : u === "important" ? "follow" : ""}">${esc(URGENCY_LABEL[u] || "Non urgent")}</span>`;
+// Fetch the latest care plan. Returns true when it was fetched.
 async function loadPlan() {
-  if (!cloudOn()) return;
+  if (!cloudOn()) return false;
   const key = KEY;
   try {
     const out = await syncJSON("/plan/get", { client: session.client.id });
-    if (KEY !== key) return;
+    if (KEY !== key) return false;
     const before = JSON.stringify(S.plan || null);
-    S.plan = { sections: (out.plan && out.plan.sections) || [], updatedAt: out.plan && out.plan.updatedAt, updatedBy: out.plan && out.plan.updatedBy, docs: out.docs || [] };
-    if (JSON.stringify(S.plan) !== before) { saveLocal(); if (tab === "today" && !appBusy() && !userIsReading()) render(); }
-  } catch {}
+    S.plan = { sections: (out.plan && out.plan.sections) || [], updatedAt: (out.plan && out.plan.updatedAt) || 0, updatedBy: out.plan && out.plan.updatedBy, docs: out.docs || [] };
+    // Documents taken out of the care plan are removed from this phone too.
+    const keep = new Set(S.plan.docs.map((d) => d.id)), gone = (S.docCache || []).filter((id) => !keep.has(id));
+    if (gone.length) { audioDB.del(gone.map((id) => "doc_" + id)); S.docCache = (S.docCache || []).filter((id) => keep.has(id)); }
+    if (JSON.stringify(S.plan) !== before || gone.length) { saveLocal(); if (tab === "today" && !appBusy() && !userIsReading()) render(); }
+    return true;
+  } catch { return false; }
 }
-// Open a document: from this phone if it's been opened before, otherwise from the cloud.
+// Remove every document copy kept on this phone for the open client (sign-out, reset, client removed).
+function clearDocCache() { if (S && S.docCache && S.docCache.length) { audioDB.del(S.docCache.map((id) => "doc_" + id)); S.docCache = []; } }
+// Open a document in a viewer inside the app: pictures show straight away; a PDF opens with one more
+// tap (the carer's own tap, so the phone never blocks it as a pop-up). Kept on this phone after the
+// first time, so it opens without signal.
 async function openDoc(id) {
   const d = planDocs().find((x) => x.id === id); if (!d) return toast("That document is no longer in the care plan");
+  const s = sheet(`${sheetHead(esc(d.name))}<div id="dvBody"><div class="recorder"><div class="spinner"></div><p class="muted" style="margin:0">Opening…</p></div></div>`);
   let blob = await audioDB.get("doc_" + id);
   if (!blob) {
-    if (!cloudOn() || !navigator.onLine) return toast("Connect to the internet to open this document the first time");
-    toast("Opening…");
-    try { const r = await syncFetch("/plan/doc/get", { body: JSON.stringify({ client: session.client.id, id }) }); blob = await r.blob(); await audioDB.put("doc_" + id, blob); }
-    catch (e) { return toast(e.status === 404 ? "That document isn't in the cloud any more" : "Couldn't open the document. Try again."); }
+    if (!cloudOn() || !navigator.onLine) { $("#dvBody", s.root).innerHTML = '<div class="warn">Connect to the internet to open this document the first time. After that it opens without signal.</div>'; return; }
+    try {
+      const r = await syncFetch("/plan/doc/get", { body: JSON.stringify({ client: session.client.id, id }) }); blob = await r.blob();
+      if (await audioDB.put("doc_" + id, blob)) { S.docCache = [...new Set([...(S.docCache || []), id])]; saveLocal(); }
+    } catch (e) { if ($("#dvBody", s.root)) $("#dvBody", s.root).innerHTML = `<div class="warn">${e.status === 404 ? "That document isn't in the care plan any more." : "Couldn't open the document. Check the signal and try again."}</div>`; return; }
   }
+  const body = $("#dvBody", s.root); if (!body) return; // closed while loading
   const url = URL.createObjectURL(new Blob([blob], { type: d.type }));
-  const a = Object.assign(document.createElement("a"), { href: url, target: "_blank", rel: "noopener" });
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  body.innerHTML = d.type.startsWith("image/")
+    ? `<img src="${url}" alt="${esc(d.name)}" style="width:100%;border-radius:10px;border:1px solid var(--line)">`
+    : `<div style="display:grid;gap:10px"><p class="small muted" style="margin:0">${esc(DOC_KIND_LABEL[d.kind] || "Document")} · PDF</p><a class="btn primary block" href="${url}" target="_blank" rel="noopener">Open the PDF</a><p class="tiny muted" style="margin:0">It opens in your phone's PDF viewer. Come back to Dignity Notes when you've finished.</p></div>`;
 }
 // Buttons anywhere with data-opendoc="<id>" open that document.
 document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-opendoc]"); if (b) { e.preventDefault(); openDoc(b.dataset.opendoc); } });
@@ -868,7 +880,7 @@ function openPlan() {
       ${docs.length ? docs.map((d) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><button class="link" data-opendoc="${esc(d.id)}" style="text-align:left">${esc(d.name)}</button><span class="tiny muted">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</span>${isAdminHere() ? `<button class="link small" data-deldoc="${esc(d.id)}" style="color:var(--incident)">Remove</button>` : ""}</div>`).join("") : '<p class="small muted" style="margin:0">No documents yet.</p>'}
     </div>
     ${p.updatedAt ? `<p class="tiny muted" style="margin:0">Last changed ${fmtDay(p.updatedAt)} ${fmtTime(p.updatedAt)}${p.updatedBy ? " by " + esc(p.updatedBy) : ""}.</p>` : ""}
-    ${isAdminHere() ? `<div class="row"><button class="btn secondary" id="plEdit">Edit care plan</button><button class="btn secondary" id="plUpload">Add a document</button></div>` : `<p class="tiny muted" style="margin:0">An administrator keeps the care plan up to date.</p>`}`);
+    ${isAdminHere() ? `<div class="row"><button class="btn secondary" id="plEdit">${p.sections.length ? "Edit care plan" : "Set up the care plan"}</button><button class="btn secondary" id="plUpload">Add a document</button></div>` : `<p class="tiny muted" style="margin:0">An administrator keeps the care plan up to date.</p>`}`);
   if ($("#plEdit", s.root)) $("#plEdit", s.root).onclick = () => { s.close(); openPlanEdit(); };
   if ($("#plUpload", s.root)) $("#plUpload", s.root).onclick = () => { s.close(); openDocUpload(); };
   s.root.querySelectorAll("[data-deldoc]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
@@ -876,7 +888,10 @@ function openPlan() {
     catch (e) { toast(e.message); }
   })));
 }
-function openPlanEdit() {
+async function openPlanEdit() {
+  // Start from the latest saved plan, so a phone that hadn't loaded it never overwrites it.
+  if (!navigator.onLine || !(await loadPlan())) return toast("Connect to the internet to edit the care plan, so you start from the latest version");
+  const base = plan().updatedAt || 0;
   let rows = plan().sections.length ? plan().sections.map((x) => ({ ...x })) : PLAN_DEFAULTS.map((t) => ({ title: t, urgency: "non_urgent", text: "" }));
   const s = sheet(`${sheetHead("Edit care plan")}<p class="small muted" style="margin:0">One section for each area of care. Write what carers need to know and do. Pilot: use made-up details only.</p><div id="plRows" style="display:grid;gap:12px"></div>
     <button class="link" id="plAdd" style="justify-self:start">+ Add a section</button>
@@ -894,9 +909,12 @@ function openPlanEdit() {
   draw();
   $("#plAdd", s.root).onclick = () => { read(); rows.push({ title: "", urgency: "non_urgent", text: "" }); draw(); box.lastElementChild.querySelector(".plT").focus(); };
   $("#plSave", s.root).onclick = async (e) => {
-    read(); const sections = rows.filter((r) => r.title);
+    read();
+    const untitled = rows.findIndex((r) => !r.title && r.text.trim());
+    if (untitled >= 0) { box.querySelectorAll(".plT")[untitled].focus(); return toast("Give this section a name, or remove it"); }
+    const sections = rows.filter((r) => r.title);
     e.currentTarget.disabled = true;
-    try { const out = await syncJSON("/plan/save", { client: session.client.id, sections }); S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal(); s.close(); render(); toast("Care plan saved"); }
+    try { const out = await syncJSON("/plan/save", { client: session.client.id, sections, baseUpdatedAt: base }); S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal(); s.close(); render(); toast("Care plan saved"); }
     catch (err) { toast(err.message || "Couldn't save the care plan"); $("#plSave", s.root).disabled = false; }
   };
 }
@@ -924,7 +942,8 @@ function openDocUpload() {
 // Urgent and important care plan sections with no notes this shift (only once something has been noted).
 function planGaps() {
   const titles = plan().sections.filter((x) => x.urgency === "urgent" || x.urgency === "important").map((x) => x.title); const notes = shiftNotes();
-  if (!titles.length || !notes.length) return [];
+  // Only when every note this shift was checked against the care plan; otherwise "no notes" might be untrue.
+  if (!titles.length || !notes.length || notes.some((n) => !Array.isArray(n.planSections))) return [];
   const covered = new Set(notes.flatMap((n) => n.planSections || []));
   return titles.filter((t) => !covered.has(t));
 }
@@ -955,7 +974,7 @@ function renderToday() {
       ${activeTransfer() ? `<button class="btn secondary block" id="ctaBack">${ICON.out} Back in my care</button>` : `<button class="btn secondary block" id="ctaOut">${ICON.out} Hand over to someone else</button>`}</div>
     ${latest ? `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId, latest.carerName).name)} · ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p></div>` : ""}`;
   $("#ctaRec").onclick = () => openRecorder();
-  if ($("#openPlan", v)) $("#openPlan", v).onclick = () => (plan().sections.length || planDocs().length || !isAdminHere() ? openPlan() : openPlanEdit());
+  if ($("#openPlan", v)) $("#openPlan", v).onclick = () => openPlan();
   bindStorageBanner(v);
   $("#addEvent").onclick = () => openEventSheet();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
@@ -1266,7 +1285,7 @@ function openSettings() {
   $("#stReset").onclick = () => { $("#stResetYes").hidden = false; };
   $("#stResetYes").onclick = async () => {
     if (cloudOn() && (unsynced().length || unsentAudio().length || countFailed())) return toast("Some notes or recordings aren't in the cloud yet (see Settings > About). Connect to the internet, wait a moment, then try again.");
-    const keep = S.settings, si = syncInfo();
+    const keep = S.settings, si = syncInfo(); clearDocCache();
     // Only recordings this phone has uploaded itself (another person on this phone may share the store).
     await audioDB.del(S.notes.filter((n) => n.audioId && (!cloudOn() || si.audio[n.audioId] === 1)).map((n) => n.audioId));
     S = seed(); S.settings = keep; save(); loadUser(); s.close(); handoverDraft = familySummary = null; go("today"); };
@@ -1655,7 +1674,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
         }
       }
       const ts = Date.now();
-      S.notes.push({ id, ts, approvedTs: ts, carerId: stampId(), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard } : {}), note, categories: draft.categories, ...(draft.plan_sections && draft.plan_sections.length ? { planSections: draft.plan_sections } : {}), audioId, source: draft.source });
+      S.notes.push({ id, ts, approvedTs: ts, carerId: stampId(), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
       draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
       if (!save()) {
         // Not saved on this phone: take it back out so it isn't sent to the cloud half-saved.
@@ -1691,7 +1710,7 @@ const PRIVACY_HTML = `
 <li><strong>Feedback:</strong> if you report a problem or suggest an idea, your messages and the helper's replies, any screenshot you add, your name, username and role, which screen and page you were on, and the summary and analysis the AI writes for the developer. A screenshot shows whatever was on your screen, so avoid screens that show care notes.</li>
 </ul>
 <h3>Care notes and recordings</h3>
-<p>Each client's <strong>care plan and documents</strong> (such as an emergency care plan or risk assessments) are kept in our cloud storage, added by pilot administrators, and shown to the client's carers. A copy of the care plan is kept on carers' devices so it can be read without signal.</p>
+<p>Each client's <strong>care plan and documents</strong> (such as an emergency care plan or risk assessments) are kept in our cloud storage, added by pilot administrators, and shown to the client's carers. A copy of the care plan, and of any document a carer opens, is kept on their device so it can be read without signal; document copies are removed when the document is taken out of the care plan, when the carer signs out, or when the client is removed.</p>
 <p>Care notes (with the words you spoke), voice recordings, flags, handovers and outings are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Family messages and your settings stay on your device only.</p>
 <h3>AI note writing</h3>
 <p>When you ask the user manual a question, your question (nothing else) is sent through our relay to Anthropic so the AI can answer it from the manual. It isn't stored.</p>
@@ -1772,6 +1791,7 @@ function saveSession() {
   try { session ? localStorage.setItem(SESSION_KEY, JSON.stringify(session)) : localStorage.removeItem(SESSION_KEY); } catch {} }
 function signedOut(msg) {
   if (rec.on) stopRecording(true);
+  clearDocCache(); saveLocal();
   session = null; saveSession(); KEY = null; S = seed(); $("#sheetRoot").innerHTML = ""; handoverDraft = familySummary = null; showLogin(msg);
 }
 function showLogin(msg) {
@@ -2149,6 +2169,7 @@ async function checkClient() {
   const fresh = clients.find((c) => c.id === session.client.id);
   if (!fresh) {
     toast(`You're no longer a carer for ${session.client.name}, or it was removed`);
+    clearDocCache(); saveLocal();
     session.client = null; saveSession(); KEY = null; S = seed(); showClients(false);
   } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name) {
     // Carers or shifts changed elsewhere (e.g. an administrator assigned someone): pick that up.
