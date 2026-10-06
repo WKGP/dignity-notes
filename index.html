@@ -289,9 +289,9 @@ function seed() {
       note: "Nana got up at approximately 6:30 am and appeared to be in a very good mood. She had a bath and her hair washed, got dressed and came downstairs for breakfast. She required assistance taking her tablets, including placing the tablets into her mouth and helping guide the glass of water to her mouth. She drank a full cup of water with CosmoCol and also had a cup of tea.",
       categories: ["Personal care", "Hair and dressing", "Meals", "Medication", "Fluids", "Mood"],
     }],
-    flags: [{ id: "f0", ts: at(3, 40), kind: "follow_up", title: "Encourage fluids", detail: "Night carer asked for fluids to be encouraged through the day.", status: "open", noteId: null }],
+    flags: [{ id: "f0", ts: at(3, 40), kind: "follow_up", title: "Low fluid intake overnight", detail: "Nana drank about half a cup of water overnight.", status: "open", noteId: null }],
     transfers: [],
-    handovers: [{ id: "h0", ts: at(4, 0), fromId: "c3", toId: "c1", text: "Nana settled well overnight. Please continue to encourage fluids and note any changes in mood, mobility or assistance needed." }],
+    handovers: [{ id: "h0", ts: at(4, 0), fromId: "c3", toId: "c1", text: "Nana settled well overnight. She drank about half a cup of water. No changes in mood, mobility or the help she needed." }],
     messages: [{ id: "m0", ts: at(7, 15), from: "family", name: "Family", text: "Morning! Is Nana still up for church today? I'll collect her at 10:15." }],
     settings: { relayUrl: "", accessCode: "", familyAlerts: false },
   };
@@ -390,13 +390,12 @@ const FLAG_RULES = [
   ["incident", "Bleeding", /\b(bleed\w*|blood|skin tear)\b/i],
   ["incident", "Fall", /\b(fell|fall|fallen|tumble|tumbled|slipped)\b/i],
   ["incident", "Loss of consciousness", /\b(unconscious|passed out|fainted|collapsed|unresponsive)\b/i],
-  ["incident", "Aggression", /\b(aggressive|aggression|hit me|lashed out|kicked|scratched me)\b/i],
-  ["incident", "Soiling accident", /\b(f(a)?ecal|soiled|bowel accident|accident in)\b/i],
+  ["incident", "Injury", /\b(injured|injury|wound|burn|burnt|scald\w*)\b/i],
+  ["incident", "Medication error", /\b(wrong (dose|medication|tablets?)|double dose|given twice)\b/i],
   ["follow_up", "Medication refused", /\b(refused|wouldn'?t take|didn'?t take|spat out)\b[^.]*\b(meds|medication|tablets?|pills?)\b|\b(meds|medication|tablets?|pills?)\b[^.]*\brefused\b/i],
   ["follow_up", "Low food or fluid intake", /\b(not (drinking|eating)|didn'?t (drink|eat)|hardly (drank|ate|drinking|eating)|poor (intake|appetite)|not enough fluids?)\b/i],
   ["follow_up", "Pad or dressing change", /\bneeds? (a )?(pad|dressing) change\b/i],
   ["follow_up", "Task not completed", /\b(didn'?t have|missed|no|refused) (her |his |a )?(bath|shower|wash)\b/i],
-  ["follow_up", "Next carer to check", /\b(remember to|don'?t forget|next carer|please check|keep an eye)\b/i],
 ];
 function basicTidy(transcript) {
   let t = " " + transcript.replace(/\s+/g, " ").trim() + " ";
@@ -410,7 +409,8 @@ function basicTidy(transcript) {
     const detail = sentences.find((s) => re.test(s)) || note;
     if (re.test(note) && !flags.some((f) => f.detail === detail)) flags.push({ kind, title, detail });
   }
-  if (flags.some((f) => f.kind === "follow_up") && !categories.includes("Follow-up")) categories.push("Follow-up");
+  if (flags.some((f) => f.kind === "follow_up") && !categories.includes("To note")) categories.push("To note");
+  // Aggression or agitation is part of conditions like dementia: recorded as behaviour, not an incident (Sam, 6 Oct 2026).
   return { note, categories, flags, unclear: [] };
 }
 const validTidy = (o) => o && typeof o.note === "string" && o.note.trim() && Array.isArray(o.categories) && Array.isArray(o.flags);
@@ -431,7 +431,7 @@ function summaryPayload(mode, toId) {
   return {
     mode, client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
     notes: shiftNotes().map((n) => ({ time: fmtTime(n.ts), carer: carer(n.carerId).name, note: n.note })),
-    flags: openFlags().map((f) => ({ kind: f.kind === "incident" ? "Incident" : "Follow-up", title: f.title, detail: f.detail })),
+    flags: openFlags().map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
     transfers: S.transfers.filter((t) => isToday(t.outTs)).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
     schedule: S.schedule.filter((s) => s.when > Date.now()).sort((a, b) => a.when - b.when).slice(0, 4).map((s) => `${dayLabel(s.when)} ${fmtTime(s.when)}: ${s.label}${s.detail ? " - " + s.detail : ""}`),
   };
@@ -446,7 +446,7 @@ function basicSummary(p) {
   return [
     "How the shift went", ...(p.notes.length ? p.notes.map((n) => `- ${n.time} ${first(n.note)}`) : ["- No notes recorded this shift."]),
     ...(p.transfers.length ? p.transfers.map((t) => `- ${t}`) : []),
-    "", "Concerns for the next carer", ...(p.flags.length ? p.flags.map((f) => `- ${f.title}: ${f.detail}`) : ["No concerns."]),
+    "", "Points to note", ...(p.flags.length ? p.flags.map((f) => `- ${f.title}: ${f.detail}`) : ["- Nothing to note."]),
     "", "Coming up", ...(p.schedule.length ? p.schedule.map((s) => `- ${s}`) : ["- Nothing scheduled."]),
   ].join("\n");
 }
@@ -495,7 +495,7 @@ function render() {
 
 function flagHTML(f, actions = true) {
   return `<div class="flag ${f.kind === "incident" ? "incident" : ""}">
-    <div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "Follow-up"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}</span>
+    <div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}</span>
     <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div>
     ${actions ? `<button class="link" data-resolve="${f.id}">Resolved</button>` : ""}</div>`;
 }
@@ -568,7 +568,7 @@ function renderLog() {
     return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Handover</span><span class="muted">${esc(carer(it.h.fromId).name)} → ${esc(it.h.toId ? carer(it.h.toId).name : "next carer")}</span></div><details><summary>Read handover</summary><p class="small" style="white-space:pre-line;margin:0">${esc(it.h.text)}</p></details></div>`;
   }).join("");
   v.innerHTML = `<div class="hello"><h2>Record log</h2><p>Every saved note, outing and handover, newest first.</p></div>
-    <div class="seg" role="group" aria-label="Filter">${[["all", "Everything"], ["incident", "Incidents"], ["follow", "Follow-ups"]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${logFilter === k}">${l}</button>`).join("")}</div>
+    <div class="seg" role="group" aria-label="Filter">${[["all", "Everything"], ["incident", "Incidents"], ["follow", "To note"]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${logFilter === k}">${l}</button>`).join("")}</div>
     ${rows || '<div class="empty">Nothing here yet.</div>'}`;
   v.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { logFilter = b.dataset.f; renderLog(); }));
   v.querySelectorAll("details").forEach((d) => d.addEventListener("toggle", async () => {
@@ -800,8 +800,16 @@ async function startRecording() {
         }
         drawLive();
       };
-      rec.recog.onerror = (e) => { if (["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"].includes(e.error)) rec.speechOK = false; };
-      rec.recog.onend = () => { if (rec.on && rec.speechOK) { try { rec.recog.start(); } catch {} } };
+      rec.recog.onerror = (e) => { if (["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"].includes(e.error)) { rec.speechOK = false; drawLive(); } };
+      // Some phones (iPhone Safari) end recognition repeatedly; restarting at once can lock up the page,
+      // so wait a moment, and give up on live words after 4 quick endings in a row (the audio keeps recording).
+      rec.recogEnds = [];
+      rec.recog.onend = () => {
+        if (!rec.on || !rec.speechOK) return;
+        const now = Date.now(); rec.recogEnds = rec.recogEnds.filter((t) => now - t < 5000).concat(now);
+        if (rec.recogEnds.length >= 4) { rec.speechOK = false; drawLive(); return; }
+        setTimeout(() => { if (rec.on && rec.speechOK) { try { rec.recog.start(); } catch { rec.speechOK = false; drawLive(); } } }, 400);
+      };
       rec.recog.start();
     } catch { rec.speechOK = false; }
   }
@@ -821,7 +829,9 @@ function stopRecording(cancel) {
   if (!rec.on) return;
   rec.on = false; clearInterval(rec.timer);
   try { rec.recog && rec.recog.stop(); } catch {}
+  let done = false;
   const finish = () => {
+    if (done) return; done = true;
     rec.stream && rec.stream.getTracks().forEach((t) => t.stop());
     if (rec.cancelled) return;
     rec.blob = rec.chunks.length ? new Blob(rec.chunks, { type: (rec.media && rec.media.mimeType) || "audio/webm" }) : null;
@@ -830,8 +840,11 @@ function stopRecording(cancel) {
     openReview({ transcript: (rec.final + " " + rec.interim).trim(), blob: rec.blob });
   };
   const mic = $("#micBtn"); if (mic && !cancel) { mic.disabled = true; $("#recHint").textContent = "Finishing…"; }
-  if (rec.media && rec.media.state !== "inactive") { rec.media.onstop = () => setTimeout(finish, 500); rec.media.stop(); }
-  else setTimeout(finish, 500);
+  if (rec.media && rec.media.state !== "inactive") {
+    rec.media.onstop = () => setTimeout(finish, 300);
+    try { rec.media.stop(); } catch { setTimeout(finish, 300); }
+    setTimeout(finish, 2000); // some phones never fire "stop": carry on with what was captured
+  } else setTimeout(finish, 300);
 }
 
 async function openReview({ transcript, blob, typed }) {
@@ -856,7 +869,7 @@ async function openReview({ transcript, blob, typed }) {
       <label class="f">Care note<textarea id="rvNote" class="note-edit">${esc(draft.note)}</textarea></label>
       ${draft.unclear && draft.unclear.length ? `<div class="warn"><strong>Check these words:</strong> ${draft.unclear.map(esc).join(", ")}</div>` : ""}
       <div><div class="eyebrow" style="margin-bottom:6px">Covers</div><div class="chips">${draft.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("") || '<span class="small muted">No categories found</span>'}</div></div>
-      <div><div class="eyebrow" style="margin-bottom:6px">Flags</div><div class="flags" id="rvFlags">${draft.flags.length ? draft.flags.map((f, i) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "Follow-up"}</span><strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div><button class="link" data-rmflag="${i}">Remove</button></div>`).join("") : '<div class="empty">No flags. Nothing needs following up.</div>'}</div></div>
+      <div><div class="eyebrow" style="margin-bottom:6px">Flags</div><div class="flags" id="rvFlags">${draft.flags.length ? draft.flags.map((f, i) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"}</span><strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div><button class="link" data-rmflag="${i}">Remove</button></div>`).join("") : '<div class="empty">No flags. Nothing to note.</div>'}</div></div>
       <details><summary>What you said</summary>${blobUrl ? `<audio controls src="${blobUrl}" style="margin-bottom:8px"></audio>` : ""}<p class="small muted" style="margin:0">${esc(transcript)}</p></details>
       <div class="row"><button class="btn ghost" id="rvAgain">Re-record</button><button class="btn primary" id="rvSave">Save to record</button></div>
       <button class="link" id="rvDiscard" style="justify-self:center;color:var(--ink-2)">Discard</button>`;
