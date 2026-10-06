@@ -2,6 +2,7 @@
 
 ## Since 1.0.0 (patch releases)
 
+- 1.0.10: iPhone banner: open links from WhatsApp in Safari first (compass button), because the WhatsApp browser keeps separate notes.
 - 1.0.9: "Check these words" shows each word highlighted in what you said, with Show me to jump to it; Earlier notes today on the review screen; Record log "Show all words and recordings".
 - 1.0.8: The private-tab warning now gives step-by-step fixes (iPhone: Tabs → leave Private → Add to Home Screen; Android: reopen in a normal tab → Install).
 - 1.0.7: Storage warning. Asks the browser to keep notes permanently; red warning on private tabs; iPhone "Add to Home Screen" steps (hide for a week); Android Install button; Settings > About shows whether notes are kept.
