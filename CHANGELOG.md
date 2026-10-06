@@ -6,6 +6,7 @@ Cloud copy. Notes, flags, handovers, outings and recordings are copied to secure
 
 ## Since 1.0.0 (patch releases)
 
+- 1.1.4: The screen stays on while recording; if the phone locks or you switch app, the recording so far is kept and the app says when it stopped (Sam). "Check these words" lists just the words, so Show me finds them.
 - 1.1.3: Security fixes: flags and outings can only be resolved or marked back, never rewritten; password resets, locks and removals end existing sign-ins; only the main administrator can create or reset administrators, and admin actions are logged; passwords need 12 characters; a carer's unsent notes stay on their phone if they're taken off a client; the page can only talk to the Dignity Notes relay; copied developer briefs are marked as untrusted.
 - 1.1.2: Safety fixes before release: app updates, sign-in requests and other carers' new notes wait until nothing is open (no lost recordings); iPhone keeps words when speech recognition restarts and says if live words stopped; recordings retried until uploaded; storing a recording retries once and never drops it silently; example entries never go into handovers or family summaries, and new clients start empty; records carry the author's name; handover covers the time since the last handover and asks who it's for; stronger generated passwords and a per-account sign-in limit.
 - 1.1.1: User manual search: matches as you type, and Ask for an AI answer written only from the manual, with links to the right sections (signed-in users).
