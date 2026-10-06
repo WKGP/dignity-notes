@@ -704,6 +704,17 @@ function openEventSheet() {
   };
 }
 
+// App version comes from package.json (bumped on every commit); the relay reports its own on /health.
+async function showVersions(root) {
+  const set = (id, v) => { const el = root.querySelector(id); if (el) el.textContent = v; };
+  let app = "", relayV = "";
+  try { app = (await (await fetch("package.json", { cache: "no-cache" })).json()).version || ""; } catch {}
+  set("#abApp", app || "unknown (offline)");
+  try { if (relayBase()) relayV = (await (await fetch(relayBase() + "/health", { cache: "no-store" })).json()).version || ""; } catch {}
+  set("#abRelay", relayV || (relayBase() ? "unknown (offline)" : "not connected"));
+  if (app && relayV && app !== relayV) set("#abMatch", "The app and server versions differ. Close and reopen the app; if it persists, tell your administrator.");
+}
+
 function openSettings() {
   const c = S.consent;
   const s = sheet(`${sheetHead("Settings")}
@@ -730,7 +741,14 @@ function openSettings() {
       <label class="f">The phone turns your speech into words more accurately when it knows your accent<select id="stAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
       <p class="tiny muted" style="margin:0">Saved on this phone only.</p></div>
     <button class="btn ghost" id="stPrivacy">Read the privacy notice</button>
-    <p class="tiny muted" style="margin:0;text-align:center">Dignity Notes pilot · fictional test use only<br>${COPYRIGHT}</p>`);
+    <div class="card small" style="display:grid;gap:6px"><h3 style="font-size:17px">About</h3>
+      <div>App version <strong id="abApp">checking…</strong></div>
+      <div>Server (relay) version <strong id="abRelay">checking…</strong></div>
+      <div>Privacy notice version <strong>${esc(PRIVACY_VERSION)}</strong></div>
+      <div class="muted" id="abMatch"></div>
+      <a class="link" href="CHANGELOG.md" target="_blank" rel="noopener" style="justify-self:start">What's new</a>
+      <p class="tiny muted" style="margin:4px 0 0">Dignity Notes pilot · fictional test use only<br>${COPYRIGHT}</p></div>`);
+  showVersions(s.root);
   $("#stPrivacy").onclick = () => { s.close(); viewPrivacy(); };
   $("#stAccent").onchange = (e) => { try { localStorage.setItem("dignitynotes.speechlang", e.target.value); toast("Accent saved"); } catch { toast("Couldn't save on this phone"); } };
   $("#stTest").onclick = async () => {
