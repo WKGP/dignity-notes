@@ -1,0 +1,14 @@
+#!/bin/sh
+# Bumps the patch version on every commit (Workgroup convention, see tools/bump.mjs) and
+# stages the bumped files so the new version is inside the commit being made.
+GIT_DIR=$(git rev-parse --git-dir)
+# Merges must not bump.
+[ -f "$GIT_DIR/MERGE_HEAD" ] && exit 0
+# Already bumped in this commit (amend, conflict resolution): don't bump twice.
+git diff --cached -U0 -- '*package.json' | grep -q '^+ *"version"' && exit 0
+ROOT=$(git rev-parse --show-toplevel)
+node "$ROOT/tools/bump.mjs" patch || exit 1
+# One variable, one line: every package.json (same glob rule as bump.mjs), plus sw.js and the changelog.
+FILES="$(cd "$ROOT" && git ls-files -co --exclude-standard -- '*package.json' | tr '\n' ' ') sw.js CHANGELOG.md"
+(cd "$ROOT" && git add -- $FILES) || exit 1
+exit 0

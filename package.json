@@ -1,0 +1,11 @@
+{
+  "name": "dignity-notes",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dignity Notes: spoken care notes. Version numbers follow the Workgroup convention (not semver): see tools/bump.mjs.",
+  "scripts": {
+    "setup:hooks": "git config core.hooksPath tools/hooks",
+    "bump": "node tools/bump.mjs",
+    "test:bump": "node --test tools/bump.test.mjs"
+  }
+}
