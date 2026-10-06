@@ -682,8 +682,11 @@ const sourceTag = (src, reason) => src === "ai"
 
 /* ---------- navigation ---------- */
 let tab = "today";
+let rosterChecked = 0;
 function go(name) {
   tab = name;
+  // Opening Handover picks up carers added on another phone, so they're in "Handing over to".
+  if (name === "handover" && Date.now() - rosterChecked > 30000) { rosterChecked = Date.now(); checkClient(); }
   document.querySelectorAll(".tab[data-tab]").forEach((b) => b.setAttribute("aria-current", b.dataset.tab === name ? "page" : "false"));
   ["today", "log", "handover", "family"].forEach((v) => ($("#view-" + v).hidden = v !== name));
   render(); window.scrollTo({ top: 0 });
@@ -1707,6 +1710,7 @@ function openTesters() {
       <label class="f">Name<input type="text" id="tName" placeholder="Mary Smith" autocomplete="off"></label>
       <label class="f">Username<input type="text" id="tUser" placeholder="mary.smith" autocapitalize="none" spellcheck="false" autocomplete="off"></label>
       <label class="f">Password<span class="row"><input type="text" id="tPass" style="flex:1 1 170px" autocomplete="off" spellcheck="false"><button class="btn ghost" type="button" id="tGen" style="flex:0 0 auto">Suggest</button></span></label>
+      ${session.client ? `<label class="check"><input type="checkbox" id="tCares" checked><span>Cares for ${esc(session.client.name)}</span></label>` : ""}
       <label class="check"><input type="checkbox" id="tAdmin"><span>Administrator: can add and remove people too</span></label>
       <button class="btn primary">Add person</button><div class="small" id="tMsg"></div></form>`);
   const listEl = $("#tList", s.root);
@@ -1786,7 +1790,10 @@ function openTesters() {
     try {
       const role = $("#tAdmin").checked ? "admin" : "tester";
       await relay("/admin/add", { name, username, password, role });
-      showShare(m, username, password, role === "admin" ? "Administrator added." : "Tester added.");
+      // Put them straight onto the client open on this phone, so they can be handed over to at once.
+      const cares = $("#tCares") && $("#tCares").checked && session.client;
+      if (cares) { try { await relay("/admin/assign", { username, clientIds: [session.client.id] }); await checkClient(); } catch (err) { toast("Added, but couldn't put them on " + session.client.name + ": " + err.message); } }
+      showShare(m, username, password, (role === "admin" ? "Administrator added" : "Tester added") + (cares ? ` and put on ${session.client.name}.` : "."));
       $("#tAdmin").checked = false;
       $("#tName").value = $("#tUser").value = ""; $("#tPass").value = suggestPassword(); load();
     } catch (err) { m.textContent = err.message; }

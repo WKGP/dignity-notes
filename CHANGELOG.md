@@ -6,6 +6,7 @@ Cloud copy. Notes, flags, handovers, outings and recordings are copied to secure
 
 ## Since 1.0.0 (patch releases)
 
+- 1.1.7: Adding a person puts them on the client you're in (tick "Cares for …"), and opening Handover picks up newly added carers without signing out (Sam).
 - 1.1.6: Incident checklist: for an incident or a change in condition, Check before saving lists what a full record still needs (when, what you saw, what you did, who you told), with Add details. Every incident flag has "Who to tell" (999, GP or 111, council safeguarding, family and agency). Suspected infections such as a UTI are flagged "To note".
 - 1.1.5: "What you said" and the care note grow to show all their words, so there's no scrolling inside the box (Sam). "Check these words" only lists words that would change the record, usually none.
 - 1.1.4: The screen stays on while recording; if the phone locks or you switch app, the recording so far is kept and the app says when it stopped (Sam). "Check these words" lists just the words, so Show me finds them.
