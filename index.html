@@ -744,7 +744,7 @@ const WHO_TO_TELL = `<details class="small" style="margin-top:6px"><summary>Who 
     <li>Tell the family member or attorney, and your agency, as agreed for this client.</li>
     <li>Then add who you told to the note, so the record is complete.</li>
   </ul></details>`;
-const whoToTell = () => respectDoc() ? WHO_TO_TELL.replace("<ul", `<button class="btn secondary" data-opendoc="${esc(respectDoc().id)}" style="margin-top:6px;min-height:38px;padding:6px 12px;font-size:14px">Open the ReSPECT form (emergency plan)</button><ul`) : WHO_TO_TELL;
+const whoToTell = () => respectDoc() ? WHO_TO_TELL.replace("<ul", `<button class="btn secondary" data-opendoc="${esc(respectDoc().id)}" style="margin-top:6px;min-height:38px;padding:6px 12px;font-size:14px">Open the emergency care plan</button><ul`) : WHO_TO_TELL;
 function flagHTML(f, actions = true) {
   return `<div class="flag ${f.kind === "incident" ? "incident" : ""}">
     <div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}</span>
@@ -807,12 +807,12 @@ function bindStorageBanner(root) {
 
 /* ---------- care plan ----------
  * Each client's care plan (sections such as Personal care or Skin care, each with an urgency) and
- * key documents (the ReSPECT form, risk assessments). Kept on the relay; a copy is kept with the
+ * key documents (an emergency care plan such as ReSPECT, DNACPR or an Advance Care Directive; risk assessments). Kept on the relay; a copy is kept with the
  * client's notes on this phone so carers can read it without signal. Administrators change it.
  */
 const PLAN_DEFAULTS = ["Mobility", "Night time support", "Nutrition and hydration", "Oral care", "Personal care", "Skin care", "Continence", "Medication", "Communication", "Social interests and activities", "Relationships"];
 const URGENCY_LABEL = { urgent: "Urgent", important: "Important", non_urgent: "Non urgent" };
-const DOC_KIND_LABEL = { respect: "ReSPECT form (emergency plan)", risk: "Risk assessment", care_plan: "Care plan", other: "Other document" };
+const DOC_KIND_LABEL = { respect: "Emergency care plan (ReSPECT, DNACPR, Advance Care Directive)", risk: "Risk assessment", care_plan: "Care plan", other: "Other document" };
 const plan = () => (S.plan && Array.isArray(S.plan.sections) ? S.plan : { sections: [], docs: [] });
 const planDocs = () => (S.plan && Array.isArray(S.plan.docs) ? S.plan.docs : []);
 const respectDoc = () => planDocs().find((d) => d.kind === "respect");
@@ -852,7 +852,7 @@ function planCardHTML() {
   const order = { urgent: 0, important: 1, non_urgent: 2 };
   const top = [...p.sections].sort((a, b) => order[a.urgency] - order[b.urgency]).slice(0, 4);
   return `<div class="card"><div class="card-h"><h3>Care plan</h3><span class="muted small">${p.sections.length} sections · ${docs.length} documents</span></div>
-    ${r ? `<button class="btn secondary block" data-opendoc="${esc(r.id)}" style="margin-bottom:10px">Emergency information (ReSPECT form)</button>` : ""}
+    ${r ? `<button class="btn secondary block" data-opendoc="${esc(r.id)}" style="margin-bottom:10px">Emergency information</button>` : ""}
     ${p.sections.length ? `<div class="list">${top.map((s) => `<div class="item"><div class="body"><div><strong>${esc(s.title)}</strong> ${urgencyPill(s.urgency)}</div><div class="muted small">${esc((s.text || "").slice(0, 90))}${(s.text || "").length > 90 ? "…" : ""}</div></div></div>`).join("")}</div>`
       : `<div class="empty">No care plan yet.${isAdminHere() ? " Set one up so carers can see what each area of care involves." : ""}</div>`}
     <div style="margin-top:10px"><button class="link" id="openPlan">${p.sections.length || docs.length ? "Open the care plan" : "Set up the care plan"}</button></div></div>`;
@@ -861,7 +861,7 @@ function openPlan() {
   loadPlan();
   const p = plan(), docs = planDocs(), r = respectDoc();
   const s = sheet(`${sheetHead(`Care plan · ${esc(S.client.name)}`)}
-    ${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency information (ReSPECT form)</button>` : ""}
+    ${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency information</button>` : ""}
     ${p.sections.length ? p.sections.map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}</summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "No details written yet.")}</p></details>`).join("")
       : '<div class="empty">No sections yet.</div>'}
     <div class="card" style="box-shadow:none;display:grid;gap:8px"><h3 style="font-size:17px;margin:0">Documents</h3>
@@ -902,7 +902,7 @@ function openPlanEdit() {
 }
 function openDocUpload() {
   const s = sheet(`${sheetHead("Add a document")}
-    <div class="warn small">Pilot: upload made-up documents only, never a real person's ReSPECT form or assessments.</div>
+    <div class="warn small">Pilot: upload made-up documents only, never a real person's emergency care plan or assessments.</div>
     <label class="f">Type<select id="duKind">${Object.entries(DOC_KIND_LABEL).map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
     <label class="f">Name<input type="text" id="duName" maxlength="80" placeholder="e.g. Moving and handling risk assessment"></label>
     <label class="f">File (PDF, JPG or PNG, up to 10 MB)<input type="file" id="duFile" accept="application/pdf,image/jpeg,image/png"></label>
@@ -1691,7 +1691,7 @@ const PRIVACY_HTML = `
 <li><strong>Feedback:</strong> if you report a problem or suggest an idea, your messages and the helper's replies, any screenshot you add, your name, username and role, which screen and page you were on, and the summary and analysis the AI writes for the developer. A screenshot shows whatever was on your screen, so avoid screens that show care notes.</li>
 </ul>
 <h3>Care notes and recordings</h3>
-<p>Each client's <strong>care plan and documents</strong> (such as a ReSPECT form or risk assessments) are kept in our cloud storage, added by pilot administrators, and shown to the client's carers. A copy of the care plan is kept on carers' devices so it can be read without signal.</p>
+<p>Each client's <strong>care plan and documents</strong> (such as an emergency care plan or risk assessments) are kept in our cloud storage, added by pilot administrators, and shown to the client's carers. A copy of the care plan is kept on carers' devices so it can be read without signal.</p>
 <p>Care notes (with the words you spoke), voice recordings, flags, handovers and outings are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Family messages and your settings stay on your device only.</p>
 <h3>AI note writing</h3>
 <p>When you ask the user manual a question, your question (nothing else) is sent through our relay to Anthropic so the AI can answer it from the manual. It isn't stored.</p>

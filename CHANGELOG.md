@@ -6,7 +6,7 @@ Cloud copy. Notes, flags, handovers, outings and recordings are copied to secure
 
 ## Since 1.0.0 (patch releases)
 
-- 1.1.8: Care plan for each client: sections with urgency (Skin care, Nutrition and hydration…), written by administrators and read by carers, also without signal; key documents (ReSPECT form, risk assessments) with the ReSPECT form as emergency information on every incident; notes are tagged with the sections they cover and the handover lists urgent or important sections with no notes. Privacy notice version 5.
+- 1.1.8: Care plan for each client: sections with urgency (Skin care, Nutrition and hydration…), written by administrators and read by carers, also without signal; key documents (an emergency care plan such as ReSPECT, DNACPR or an Advance Care Directive; risk assessments), with the emergency care plan linked from every incident; notes are tagged with the sections they cover and the handover lists urgent or important sections with no notes. Privacy notice version 5.
 - 1.1.7: Adding a person puts them on the client you're in (tick "Cares for …"), and opening Handover picks up newly added carers without signing out (Sam).
 - 1.1.6: Incident checklist: for an incident or a change in condition, Check before saving lists what a full record still needs (when, what you saw, what you did, who you told), with Add details. Every incident flag has "Who to tell" (999, GP or 111, council safeguarding, family and agency). Suspected infections such as a UTI are flagged "To note".
 - 1.1.5: "What you said" and the care note grow to show all their words, so there's no scrolling inside the box (Sam). "Check these words" only lists words that would change the record, usually none.
