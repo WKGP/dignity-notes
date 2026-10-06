@@ -533,13 +533,15 @@ const hideKey = () => "dignitynotes.hidehomescreen";
 function storageBanner() {
   const st = storageState; if (!st.checked) return "";
   if (st.privateLikely) return `<div class="flag incident" role="alert"><div class="body"><span class="eyebrow">Your notes may be deleted</span>
-    <strong>This looks like a private browsing tab</strong><span class="small">Private tabs delete everything (notes and recordings) when they close. Open Dignity Notes in a normal tab${st.ios ? ", then add it to your Home Screen" : ""}.</span></div></div>`;
+    <strong>This looks like a private browsing tab</strong><span class="small">Private tabs delete your notes and recordings when they close. You haven't done anything wrong: links open in Private if it was ever used before. To fix it once:
+    ${st.ios ? `<br>1. Tap the Tabs button (two squares, bottom right)<br>2. At the bottom, tap the number of tabs next to <b>Private</b> (for example "2 Tabs")<br>3. Open the Dignity Notes link again there, then use Share → <b>Add to Home Screen</b><br>4. From now on, open Dignity Notes from the Home Screen icon`
+      : `<br>1. Close this private (incognito) tab<br>2. Open the Dignity Notes link again in a normal tab<br>3. Tap <b>Install</b> when it's offered`}</span></div></div>`;
   if (st.installed || st.persisted) return "";
   let hidden = 0; try { hidden = +localStorage.getItem(hideKey()) || 0; } catch {}
   if (Date.now() < hidden) return "";
   if (st.ios) return `<div class="flag"><div class="body"><span class="eyebrow">Keep your notes safe</span>
     <strong>Add Dignity Notes to your Home Screen</strong><span class="small">Safari deletes a website's saved notes and recordings if it isn't opened for 7 days. Apps on the Home Screen are kept.
-    <br>1. Tap the Share button (square with an arrow)<br>2. Tap <strong>Add to Home Screen</strong><br>3. Open Dignity Notes from the new icon from now on.</span>
+    <br>1. Tap the Share button (square with an arrow)<br>2. Tap <b>Add to Home Screen</b><br>3. Open Dignity Notes from the new icon from now on.</span>
     <button class="link small" id="hideHome" style="justify-self:start">Hide for a week</button></div></div>`;
   if (installPrompt) return `<div class="flag"><div class="body"><span class="eyebrow">Keep your notes safe</span>
     <strong>Install Dignity Notes on this phone</strong><span class="small">Installed apps keep their notes and recordings safer from being cleared by the browser.</span>
