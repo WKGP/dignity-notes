@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://dignity-notes-relay.workgroup-works.workers.dev; worker-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="theme-color" content="#5B3F8C">
 <title>Dignity Notes user manual</title>
 <meta name="description" content="Step-by-step guide to Dignity Notes for carers and administrators, with screenshots.">
@@ -533,7 +534,7 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
     <ul>
       <li>The full <strong>conversation</strong> and any <strong>screenshot</strong>.</li>
       <li><strong>Analysis:</strong> likely causes, things the carer can do meanwhile, and questions to ask them. These are suggestions to check, not facts.</li>
-      <li><strong>Developer brief:</strong> a work order for the developer. Tap <strong>Copy brief for coding agent</strong> to copy it.</li>
+      <li><strong>Developer brief:</strong> a description of the problem for the developer. Tap <strong>Copy brief for coding agent</strong> to copy it. The copy starts with a warning that it came from a user's report, so a coding agent treats it as information, not instructions. Read it before you paste it anywhere.</li>
       <li><strong>Status:</strong> set it to <em>new</em>, <em>in progress</em>, <em>done</em> or <em>won't fix</em>.</li>
     </ul>
     <p>The brief usually appears within a couple of minutes. If it says <strong>Brief failed</strong>, tap <strong>Analyse again</strong>; the old brief stays until a new one is ready. Reports are deleted automatically 12 months after they were sent.</p>
@@ -549,8 +550,8 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
     <p>You can still record and save notes. The app does a simpler <strong>Basic tidy</strong> on the phone instead of the AI note. The handover and family summary also use a basic version until you're back online.</p></details>
   <details class="faq"><summary>"Your sign-in has ended"</summary>
     <p>Sign-ins last 30 days. You'll also be signed out if an administrator removed or changed your account. Sign in again, or ask your administrator.</p></details>
-  <details class="faq"><summary>"This account is set up on another device"</summary>
-    <p>Your account is locked to the first phone you used. Ask your administrator to tap <strong>Reset devices</strong> for you, then sign in on the new phone.</p></details>
+  <details class="faq"><summary>I can't sign in on a new phone</summary>
+    <p>If your account is locked to the first phone you used, a new phone shows "Username or password not recognised" even with the right password. Ask your administrator to tap <strong>Reset devices</strong> for you, then sign in on the new phone. After 10 wrong passwords, an account can't be signed in to for 15 minutes.</p></details>
   <details class="faq"><summary>I forgot my password</summary>
     <p>Ask your administrator. They'll make a new one in <strong>Manage people</strong> and send it to you.</p></details>
   <details class="faq"><summary>I can't see notes from another carer's phone</summary>
