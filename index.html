@@ -298,11 +298,13 @@ function seed() {
   };
 }
 function load() { try { const raw = localStorage.getItem(KEY); if (raw) return JSON.parse(raw); } catch {} return null; }
-function save() {
+function saveLocal() {
   if (!KEY) return false;
   try { localStorage.setItem(KEY, JSON.stringify(S)); return true; }
   catch { toast("Couldn't save on this phone. Storage may be full."); return false; }
 }
+// Save on this phone, then copy anything new to the cloud shortly after.
+function save() { const ok = saveLocal(); if (ok) scheduleSync(); return ok; }
 S = seed(); // replaced by the signed-in person's own data in loadUser()
 // Each person who signs in on this phone gets their own notes, kept separately for each client.
 // The client's name and agreement come from the server, so they are the same for everyone.
@@ -321,6 +323,7 @@ function loadUser() {
   S.client = { name: session.client.name, carers: session.client.carers || [] }; S.consent = session.client.consent;
   // The person signed in on this phone is on duty whenever the app opens, so notes carry the right name.
   S.onDuty = myId();
+  Object.assign(syncState, { error: "", pending: 0, audioPending: 0, failed: 0, last: null, again: false });
   save();
 }
 const myId = () => (session && (session.meId || session.username)) || "me";
@@ -343,15 +346,205 @@ const audioDB = (() => {
   const open = () => dbp || (dbp = new Promise((res, rej) => {
     const r = indexedDB.open("nanacare-audio", 1);
     r.onupgradeneeded = () => r.result.createObjectStore("clips");
-    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    r.onsuccess = () => { r.result.onclose = () => (dbp = null); res(r.result); }; r.onerror = () => rej(r.error);
   }));
-  const tx = async (mode, fn) => { const db = await open(); return new Promise((res, rej) => { const t = db.transaction("clips", mode); const req = fn(t.objectStore("clips")); t.oncomplete = () => res(req && req.result); t.onerror = t.onabort = () => rej(t.error || new Error("Storage failed")); }); };
+  // iPhones can drop the storage connection while the app is in the background: start afresh next time.
+  const tx = async (mode, fn) => { try { const db = await open(); return await new Promise((res, rej) => { const t = db.transaction("clips", mode); const req = fn(t.objectStore("clips")); t.oncomplete = () => res(req && req.result); t.onerror = t.onabort = () => rej(t.error || new Error("Storage failed")); }); } catch (e) { dbp = null; throw e; } };
   return {
     put: (id, blob) => tx("readwrite", (s) => s.put(blob, id)).then(() => true, () => false),
     get: (id) => tx("readonly", (s) => s.get(id)).catch(() => null),
+    getStrict: (id) => tx("readonly", (s) => s.get(id)), // throws if the phone's storage couldn't be read
     del: (ids) => tx("readwrite", (s) => { ids.forEach((id) => s.delete(id)); }).catch(() => null),
   };
 })();
+
+/* ---------- cloud copy ----------
+ * Notes, flags, handovers and outings are saved on this phone first, then copied to the cloud
+ * (our relay, stored in the EU), so they're safe if this phone's data is lost, and every carer on
+ * the client sees the same record. Recordings are copied too. Anything not yet copied (no signal)
+ * is sent the next time the app has a connection. Example entries and family messages stay local.
+ * Sync runs in the background, so it never signs anyone out or opens a screen in the middle of
+ * something: if the sign-in has ended it pauses, and asks once nothing is open.
+ */
+const SYNC_KINDS = { note: "notes", flag: "flags", handover: "handovers", transfer: "transfers" };
+const DEMO_IDS = new Set(["n0", "f0", "h0"]);
+const SYNC_RECORD_MAX = 58000, SYNC_BATCH_MAX = 400000; // the relay allows 60,000 a record, 1,000,000 a request
+// When a record last changed (older records have no mt, so use their latest time).
+const mtOf = (r) => r.mt || Math.max(r.ts || 0, r.approvedTs || 0, r.outTs || 0, r.backTs || 0, r.resolvedTs || 0);
+// Mark a record as changed now, later than any earlier change even if phone clocks differ.
+const touch = (r) => { r.mt = Math.max(Date.now(), mtOf(r) + 1); };
+const syncState = { busy: false, again: false, last: null, error: "", pending: 0, audioPending: 0, failed: 0, blocked: null };
+const syncInfo = () => { const si = S.sync || (S.sync = { seq: 0, sent: {}, audio: {} }); si.failed = si.failed || {}; return si; };
+const cloudOn = () => !!(session && session.token && !session.local && session.client && session.privacyAccepted === PRIVACY_VERSION && relayBase());
+
+// Same checks as the relay (worker/src/sync.js): only known, well-formed fields are kept, because
+// records from other phones are displayed here.
+const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const SYNC_SHAPES = {
+  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", transcript: "str:30000", heard: "str:30000", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
+  flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", resolvedTs: "num", resolvedBy: "id" } },
+  handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", toId: "id", text: "str:10000", source: "str:20" } },
+  transfer: { req: ["outTs", "withWhom"], f: { outTs: "num", withWhom: "str:100", relationship: "str:100", purpose: "str:200", carerId: "id", backTs: "num", backNote: "str:2000", backCarerId: "id" } },
+};
+function cleanRecord(kind, data) {
+  const shape = SYNC_SHAPES[kind];
+  if (!shape || !data || typeof data !== "object" || Array.isArray(data) || typeof data.id !== "string" || !SYNC_ID.test(data.id)) return null;
+  const out = { id: data.id, mt: Math.floor(Number(data.mt)) };
+  if (!(out.mt > 0)) return null;
+  for (const [k, t] of Object.entries(shape.f)) {
+    const v = data[k];
+    if (v === undefined || v === null) continue;
+    if (Array.isArray(t)) { if (!t.includes(v)) return null; out[k] = v; }
+    else if (t === "num") { const n = Number(v); if (!Number.isFinite(n) || n < 0) return null; out[k] = n; }
+    else if (t === "id") { if (typeof v !== "string" || !SYNC_ID.test(v)) return null; out[k] = v; }
+    else if (t === "cats") { if (!Array.isArray(v) || v.length > 20 || v.some((c) => typeof c !== "string" || c.length > 40)) return null; out[k] = v; }
+    else { const max = Number(t.split(":")[1]); if (typeof v !== "string" || v.length > max) return null; out[k] = v; }
+  }
+  if (shape.req.some((k) => out[k] === undefined)) return null;
+  if (kind === "note" && !out.categories) out.categories = [];
+  return out;
+}
+
+function unsynced() {
+  const si = syncInfo(), out = [];
+  for (const [kind, arr] of Object.entries(SYNC_KINDS)) for (const r of S[arr] || []) {
+    if (!r || !r.id || DEMO_IDS.has(r.id) || r.source === "example") continue;
+    const k = kind + ":" + r.id, mt = mtOf(r);
+    if ((si.sent[k] || 0) >= mt) continue;
+    if (si.failed[k] && si.failed[k].mt === mt) continue; // couldn't be copied; tried again only if it changes
+    out.push({ kind, r });
+  }
+  return out;
+}
+// Recordings this phone made whose note is in the cloud, but the recording isn't yet.
+const unsentAudio = () => { const si = syncInfo(); return S.notes.filter((n) => n.audioId && !DEMO_IDS.has(n.id) && si.sent["note:" + n.id] && !si.audio[n.audioId]); };
+function countFailed() { const si = syncInfo(); return Object.keys(si.failed).length + Object.values(si.audio).filter((v) => v === "toolarge").length; }
+
+let syncTimer = null;
+function scheduleSync(ms = 1500) { if (!cloudOn()) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms); }
+// Background requests: errors are reported in the cloud status, never acted on mid-task.
+async function syncFetch(path, init) {
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 60000);
+  try {
+    const r = await fetch(relayBase() + path, { method: "POST", signal: ctl.signal, ...init, headers: { "Content-Type": "application/json", ...(init.headers || {}), Authorization: "Bearer " + session.token } });
+    if (r.status === 401 || r.status === 428) { syncState.blocked = { why: r.status === 401 ? "signin" : "privacy", token: session.token }; }
+    if (!r.ok) { const j = await r.json().catch(() => ({})); const e = new Error(j.error || "Error " + r.status); e.status = r.status; e.code = j.code; throw e; }
+    return r;
+  } catch (e) { if (e.name === "AbortError") throw new Error("The cloud took too long to answer"); throw e; }
+  finally { clearTimeout(timer); }
+}
+const syncJSON = (path, body) => syncFetch(path, { body: JSON.stringify(body) }).then((r) => r.json());
+// Sign-in ended or a new privacy notice: ask only when nothing is open and nobody is recording.
+function handleSyncBlocked() {
+  const b = syncState.blocked;
+  if (!b || !session || b.token !== session.token) { syncState.blocked = null; return false; }
+  if (rec.on || $("#sheetRoot").innerHTML.trim() || $("#fullRoot").innerHTML.trim()) return true;
+  syncState.blocked = null;
+  if (b.why === "signin") signedOut("Your sign-in has ended. Sign in again to carry on.");
+  else { session.privacyAccepted = null; saveSession(); showPrivacy(() => afterSignIn(true)); }
+  return true;
+}
+
+async function syncNow() {
+  if (!cloudOn() || !navigator.onLine) return;
+  if (syncState.blocked && handleSyncBlocked()) return;
+  if (syncState.busy) { syncState.again = true; return; }
+  syncState.busy = true; syncState.again = false;
+  const key = KEY, cid = session.client.id, still = () => KEY === key && session && session.client && session.client.id === cid && !syncState.blocked;
+  const si = syncInfo(); let changed = false; const errors = [];
+  try {
+    // 1. Send what's new or changed on this phone, in batches that fit the relay's limits.
+    try {
+      const todo = unsynced();
+      while (todo.length && still()) {
+        const batch = []; let size = 0;
+        while (todo.length && batch.length < 50) {
+          const { kind, r } = todo[0], data = { ...r, mt: mtOf(r) }, len = JSON.stringify(data).length;
+          if (len > SYNC_RECORD_MAX) { todo.shift(); si.failed[kind + ":" + r.id] = { why: "size", mt: data.mt }; continue; }
+          if (batch.length && size + len > SYNC_BATCH_MAX) break;
+          todo.shift(); size += len; batch.push({ kind, id: r.id, data });
+        }
+        if (!batch.length) continue;
+        const out = await syncJSON("/sync/push", { client: cid, records: batch });
+        if (!still()) return;
+        const why = new Map((out.rejected || []).map((x) => [x.id, x.why]));
+        for (const b of batch) {
+          const k = b.kind + ":" + b.id, w = why.get(b.id);
+          if (!w) { si.sent[k] = b.data.mt; delete si.failed[k]; }
+          else if (w === "clock") errors.push("This phone's date or time is wrong. Correct it in the phone's settings.");
+          else si.failed[k] = { why: w, mt: b.data.mt };
+        }
+        saveLocal();
+      }
+    } catch (e) { errors.push(e.message); }
+    // 2. Recordings not copied yet (one request each). One problem never stops the rest.
+    for (const n of unsentAudio()) {
+      if (!still()) break;
+      let blob;
+      try { blob = await audioDB.getStrict(n.audioId); } catch { errors.push("Couldn't read a recording on this phone. It will be tried again."); continue; }
+      if (!blob) { si.audio[n.audioId] = "missing"; saveLocal(); continue; } // not on this phone (lost before it was copied)
+      try {
+        await syncFetch(`/sync/audio/put?client=${encodeURIComponent(cid)}&id=${encodeURIComponent(n.audioId)}`, { headers: { "Content-Type": blob.type || "application/octet-stream" }, body: blob });
+        if (!still()) break;
+        si.audio[n.audioId] = 1; saveLocal();
+      } catch (e) {
+        if (e.status === 413 || e.code === "too_large") { si.audio[n.audioId] = "toolarge"; saveLocal(); }
+        else errors.push(e.message);
+      }
+    }
+    // 3. Fetch what other phones have sent since last time.
+    try {
+      for (let more = true; more && still();) {
+        const out = await syncJSON("/sync/pull", { client: cid, since: si.seq });
+        if (!still()) return;
+        for (const { kind, id, data: raw } of out.records || []) {
+          const arr = S[SYNC_KINDS[kind]], data = cleanRecord(kind, raw);
+          if (!arr || !data || data.id !== id) continue;
+          const i = arr.findIndex((x) => x.id === id);
+          if (i < 0) { arr.push(data); changed = true; }
+          else if (mtOf(arr[i]) < mtOf(data)) { arr[i] = { ...arr[i], ...data }; changed = true; }
+          const k = kind + ":" + id; si.sent[k] = Math.max(si.sent[k] || 0, mtOf(data));
+          // A recording another phone made is in the cloud already, so this phone never uploads it.
+          if (kind === "note" && data.audioId && !si.audio[data.audioId]) si.audio[data.audioId] = "cloud";
+        }
+        si.seq = out.seq || si.seq; more = !!out.more;
+        saveLocal();
+      }
+    } catch (e) { errors.push(e.message); }
+    if (still()) { syncState.error = errors[0] || ""; if (!errors.length) syncState.last = Date.now(); }
+  } finally {
+    syncState.busy = false;
+    if (KEY === key) { syncState.pending = unsynced().length; syncState.audioPending = unsentAudio().length; syncState.failed = countFailed(); }
+    if (changed && KEY === key) render();
+    if (syncState.blocked) handleSyncBlocked();
+    else if (syncState.again) scheduleSync(300);
+  }
+}
+// A recording that isn't on this phone (made on another phone, or this phone's data was cleared):
+// fetch it from the cloud and keep a copy here. Returns { blob } or { why }.
+async function cloudAudio(id) {
+  if (!cloudOn()) return { why: "off" };
+  if (!navigator.onLine) return { why: "offline" };
+  try {
+    const r = await syncFetch("/sync/audio/get", { body: JSON.stringify({ client: session.client.id, id }) });
+    const blob = await r.blob();
+    if (!blob.size) return { why: "missing" };
+    await audioDB.put(id, blob);
+    return { blob };
+  } catch (e) { return { why: e.status === 404 ? "missing" : "error" }; }
+}
+function cloudStatus() {
+  if (!cloudOn()) return session && session.local ? "Off (this phone only)" : "Not connected";
+  if (syncState.blocked) return syncState.blocked.why === "signin" ? "Paused: sign in again to carry on" : "Paused: accept the new privacy notice";
+  const waiting = syncState.pending + syncState.audioPending;
+  const failed = syncState.failed ? ` ${syncState.failed} couldn't be copied (too large or not valid); they're kept on this phone.` : "";
+  if (syncState.error) return `Not reached${waiting ? `: ${waiting} waiting to send` : ""}. ${syncState.error}${failed}`;
+  if (waiting) return `${waiting} waiting to send.${failed}`;
+  return (syncState.last ? `Up to date (checked ${fmtTime(syncState.last)}).` : "Checking…") + failed;
+}
+window.addEventListener("online", () => scheduleSync(500));
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") scheduleSync(300); });
+setInterval(() => { if (document.visibilityState === "visible") scheduleSync(0); }, 120000); // pick up other carers' notes
 
 /* ---------- AI: relay first, basic offline rules as fallback ---------- */
 async function relay(path, body, { auth = true } = {}) {
@@ -411,7 +604,7 @@ function basicTidy(transcript) {
     if (re.test(note) && !flags.some((f) => f.detail === detail)) flags.push({ kind, title, detail });
   }
   if (flags.some((f) => f.kind === "follow_up") && !categories.includes("To note")) categories.push("To note");
-  // Aggression or agitation is part of conditions like dementia: recorded as behaviour, not an incident (Sam, 6 Oct 2026).
+  // Aggression or agitation is part of conditions like dementia: recorded as behaviour, not an incident.
   return { note, categories, flags, unclear: [] };
 }
 const validTidy = (o) => o && typeof o.note === "string" && o.note.trim() && Array.isArray(o.categories) && Array.isArray(o.flags);
@@ -502,7 +695,7 @@ function flagHTML(f, actions = true) {
 }
 function bindResolve(root) {
   root.querySelectorAll("[data-resolve]").forEach((b) => b.addEventListener("click", () => {
-    const f = S.flags.find((x) => x.id === b.dataset.resolve); f.status = "resolved"; f.resolvedTs = Date.now(); f.resolvedBy = S.onDuty;
+    const f = S.flags.find((x) => x.id === b.dataset.resolve); f.status = "resolved"; f.resolvedTs = Date.now(); f.resolvedBy = S.onDuty; touch(f);
     save(); render(); toast("Marked as resolved");
   }));
 }
@@ -557,8 +750,10 @@ function bindStorageBanner(root) {
 function renderToday() {
   const v = $("#view-today"); const now = new Date(); const h = now.getHours();
   const greet = h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
-  const ho = [...S.handovers].sort((a, b) => b.ts - a.ts)[0];
-  const latest = [...S.notes].sort((a, b) => b.ts - a.ts)[0];
+  // Real entries first: the example day's times can be later than a carer's first real note.
+  const real = (arr) => { const r = arr.filter((x) => x.source !== "example" && !DEMO_IDS.has(x.id)); return r.length ? r : arr; };
+  const ho = [...real(S.handovers)].sort((a, b) => b.ts - a.ts)[0];
+  const latest = [...real(S.notes)].sort((a, b) => b.ts - a.ts)[0];
   const sched = [...S.schedule].filter((s) => s.when > Date.now() - 6 * 36e5).sort((a, b) => a.when - b.when);
   const flags = openFlags().sort((a, b) => (a.kind === "incident" ? -1 : 1) - (b.kind === "incident" ? -1 : 1) || b.ts - a.ts);
   v.innerHTML = `
@@ -596,12 +791,27 @@ function wordInContext(text, word) {
   if (b < t.length) b = t.lastIndexOf(" ", b) > i + word.length ? t.lastIndexOf(" ", b) : b;
   return { i, html: (a > 0 ? "…" : "") + esc(t.slice(a, i)) + "<mark>" + esc(t.slice(i, i + word.length)) + "</mark>" + esc(t.slice(i + word.length, b)) + (b < t.length ? "…" : "") };
 }
-// Load a saved recording into an <audio> the first time it's needed.
-async function loadAudio(a) {
-  if (!a || a.src || a.dataset.loading) return;
+// Load a saved recording into an <audio> the first time it's needed. A recording that isn't on this
+// phone comes from the cloud: straight away if the carer opened that note, or with a Download
+// button when every note is opened at once (so the app doesn't download them all together).
+async function loadAudio(a, fromCloud) {
+  if (!a || a.src || a.dataset.loading || !a.isConnected) return;
   a.dataset.loading = "1";
-  const blob = await audioDB.get(a.dataset.audio);
-  if (blob) a.src = URL.createObjectURL(blob); else a.replaceWith(Object.assign(document.createElement("p"), { className: "small muted", textContent: "Recording is stored on the phone that made it." }));
+  const local = await audioDB.get(a.dataset.audio);
+  if (local) { a.src = URL.createObjectURL(local); return; }
+  const msg = (text, retry) => {
+    const p = Object.assign(document.createElement("p"), { className: "small muted" });
+    p.append(text + " ");
+    if (retry) { const btn = Object.assign(document.createElement("button"), { className: "link small", textContent: retry }); btn.onclick = () => { p.remove(); a.hidden = false; delete a.dataset.loading; loadAudio(a, true); }; p.append(btn); }
+    a.hidden = true; a.before(p);
+  };
+  if (!fromCloud) return msg("This recording is in the cloud.", "Download");
+  const { blob, why } = await cloudAudio(a.dataset.audio);
+  if (blob) { a.src = URL.createObjectURL(blob); return; }
+  if (why === "offline") msg("Connect to the internet to play this recording.", "Try again");
+  else if (why === "missing") msg("This recording isn't in the cloud yet. It appears once the phone that made it is back online.", "Try again");
+  else if (why === "off") msg("This recording is stored on the phone that made it.");
+  else msg("Couldn't download the recording.", "Try again");
 }
 
 function renderLog() {
@@ -627,7 +837,7 @@ function renderLog() {
         <p class="note-text">${esc(n.note)}</p>
         <div class="chips">${n.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>
         <details ${logOpen ? "open" : ""}><summary>${n.audioId ? "Recording and words" : "Words"}</summary>
-          ${n.audioId ? `<audio controls preload="none" data-audio="${n.audioId}"></audio>` : ""}
+          ${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}"></audio>` : ""}
           ${n.heard ? `<p class="small muted" style="margin:8px 0 0"><strong>The phone heard:</strong> ${esc(n.heard)}</p>
           <p class="small muted" style="margin:6px 0 0"><strong>Checked by the carer:</strong> ${esc(n.transcript)}</p>` : `<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p>`}
           <p class="tiny muted" style="margin:6px 0 0">Approved by ${esc(carer(n.carerId).name)} at ${fmtTime(n.approvedTs || n.ts)}</p></details>
@@ -643,8 +853,8 @@ function renderLog() {
     ${rows || '<div class="empty">Nothing here yet.</div>'}`;
   v.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { logFilter = b.dataset.f; renderLog(); }));
   if ($("#logOpen", v)) $("#logOpen", v).onclick = () => { logOpen = !logOpen; try { localStorage.setItem("dignitynotes.logopen", logOpen ? "1" : "0"); } catch {} renderLog(); };
-  if (logOpen) v.querySelectorAll("audio[data-audio]").forEach(loadAudio);
-  v.querySelectorAll("details").forEach((d) => d.addEventListener("toggle", () => { if (d.open) loadAudio(d.querySelector("audio[data-audio]")); }));
+  if (logOpen) v.querySelectorAll("audio[data-audio]").forEach((a) => loadAudio(a, false));
+  v.querySelectorAll("details").forEach((d) => d.addEventListener("toggle", () => { if (d.open && !logOpen) loadAudio(d.querySelector("audio[data-audio]"), true); }));
 }
 
 let handoverDraft = null;
@@ -753,7 +963,7 @@ function openReturnSheet() {
     <p class="small" style="margin:0">${esc(S.client.name)} went out with <strong>${esc(t.withWhom)}</strong> at ${fmtTime(t.outTs)}.</p>
     <label class="f">Anything to note on return? (optional)<input type="text" id="bkNote" placeholder="e.g. Had lunch out, seemed tired" autocomplete="off"></label>
     <button class="btn primary block" id="bkSave">Confirm back at ${fmtTime(Date.now())}</button>`);
-  $("#bkSave").onclick = () => { t.backTs = Date.now(); t.backNote = $("#bkNote").value.trim(); t.backCarerId = S.onDuty; save(); s.close(); render(); toast("Back in your care"); };
+  $("#bkSave").onclick = () => { t.backTs = Date.now(); t.backNote = $("#bkNote").value.trim(); t.backCarerId = S.onDuty; touch(t); save(); s.close(); render(); toast("Back in your care"); };
 }
 function openEventSheet() {
   const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1);
@@ -802,9 +1012,9 @@ function openSettings() {
       ${session.role === "admin" ? `<button class="link" id="stWho" style="justify-self:start">Change who cares for ${esc(S.client.name)}</button>` : `<p class="tiny muted" style="margin:0">An administrator decides who cares for ${esc(S.client.name)}.</p>`}</div>
     <div class="card small"><h3 style="font-size:17px;margin-bottom:6px">Consent</h3>
       ${c ? `Agreed by <strong>${esc(c.name)}</strong> (${esc(c.role)}) on ${fmtDay(c.ts)} at ${fmtTime(c.ts)}.` : "Not recorded."}
-      <p class="muted" style="margin:8px 0 0">Notes and recordings are kept on this phone only in this demo. Only the words of a note (never the recording) are sent to the AI to tidy.</p></div>
+      <p class="muted" style="margin:8px 0 0">Notes and recordings are saved on this phone and copied to the cloud (in the EU) for this client's carers and the pilot administrators. Only the words of a note (never the recording) are sent to the AI to tidy.</p></div>
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Demo data</h3>
-      <p class="small muted" style="margin:0">Start again with the example day. Deletes this client's notes and recordings on this phone.</p>
+      <p class="small muted" style="margin:0">Start again with the example day on this phone. Notes already copied to the cloud come back from there.</p>
       <button class="btn ghost" id="stReset">Reset demo</button><button class="btn danger" id="stResetYes" hidden>Yes, delete everything</button></div>
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">My words</h3>
       <p class="small muted" style="margin:0">Misheard words you've chosen to remember. They're fixed automatically on your next recordings. Saved on this phone only.</p>
@@ -817,6 +1027,7 @@ function openSettings() {
       <div>App version <strong id="abApp">checking…</strong></div>
       <div>Server (relay) version <strong id="abRelay">checking…</strong></div>
       <div>Privacy notice version <strong>${esc(PRIVACY_VERSION)}</strong></div>
+      <div>Cloud copy: <strong>${esc(cloudStatus())}</strong></div>
       <div>Notes on this phone: <strong>${storageState.privateLikely ? "may be deleted (private tab)" : storageState.installed || storageState.persisted ? "kept permanently" : "may be cleared by the browser"}</strong></div>
       <div class="muted" id="abMatch"></div>
       <a class="link" href="CHANGELOG.md" target="_blank" rel="noopener" style="justify-self:start">What's new</a>
@@ -856,7 +1067,12 @@ function openSettings() {
     btn.disabled = false;
   };
   $("#stReset").onclick = () => { $("#stResetYes").hidden = false; };
-  $("#stResetYes").onclick = async () => { const keep = S.settings; await audioDB.del(S.notes.map((n) => n.audioId).filter(Boolean)); S = seed(); S.settings = keep; save(); loadUser(); s.close(); handoverDraft = familySummary = null; go("today"); };
+  $("#stResetYes").onclick = async () => {
+    if (cloudOn() && (unsynced().length || unsentAudio().length)) return toast("Some notes haven't been copied to the cloud yet. Connect to the internet, wait a moment, then try again.");
+    const keep = S.settings, si = syncInfo();
+    // Only this person's recordings that are safely in the cloud (another person on this phone may share the store).
+    await audioDB.del(S.notes.filter((n) => n.audioId && (!cloudOn() || si.audio[n.audioId] === 1 || si.audio[n.audioId] === "cloud")).map((n) => n.audioId));
+    S = seed(); S.settings = keep; save(); loadUser(); s.close(); handoverDraft = familySummary = null; go("today"); };
 }
 
 /* ---------- recorder ---------- */
@@ -1032,7 +1248,7 @@ async function startRecording() {
     return;
   }
   rec.chunks = [];
-  try { rec.media = new MediaRecorder(rec.stream); rec.media.ondataavailable = (e) => e.data.size && rec.chunks.push(e.data); rec.media.start(1000); }
+  try { try { rec.media = new MediaRecorder(rec.stream, { audioBitsPerSecond: 32000 }); } catch { rec.media = new MediaRecorder(rec.stream); } rec.media.ondataavailable = (e) => e.data.size && rec.chunks.push(e.data); rec.media.start(1000); }
   catch { rec.media = null; }
   if (SR) {
     try {
@@ -1205,9 +1421,9 @@ async function openReview({ transcript, blob, typed }) {
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-04.3";
+const PRIVACY_VERSION = "2026-10-06.4";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 3 · 4 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 4 · 6 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -1221,14 +1437,14 @@ const PRIVACY_HTML = `
 <li><strong>Carers for each client:</strong> which clients you care for, and your shift times for each. Administrators set who cares for whom. The other carers on the same client can see your name and shift.</li>
 <li><strong>Feedback:</strong> if you report a problem or suggest an idea, your messages and the helper's replies, any screenshot you add, your name, username and role, which screen and page you were on, and the summary and analysis the AI writes for the developer. A screenshot shows whatever was on your screen, so avoid screens that show care notes.</li>
 </ul>
-<h3>What stays on your device</h3>
-<p>Care notes, voice recordings, handovers, messages and settings are kept <strong>on your device only</strong>. We don't receive them, except as described below. Deleting the app's data on your device, or tapping Reset demo, removes them.</p>
+<h3>Care notes and recordings</h3>
+<p>Care notes (with the words you spoke), voice recordings, flags, handovers and outings are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Family messages and your settings stay on your device only.</p>
 <h3>AI note writing</h3>
 <p>When you use the feedback helper, your messages and any screenshot are also sent to Anthropic, so the helper can ask questions and write a summary for the developer. Email addresses and phone numbers are removed automatically before a report is stored.</p>
-<p>When you ask the app to write a note, handover or summary, the <strong>words</strong> of your note (never the recording), and the names of the carers involved, are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
+<p>When you ask the app to write a note, handover or summary, the <strong>words</strong> of your note (never the recording), and the names of the carers involved, are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text it sends for tidying; the note you save is stored as described under Care notes and recordings. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
 <h3>Who else handles data for us</h3>
 <ul>
-<li><strong>Cloudflare:</strong> runs our relay and stores accounts, sign-in records, clients, who cares for each client and their shifts, and feedback reports.</li>
+<li><strong>Cloudflare:</strong> runs our relay and stores accounts, sign-in records, clients, who cares for each client and their shifts, feedback reports, and the care records and recordings described above (in the European Union).</li>
 <li><strong>GitHub (Microsoft):</strong> hosts the app's web pages.</li>
 <li><strong>Anthropic:</strong> AI note writing, as described above.</li>
 </ul>
@@ -1242,9 +1458,10 @@ const PRIVACY_HTML = `
 <li><strong>Your agreement record:</strong> for as long as your account exists.</li>
 <li><strong>Feedback reports:</strong> deleted automatically after 12 months, or sooner if an administrator deletes them.</li>
 <li><strong>Clients:</strong> until an administrator removes the client. A record of who removed it and when is kept.</li>
+<li><strong>Care records and recordings:</strong> until the client is removed (for example, if agreement is withdrawn) or the pilot ends, then deleted from the cloud, unless the law requires them to be kept longer.</li>
 </ul>
 <h3>Who can see your information</h3>
-<p>Pilot administrators can see the people list, who cares for each client, which devices each account has used, the sign-in history and feedback reports. Carers on the same client see each other's names and shifts. They can't see the notes on your device, unless a note appears in a screenshot you send with feedback.</p>
+<p>Pilot administrators can see the people list, who cares for each client, which devices each account has used, the sign-in history and feedback reports. Carers on the same client see each other's names and shifts, and the client's care notes, recordings, flags, handovers and outings, including yours. Pilot administrators can see these too.</p>
 <h3>Your rights</h3>
 <p>You can ask to see, correct or delete the information we hold about you, or object to how we use it. Ask the administrator who invited you, who will pass your request to Workgroup (WA) Pty Ltd. If you're unhappy, you can complain to the UK Information Commissioner's Office (ico.org.uk) or, in Australia, the Office of the Australian Information Commissioner (oaic.gov.au).</p>
 <h3>Changes</h3>
@@ -1299,6 +1516,7 @@ function saveSession() {
   try { if (session && session.relayUrl) localStorage.setItem("nanacare.relay", session.relayUrl); } catch {}
   try { session ? localStorage.setItem(SESSION_KEY, JSON.stringify(session)) : localStorage.removeItem(SESSION_KEY); } catch {} }
 function signedOut(msg) {
+  if (rec.on) stopRecording(true);
   session = null; saveSession(); KEY = null; S = seed(); $("#sheetRoot").innerHTML = ""; handoverDraft = familySummary = null; showLogin(msg);
 }
 function showLogin(msg) {
@@ -1694,7 +1912,7 @@ async function showClients(manual) {
       <p class="muted" style="margin:0">Carers record short voice notes about the client's day. The app keeps the original recording, writes a tidy note and builds the handover for the next carer.</p>
       <div class="card small" style="display:grid;gap:8px">
         <div><strong>What is recorded:</strong> the carer's voice. Other voices nearby may be picked up.</div>
-        <div><strong>Who can see it:</strong> the carer on duty, the authorised family member, and health staff in an emergency.</div>
+        <div><strong>Who can see it:</strong> the client's carers and the pilot administrators (kept securely in the cloud, in the EU), the authorised family member, and health staff in an emergency.</div>
         <div><strong>Why:</strong> to keep an accurate record that protects the client and the carer.</div>
       </div>
       <p class="small" style="margin:0">The client, or the person holding Lasting Power of Attorney for health and welfare, must agree before this is used. This is asked once, when the client is added.</p>
@@ -1743,6 +1961,13 @@ async function showClients(manual) {
   listEl.querySelectorAll("[data-client]").forEach((b) => (b.onclick = () => { handoverDraft = familySummary = null; chooseClient(clients.find((c) => c.id === b.dataset.client)); }));
   if (!clients.length) $("#clNew").click();
 }
+
+/* ---------- iPhone keyboard ---------- */
+// On iPhones (especially from the Home Screen), closing the on-screen keyboard can leave fixed bars,
+// like the tabs at the bottom, part-way up the screen until the page is scrolled. Nudge it back.
+const settleViewport = () => setTimeout(() => { window.scrollBy(0, 1); window.scrollBy(0, -1); }, 60);
+document.addEventListener("focusout", (e) => { if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) settleViewport(); });
+if (window.visualViewport) { let lastH = visualViewport.height; visualViewport.addEventListener("resize", () => { if (visualViewport.height > lastH + 100) settleViewport(); lastH = visualViewport.height; }); }
 
 /* ---------- boot ---------- */
 checkStorage().then(() => { if (session && session.client && tab === "today") render(); });
