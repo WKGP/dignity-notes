@@ -388,7 +388,7 @@ const cloudOn = () => !!(session && session.token && !session.local && session.c
 // records from other phones are displayed here.
 const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SYNC_SHAPES = {
-  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", transcript: "str:30000", heard: "str:30000", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
+  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
   flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", resolvedTs: "num", resolvedBy: "id" } },
   handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", fromName: "str:60", toId: "id", text: "str:10000", source: "str:20" } },
   transfer: { req: ["outTs", "withWhom"], f: { outTs: "num", withWhom: "str:100", relationship: "str:100", purpose: "str:200", carerId: "id", backTs: "num", backNote: "str:2000", backCarerId: "id" } },
@@ -404,7 +404,7 @@ function cleanRecord(kind, data) {
     if (Array.isArray(t)) { if (!t.includes(v)) return null; out[k] = v; }
     else if (t === "num") { const n = Number(v); if (!Number.isFinite(n) || n < 0) return null; out[k] = n; }
     else if (t === "id") { if (typeof v !== "string" || !SYNC_ID.test(v)) return null; out[k] = v; }
-    else if (t === "cats") { if (!Array.isArray(v) || v.length > 20 || v.some((c) => typeof c !== "string" || c.length > 40)) return null; out[k] = v; }
+    else if (t === "cats") { if (!Array.isArray(v) || v.length > 20 || v.some((c) => typeof c !== "string" || c.length > 60)) return null; out[k] = v; }
     else { const max = Number(t.split(":")[1]); if (typeof v !== "string" || v.length > max) return null; out[k] = v; }
   }
   if (shape.req.some((k) => out[k] === undefined)) return null;
@@ -524,7 +524,7 @@ async function syncNow() {
         saveLocal();
       }
     } catch (e) { errors.push(e.message); }
-    if (still()) { syncState.error = errors[0] || ""; if (!errors.length) syncState.last = Date.now(); }
+    if (still()) { await loadPlan(); syncState.error = errors[0] || ""; if (!errors.length) syncState.last = Date.now(); }
   } finally {
     syncState.busy = false;
     if (KEY === key) { syncState.pending = unsynced().length; syncState.audioPending = unsentAudio().length; syncState.failed = countFailed(); }
@@ -627,9 +627,9 @@ function basicTidy(transcript) {
 const validTidy = (o) => o && typeof o.note === "string" && o.note.trim() && Array.isArray(o.categories) && Array.isArray(o.flags);
 async function tidy(transcript) {
   try {
-    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary() });
+    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary(), planSections: plan().sections.map((x) => x.title) });
     if (!validTidy(out)) throw new Error("Unexpected reply from the relay");
-    return { unclear: [], record_gaps: [], ...out, source: "ai" };
+    return { unclear: [], record_gaps: [], plan_sections: [], ...out, source: "ai" };
   } catch (e) {
     return { ...basicTidy(transcript), source: "basic", reason: e.message };
   }
@@ -650,6 +650,7 @@ function summaryPayload(mode, toId) {
     notes: shiftNotes().map((n) => ({ time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name, note: n.note })),
     flags: openFlags().filter((f) => !isExample(f)).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
     transfers: S.transfers.filter((t) => t.outTs >= shiftStart() || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
+    planGaps: mode === "handover" ? planGaps() : [],
     schedule: S.schedule.filter((s) => s.when > Date.now() && !isExample(s)).sort((a, b) => a.when - b.when).slice(0, 4).map((s) => `${dayLabel(s.when)} ${fmtTime(s.when)}: ${s.label}${s.detail ? " - " + s.detail : ""}`),
   };
 }
@@ -743,10 +744,11 @@ const WHO_TO_TELL = `<details class="small" style="margin-top:6px"><summary>Who 
     <li>Tell the family member or attorney, and your agency, as agreed for this client.</li>
     <li>Then add who you told to the note, so the record is complete.</li>
   </ul></details>`;
+const whoToTell = () => respectDoc() ? WHO_TO_TELL.replace("<ul", `<button class="btn secondary" data-opendoc="${esc(respectDoc().id)}" style="margin-top:6px;min-height:38px;padding:6px 12px;font-size:14px">Open the ReSPECT form (emergency plan)</button><ul`) : WHO_TO_TELL;
 function flagHTML(f, actions = true) {
   return `<div class="flag ${f.kind === "incident" ? "incident" : ""}">
     <div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}</span>
-    <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span>${f.kind === "incident" ? WHO_TO_TELL : ""}</div>
+    <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span>${f.kind === "incident" ? whoToTell() : ""}</div>
     ${actions ? `<button class="link" data-resolve="${esc(f.id)}">Resolved</button>` : ""}</div>`;
 }
 function bindResolve(root) {
@@ -803,6 +805,130 @@ function bindStorageBanner(root) {
   const i = $("#doInstall", root); if (i) i.onclick = async () => { try { installPrompt.prompt(); await installPrompt.userChoice; } catch {} installPrompt = null; await checkStorage(); render(); };
 }
 
+/* ---------- care plan ----------
+ * Each client's care plan (sections such as Personal care or Skin care, each with an urgency) and
+ * key documents (the ReSPECT form, risk assessments). Kept on the relay; a copy is kept with the
+ * client's notes on this phone so carers can read it without signal. Administrators change it.
+ */
+const PLAN_DEFAULTS = ["Mobility", "Night time support", "Nutrition and hydration", "Oral care", "Personal care", "Skin care", "Continence", "Medication", "Communication", "Social interests and activities", "Relationships"];
+const URGENCY_LABEL = { urgent: "Urgent", important: "Important", non_urgent: "Non urgent" };
+const DOC_KIND_LABEL = { respect: "ReSPECT form (emergency plan)", risk: "Risk assessment", care_plan: "Care plan", other: "Other document" };
+const plan = () => (S.plan && Array.isArray(S.plan.sections) ? S.plan : { sections: [], docs: [] });
+const planDocs = () => (S.plan && Array.isArray(S.plan.docs) ? S.plan.docs : []);
+const respectDoc = () => planDocs().find((d) => d.kind === "respect");
+const isAdminHere = () => !!(session && session.role === "admin");
+const urgencyPill = (u) => `<span class="chip ${u === "urgent" ? "incident" : u === "important" ? "follow" : ""}">${esc(URGENCY_LABEL[u] || "Non urgent")}</span>`;
+async function loadPlan() {
+  if (!cloudOn()) return;
+  const key = KEY;
+  try {
+    const out = await syncJSON("/plan/get", { client: session.client.id });
+    if (KEY !== key) return;
+    const before = JSON.stringify(S.plan || null);
+    S.plan = { sections: (out.plan && out.plan.sections) || [], updatedAt: out.plan && out.plan.updatedAt, updatedBy: out.plan && out.plan.updatedBy, docs: out.docs || [] };
+    if (JSON.stringify(S.plan) !== before) { saveLocal(); if (tab === "today" && !appBusy() && !userIsReading()) render(); }
+  } catch {}
+}
+// Open a document: from this phone if it's been opened before, otherwise from the cloud.
+async function openDoc(id) {
+  const d = planDocs().find((x) => x.id === id); if (!d) return toast("That document is no longer in the care plan");
+  let blob = await audioDB.get("doc_" + id);
+  if (!blob) {
+    if (!cloudOn() || !navigator.onLine) return toast("Connect to the internet to open this document the first time");
+    toast("Opening…");
+    try { const r = await syncFetch("/plan/doc/get", { body: JSON.stringify({ client: session.client.id, id }) }); blob = await r.blob(); await audioDB.put("doc_" + id, blob); }
+    catch (e) { return toast(e.status === 404 ? "That document isn't in the cloud any more" : "Couldn't open the document. Try again."); }
+  }
+  const url = URL.createObjectURL(new Blob([blob], { type: d.type }));
+  const a = Object.assign(document.createElement("a"), { href: url, target: "_blank", rel: "noopener" });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+// Buttons anywhere with data-opendoc="<id>" open that document.
+document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-opendoc]"); if (b) { e.preventDefault(); openDoc(b.dataset.opendoc); } });
+function planCardHTML() {
+  const p = plan(), docs = planDocs(), r = respectDoc();
+  if (!p.sections.length && !docs.length && !isAdminHere()) return "";
+  const order = { urgent: 0, important: 1, non_urgent: 2 };
+  const top = [...p.sections].sort((a, b) => order[a.urgency] - order[b.urgency]).slice(0, 4);
+  return `<div class="card"><div class="card-h"><h3>Care plan</h3><span class="muted small">${p.sections.length} sections · ${docs.length} documents</span></div>
+    ${r ? `<button class="btn secondary block" data-opendoc="${esc(r.id)}" style="margin-bottom:10px">Emergency information (ReSPECT form)</button>` : ""}
+    ${p.sections.length ? `<div class="list">${top.map((s) => `<div class="item"><div class="body"><div><strong>${esc(s.title)}</strong> ${urgencyPill(s.urgency)}</div><div class="muted small">${esc((s.text || "").slice(0, 90))}${(s.text || "").length > 90 ? "…" : ""}</div></div></div>`).join("")}</div>`
+      : `<div class="empty">No care plan yet.${isAdminHere() ? " Set one up so carers can see what each area of care involves." : ""}</div>`}
+    <div style="margin-top:10px"><button class="link" id="openPlan">${p.sections.length || docs.length ? "Open the care plan" : "Set up the care plan"}</button></div></div>`;
+}
+function openPlan() {
+  loadPlan();
+  const p = plan(), docs = planDocs(), r = respectDoc();
+  const s = sheet(`${sheetHead(`Care plan · ${esc(S.client.name)}`)}
+    ${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency information (ReSPECT form)</button>` : ""}
+    ${p.sections.length ? p.sections.map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}</summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "No details written yet.")}</p></details>`).join("")
+      : '<div class="empty">No sections yet.</div>'}
+    <div class="card" style="box-shadow:none;display:grid;gap:8px"><h3 style="font-size:17px;margin:0">Documents</h3>
+      ${docs.length ? docs.map((d) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><button class="link" data-opendoc="${esc(d.id)}" style="text-align:left">${esc(d.name)}</button><span class="tiny muted">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</span>${isAdminHere() ? `<button class="link small" data-deldoc="${esc(d.id)}" style="color:var(--incident)">Remove</button>` : ""}</div>`).join("") : '<p class="small muted" style="margin:0">No documents yet.</p>'}
+    </div>
+    ${p.updatedAt ? `<p class="tiny muted" style="margin:0">Last changed ${fmtDay(p.updatedAt)} ${fmtTime(p.updatedAt)}${p.updatedBy ? " by " + esc(p.updatedBy) : ""}.</p>` : ""}
+    ${isAdminHere() ? `<div class="row"><button class="btn secondary" id="plEdit">Edit care plan</button><button class="btn secondary" id="plUpload">Add a document</button></div>` : `<p class="tiny muted" style="margin:0">An administrator keeps the care plan up to date.</p>`}`);
+  if ($("#plEdit", s.root)) $("#plEdit", s.root).onclick = () => { s.close(); openPlanEdit(); };
+  if ($("#plUpload", s.root)) $("#plUpload", s.root).onclick = () => { s.close(); openDocUpload(); };
+  s.root.querySelectorAll("[data-deldoc]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
+    try { await syncJSON("/plan/doc/delete", { client: session.client.id, id: b.dataset.deldoc }); audioDB.del(["doc_" + b.dataset.deldoc]); S.plan.docs = planDocs().filter((d) => d.id !== b.dataset.deldoc); saveLocal(); s.close(); openPlan(); toast("Document removed"); }
+    catch (e) { toast(e.message); }
+  })));
+}
+function openPlanEdit() {
+  let rows = plan().sections.length ? plan().sections.map((x) => ({ ...x })) : PLAN_DEFAULTS.map((t) => ({ title: t, urgency: "non_urgent", text: "" }));
+  const s = sheet(`${sheetHead("Edit care plan")}<p class="small muted" style="margin:0">One section for each area of care. Write what carers need to know and do. Pilot: use made-up details only.</p><div id="plRows" style="display:grid;gap:12px"></div>
+    <button class="link" id="plAdd" style="justify-self:start">+ Add a section</button>
+    <button class="btn primary block" id="plSave">Save care plan</button>`, { guard: () => true });
+  const box = $("#plRows", s.root);
+  const read = () => { rows = [...box.querySelectorAll("[data-row]")].map((el) => ({ title: $(".plT", el).value.trim(), urgency: $(".plU", el).value, text: $(".plX", el).value })); };
+  const draw = () => {
+    box.innerHTML = rows.map((r, i) => `<div class="card" data-row="${i}" style="box-shadow:none;display:grid;gap:8px">
+      <div class="row" style="gap:8px"><input class="plT" type="text" value="${esc(r.title)}" maxlength="60" aria-label="Section name" style="flex:1 1 160px"><select class="plU" aria-label="Urgency">${Object.entries(URGENCY_LABEL).map(([k, l]) => `<option value="${k}" ${r.urgency === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <textarea class="plX grow" maxlength="4000" placeholder="What carers need to know and do" style="min-height:80px">${esc(r.text)}</textarea>
+      <button class="link small" data-rm="${i}" style="justify-self:start;color:var(--incident)">Remove section</button></div>`).join("");
+    box.querySelectorAll("textarea.grow").forEach(autoGrow);
+    box.querySelectorAll("[data-rm]").forEach((b) => (b.onclick = () => { read(); rows.splice(+b.dataset.rm, 1); draw(); }));
+  };
+  draw();
+  $("#plAdd", s.root).onclick = () => { read(); rows.push({ title: "", urgency: "non_urgent", text: "" }); draw(); box.lastElementChild.querySelector(".plT").focus(); };
+  $("#plSave", s.root).onclick = async (e) => {
+    read(); const sections = rows.filter((r) => r.title);
+    e.currentTarget.disabled = true;
+    try { const out = await syncJSON("/plan/save", { client: session.client.id, sections }); S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal(); s.close(); render(); toast("Care plan saved"); }
+    catch (err) { toast(err.message || "Couldn't save the care plan"); $("#plSave", s.root).disabled = false; }
+  };
+}
+function openDocUpload() {
+  const s = sheet(`${sheetHead("Add a document")}
+    <div class="warn small">Pilot: upload made-up documents only, never a real person's ReSPECT form or assessments.</div>
+    <label class="f">Type<select id="duKind">${Object.entries(DOC_KIND_LABEL).map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
+    <label class="f">Name<input type="text" id="duName" maxlength="80" placeholder="e.g. Moving and handling risk assessment"></label>
+    <label class="f">File (PDF, JPG or PNG, up to 10 MB)<input type="file" id="duFile" accept="application/pdf,image/jpeg,image/png"></label>
+    <button class="btn primary block" id="duGo">Upload</button>`);
+  $("#duFile", s.root).onchange = (e) => { const f = e.target.files[0]; if (f && !$("#duName", s.root).value) $("#duName", s.root).value = f.name.replace(/\.[^.]+$/, ""); };
+  $("#duGo", s.root).onclick = async (e) => {
+    const f = $("#duFile", s.root).files[0]; if (!f) return toast("Choose a file first");
+    if (!/^(application\/pdf|image\/jpeg|image\/png)$/.test(f.type)) return toast("Documents must be a PDF, JPG or PNG");
+    if (f.size > 10 * 1024 * 1024) return toast("Documents can be up to 10 MB");
+    const kind = $("#duKind", s.root).value, name = $("#duName", s.root).value.trim() || f.name;
+    e.currentTarget.disabled = true; e.currentTarget.textContent = "Uploading…";
+    try {
+      const r = await syncFetch(`/plan/doc/put?client=${encodeURIComponent(session.client.id)}&kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`, { headers: { "Content-Type": f.type }, body: f });
+      const { doc } = await r.json();
+      S.plan = { ...plan(), docs: [doc, ...planDocs()] }; saveLocal(); s.close(); render(); toast("Document added");
+    } catch (err) { toast(err.message || "Couldn't upload the document"); const b = $("#duGo", s.root); if (b) { b.disabled = false; b.textContent = "Upload"; } }
+  };
+}
+// Urgent and important care plan sections with no notes this shift (only once something has been noted).
+function planGaps() {
+  const titles = plan().sections.filter((x) => x.urgency === "urgent" || x.urgency === "important").map((x) => x.title); const notes = shiftNotes();
+  if (!titles.length || !notes.length) return [];
+  const covered = new Set(notes.flatMap((n) => n.planSections || []));
+  return titles.filter((t) => !covered.has(t));
+}
+
 function renderToday() {
   const v = $("#view-today"); const now = new Date(); const h = now.getHours();
   const greet = h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
@@ -818,6 +944,7 @@ function renderToday() {
     <button class="cta" id="ctaRec"><span class="mic">${ICON.mic}</span><span><strong>Record care note</strong><span>Speak as things happen. You check it before it's saved.</span></span></button>
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="muted small">${flags.length || "None"} open</span></div>
       <div class="flags">${flags.length ? flags.map((f) => flagHTML(f)).join("") : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div></div>
+    ${planCardHTML()}
     <div class="card"><div class="card-h"><h3>Previous handover</h3>${ho ? `<span class="muted small">${esc(carer(ho.fromId, ho.fromName).name)} · ${dayLabel(ho.ts)} ${fmtTime(ho.ts)}</span>` : ""}</div>
       ${ho ? `<p class="note-text" style="white-space:pre-line">${esc(ho.text)}</p>` : '<div class="empty">No handover yet.</div>'}</div>
     <div class="card"><div class="card-h"><h3>Today &amp; coming up</h3></div>
@@ -828,6 +955,7 @@ function renderToday() {
       ${activeTransfer() ? `<button class="btn secondary block" id="ctaBack">${ICON.out} Back in my care</button>` : `<button class="btn secondary block" id="ctaOut">${ICON.out} Hand over to someone else</button>`}</div>
     ${latest ? `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId, latest.carerName).name)} · ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p></div>` : ""}`;
   $("#ctaRec").onclick = () => openRecorder();
+  if ($("#openPlan", v)) $("#openPlan", v).onclick = () => (plan().sections.length || planDocs().length || !isAdminHere() ? openPlan() : openPlanEdit());
   bindStorageBanner(v);
   $("#addEvent").onclick = () => openEventSheet();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
@@ -1440,6 +1568,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
           <select id="rvAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
           <span class="tiny muted">A change applies to your next recording. You can also change it in Settings.</span>` : ""}</div>` : ""}
       ${gapsHTML(draft)}
+      ${draft.plan_sections && draft.plan_sections.length ? `<div><div class="eyebrow" style="margin-bottom:6px">Care plan</div><div class="chips">${draft.plan_sections.map((t) => `<span class="chip accent">${esc(t)}</span>`).join("")}</div></div>` : ""}
       <div><div class="eyebrow" style="margin-bottom:6px">Covers</div><div class="chips">${draft.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("") || '<span class="small muted">No categories found</span>'}</div></div>
       <div><div class="eyebrow" style="margin-bottom:6px">Flags</div><div class="flags" id="rvFlags">${draft.flags.length ? draft.flags.map((f, i) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"}</span><strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div><button class="link" data-rmflag="${i}">Remove</button></div>`).join("") : '<div class="empty">No flags. Nothing to note.</div>'}</div></div>
       <div class="card" style="display:grid;gap:10px;box-shadow:none">
@@ -1526,7 +1655,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
         }
       }
       const ts = Date.now();
-      S.notes.push({ id, ts, approvedTs: ts, carerId: stampId(), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard } : {}), note, categories: draft.categories, audioId, source: draft.source });
+      S.notes.push({ id, ts, approvedTs: ts, carerId: stampId(), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard } : {}), note, categories: draft.categories, ...(draft.plan_sections && draft.plan_sections.length ? { planSections: draft.plan_sections } : {}), audioId, source: draft.source });
       draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
       if (!save()) {
         // Not saved on this phone: take it back out so it isn't sent to the cloud half-saved.
@@ -1545,9 +1674,9 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-06.4";
+const PRIVACY_VERSION = "2026-10-07.5";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 4 · 6 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 5 · 7 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -1562,6 +1691,7 @@ const PRIVACY_HTML = `
 <li><strong>Feedback:</strong> if you report a problem or suggest an idea, your messages and the helper's replies, any screenshot you add, your name, username and role, which screen and page you were on, and the summary and analysis the AI writes for the developer. A screenshot shows whatever was on your screen, so avoid screens that show care notes.</li>
 </ul>
 <h3>Care notes and recordings</h3>
+<p>Each client's <strong>care plan and documents</strong> (such as a ReSPECT form or risk assessments) are kept in our cloud storage, added by pilot administrators, and shown to the client's carers. A copy of the care plan is kept on carers' devices so it can be read without signal.</p>
 <p>Care notes (with the words you spoke), voice recordings, flags, handovers and outings are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Family messages and your settings stay on your device only.</p>
 <h3>AI note writing</h3>
 <p>When you ask the user manual a question, your question (nothing else) is sent through our relay to Anthropic so the AI can answer it from the manual. It isn't stored.</p>
@@ -1583,7 +1713,7 @@ const PRIVACY_HTML = `
 <li><strong>Your agreement record:</strong> for as long as your account exists.</li>
 <li><strong>Feedback reports:</strong> deleted automatically after 12 months, or sooner if an administrator deletes them.</li>
 <li><strong>Clients:</strong> until an administrator removes the client. A record of who removed it and when is kept.</li>
-<li><strong>Care records and recordings:</strong> until the client is removed (for example, if agreement is withdrawn) or the pilot ends, then deleted from the cloud, unless the law requires them to be kept longer.</li>
+<li><strong>Care records, recordings, care plans and documents:</strong> until the client is removed (for example, if agreement is withdrawn) or the pilot ends, then deleted from the cloud, unless the law requires them to be kept longer.</li>
 </ul>
 <h3>Who can see your information</h3>
 <p>Pilot administrators can see the people list, who cares for each client, which devices each account has used, the sign-in history and feedback reports. Carers on the same client see each other's names and shifts, and the client's care notes, recordings, flags, handovers and outings, including yours. Pilot administrators can see these too.</p>
