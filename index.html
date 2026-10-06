@@ -808,6 +808,12 @@ try { logOpen = localStorage.getItem("dignitynotes.logopen") === "1"; } catch {}
 // Where a word appears in a text, with a few words either side ("…had her porridge at…").
 // "\"Muppet cream\" – name of the cream is unclear" -> "Muppet cream": the words to look for.
 const unclearWords = (w) => { const q = String(w).match(/["“]([^"”]+)["”]/); return (q ? q[1] : String(w).split(/\s[–-]\s|:/)[0]).trim(); };
+// Text boxes that grow to show all their words, so nothing hides behind a scroll inside the box.
+function autoGrow(el) {
+  if (!el) return;
+  const fit = () => { el.style.height = "auto"; el.style.height = el.scrollHeight + 2 + "px"; };
+  fit(); if (!el.dataset.grows) { el.dataset.grows = "1"; el.addEventListener("input", fit); }
+}
 function wordInContext(text, word) {
   const t = String(text || ""), i = t.toLowerCase().indexOf(String(word).toLowerCase());
   if (!word || i < 0) return null;
@@ -1404,7 +1410,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
       <div><div class="eyebrow" style="margin-bottom:6px">Flags</div><div class="flags" id="rvFlags">${draft.flags.length ? draft.flags.map((f, i) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"}</span><strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div><button class="link" data-rmflag="${i}">Remove</button></div>`).join("") : '<div class="empty">No flags. Nothing to note.</div>'}</div></div>
       <div class="card" style="display:grid;gap:10px;box-shadow:none">
         ${blobUrl ? `<audio controls src="${blobUrl}"></audio>` : ""}
-        <label class="f">What you said${spoken ? ' <span class="muted" style="font-weight:400">(fix any misheard words)</span>' : ""}<textarea id="rvSaid" style="min-height:96px">${esc(transcript)}</textarea></label>
+        <label class="f">What you said${spoken ? ' <span class="muted" style="font-weight:400">(fix any misheard words)</span>' : ""}<textarea id="rvSaid" class="grow" style="min-height:180px">${esc(transcript)}</textarea></label>
         ${fixes.length ? `<div class="small" style="display:grid;gap:6px"><span class="muted">Fixed from your words:</span><div class="chips">${fixes.map((r) => `<span class="chip accent">${esc(r.from)} → ${esc(r.to)} <button class="link small" data-undo="${esc(r.key)}" style="padding:0 0 0 4px">Undo</button></span>`).join("")}</div></div>` : ""}
         ${needsRewrite ? '<div class="warn small">The care note above was written before this change. Rewrite it so it matches.</div>' : ""}
         <button class="btn secondary" id="rvRewrite" ${needsRewrite ? "" : "hidden"}>Rewrite the note from these words</button>
@@ -1417,6 +1423,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
       <div class="row"><button class="btn ghost" id="rvAgain">Re-record</button><button class="btn primary" id="rvSave">Save to record</button></div>
       <button class="link" id="rvDiscard" style="justify-self:center;color:var(--ink-2)">Discard</button>`;
     const said = $("#rvSaid", rv);
+    rv.querySelectorAll("textarea.grow, #rvNote").forEach(autoGrow);
     rv.querySelectorAll("[data-showword]").forEach((b) => (b.onclick = () => {
       // Select the word where it is, so it's easy to see and fix.
       const w0 = draft.unclear[+b.dataset.showword];
