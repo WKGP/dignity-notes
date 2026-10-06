@@ -316,6 +316,8 @@ function loadUser() {
     let old = null;
     try { old = JSON.parse(localStorage.getItem(legacy) || "null"); } catch {}
     S = old && old.client && old.client.name === session.client.name ? old : seed();
+    // A real client starts with an empty record; the example day is only for trying the app locally.
+    if (S !== old && !session.local) Object.assign(S, { notes: [], flags: [], handovers: [], schedule: [], messages: [] });
     S.client = { name: session.client.name }; S.consent = session.client.consent;
     if (save() && S === old) try { localStorage.removeItem(legacy); } catch {}
   }
@@ -335,7 +337,10 @@ function roster() {
   if (!list.some((c) => c.id === myId())) list.push({ id: myId(), name: (session && (session.meName || session.name || session.username)) || "Me", shift: "", notOnRoster: true });
   return list;
 }
-const carer = (id) => roster().find((c) => c.id === id) || S.carers.find((c) => c.id === id) || { id, name: "Unknown", shift: "" };
+// fallback: the name stored with a record, for carers no longer on the roster (or administrators).
+const carer = (id, fallback) => roster().find((c) => c.id === id) || S.carers.find((c) => c.id === id) || { id, name: fallback || "Unknown", shift: "" };
+// Who records are stamped with: whoever is signed in (only the local try-out lets you pick).
+const stampId = () => (session && !session.local ? myId() : S.onDuty);
 const onDuty = () => carer(S.onDuty);
 const openFlags = () => S.flags.filter((f) => f.status === "open");
 const activeTransfer = () => S.transfers.find((t) => !t.backTs);
@@ -351,7 +356,7 @@ const audioDB = (() => {
   // iPhones can drop the storage connection while the app is in the background: start afresh next time.
   const tx = async (mode, fn) => { try { const db = await open(); return await new Promise((res, rej) => { const t = db.transaction("clips", mode); const req = fn(t.objectStore("clips")); t.oncomplete = () => res(req && req.result); t.onerror = t.onabort = () => rej(t.error || new Error("Storage failed")); }); } catch (e) { dbp = null; throw e; } };
   return {
-    put: (id, blob) => tx("readwrite", (s) => s.put(blob, id)).then(() => true, () => false),
+    put: (id, blob) => tx("readwrite", (s) => s.put(blob, id)).catch(() => tx("readwrite", (s) => s.put(blob, id))).then(() => true, () => false),
     get: (id) => tx("readonly", (s) => s.get(id)).catch(() => null),
     getStrict: (id) => tx("readonly", (s) => s.get(id)), // throws if the phone's storage couldn't be read
     del: (ids) => tx("readwrite", (s) => { ids.forEach((id) => s.delete(id)); }).catch(() => null),
@@ -381,9 +386,9 @@ const cloudOn = () => !!(session && session.token && !session.local && session.c
 // records from other phones are displayed here.
 const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SYNC_SHAPES = {
-  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", transcript: "str:30000", heard: "str:30000", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
+  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", transcript: "str:30000", heard: "str:30000", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
   flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", resolvedTs: "num", resolvedBy: "id" } },
-  handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", toId: "id", text: "str:10000", source: "str:20" } },
+  handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", fromName: "str:60", toId: "id", text: "str:10000", source: "str:20" } },
   transfer: { req: ["outTs", "withWhom"], f: { outTs: "num", withWhom: "str:100", relationship: "str:100", purpose: "str:200", carerId: "id", backTs: "num", backNote: "str:2000", backCarerId: "id" } },
 };
 function cleanRecord(kind, data) {
@@ -434,11 +439,14 @@ async function syncFetch(path, init) {
   finally { clearTimeout(timer); }
 }
 const syncJSON = (path, body) => syncFetch(path, { body: JSON.stringify(body) }).then((r) => r.json());
+// Something is open (recording, a sheet such as "Check before saving", or a full screen): don't
+// interrupt it with a reload, a sign-out or the privacy notice; wait until it's closed.
+const appBusy = () => !!(rec.on || rec.starting || $("#sheetRoot").innerHTML.trim() || $("#fullRoot").innerHTML.trim());
 // Sign-in ended or a new privacy notice: ask only when nothing is open and nobody is recording.
 function handleSyncBlocked() {
   const b = syncState.blocked;
   if (!b || !session || b.token !== session.token) { syncState.blocked = null; return false; }
-  if (rec.on || $("#sheetRoot").innerHTML.trim() || $("#fullRoot").innerHTML.trim()) return true;
+  if (appBusy()) return true;
   syncState.blocked = null;
   if (b.why === "signin") signedOut("Your sign-in has ended. Sign in again to carry on.");
   else { session.privacyAccepted = null; saveSession(); showPrivacy(() => afterSignIn(true)); }
@@ -501,11 +509,13 @@ async function syncNow() {
           const arr = S[SYNC_KINDS[kind]], data = cleanRecord(kind, raw);
           if (!arr || !data || data.id !== id) continue;
           const i = arr.findIndex((x) => x.id === id);
-          if (i < 0) { arr.push(data); changed = true; }
+          const isNew = i < 0;
+          if (isNew) { arr.push(data); changed = true; }
           else if (mtOf(arr[i]) < mtOf(data)) { arr[i] = { ...arr[i], ...data }; changed = true; }
           const k = kind + ":" + id; si.sent[k] = Math.max(si.sent[k] || 0, mtOf(data));
-          // A recording another phone made is in the cloud already, so this phone never uploads it.
-          if (kind === "note" && data.audioId && !si.audio[data.audioId]) si.audio[data.audioId] = "cloud";
+          // A note new to this phone came from another phone (or from the cloud after this phone was
+          // cleared): its recording is the cloud's job. This phone's own recordings are uploaded by step 2.
+          if (kind === "note" && isNew && data.audioId && !si.audio[data.audioId]) si.audio[data.audioId] = "cloud";
         }
         si.seq = out.seq || si.seq; more = !!out.more;
         saveLocal();
@@ -515,7 +525,7 @@ async function syncNow() {
   } finally {
     syncState.busy = false;
     if (KEY === key) { syncState.pending = unsynced().length; syncState.audioPending = unsentAudio().length; syncState.failed = countFailed(); }
-    if (changed && KEY === key) render();
+    if (changed && KEY === key) { if (appBusy() || userIsReading()) syncState.redraw = true; else render(); }
     if (syncState.blocked) handleSyncBlocked();
     else if (syncState.again) scheduleSync(300);
   }
@@ -557,8 +567,12 @@ async function relay(path, body, { auth = true } = {}) {
     if (auth && session && session.token) headers.Authorization = "Bearer " + session.token;
     const r = await fetch(base + path, { method: "POST", signal: ctl.signal, headers, body: JSON.stringify(body || {}) });
     const j = await r.json().catch(() => ({}));
-    if (r.status === 401 && auth && session && !session.local) signedOut("Your sign-in has ended. Sign in again to carry on.");
-    if (r.status === 428 && session) { session.privacyAccepted = null; saveSession(); $("#sheetRoot").innerHTML = ""; showPrivacy(() => afterSignIn(true)); }
+    // Mid-task (e.g. writing the note after a recording), never sign out or open a screen: the task
+    // carries on with the basic offline version, and the sign-in is asked for once it's finished.
+    if ((r.status === 401 && auth && session && !session.local) || (r.status === 428 && session)) {
+      syncState.blocked = { why: r.status === 401 ? "signin" : "privacy", token: session.token };
+      handleSyncBlocked();
+    }
     if (!r.ok) throw new Error(j.error || "Error " + r.status);
     return j;
   } catch (e) { throw new Error(e.name === "AbortError" ? "AI took too long" : e.message); }
@@ -617,17 +631,23 @@ async function tidy(transcript) {
     return { ...basicTidy(transcript), source: "basic", reason: e.message };
   }
 }
+const isExample = (r) => !!r && (r.source === "example" || DEMO_IDS.has(r.id) || /^s[123]$|^m0$/.test(r.id));
+// This shift: since the last handover (at most 12 hours), so it doesn't repeat what was handed over.
+function shiftStart() {
+  const last = S.handovers.filter((h) => !isExample(h)).reduce((m, h) => Math.max(m, h.ts), 0);
+  return Math.max(Date.now() - 12 * 36e5, last);
+}
 function shiftNotes() {
-  const since = Date.now() - 12 * 36e5;
-  return S.notes.filter((n) => n.ts >= since).sort((a, b) => a.ts - b.ts);
+  const since = shiftStart();
+  return S.notes.filter((n) => n.ts >= since && !isExample(n)).sort((a, b) => a.ts - b.ts);
 }
 function summaryPayload(mode, toId) {
   return {
     mode, client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
-    notes: shiftNotes().map((n) => ({ time: fmtTime(n.ts), carer: carer(n.carerId).name, note: n.note })),
-    flags: openFlags().map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
-    transfers: S.transfers.filter((t) => isToday(t.outTs)).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
-    schedule: S.schedule.filter((s) => s.when > Date.now()).sort((a, b) => a.when - b.when).slice(0, 4).map((s) => `${dayLabel(s.when)} ${fmtTime(s.when)}: ${s.label}${s.detail ? " - " + s.detail : ""}`),
+    notes: shiftNotes().map((n) => ({ time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name, note: n.note })),
+    flags: openFlags().filter((f) => !isExample(f)).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
+    transfers: S.transfers.filter((t) => t.outTs >= shiftStart() || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
+    schedule: S.schedule.filter((s) => s.when > Date.now() && !isExample(s)).sort((a, b) => a.when - b.when).slice(0, 4).map((s) => `${dayLabel(s.when)} ${fmtTime(s.when)}: ${s.label}${s.detail ? " - " + s.detail : ""}`),
   };
 }
 function basicSummary(p) {
@@ -695,7 +715,7 @@ function flagHTML(f, actions = true) {
 }
 function bindResolve(root) {
   root.querySelectorAll("[data-resolve]").forEach((b) => b.addEventListener("click", () => {
-    const f = S.flags.find((x) => x.id === b.dataset.resolve); f.status = "resolved"; f.resolvedTs = Date.now(); f.resolvedBy = S.onDuty; touch(f);
+    const f = S.flags.find((x) => x.id === b.dataset.resolve); f.status = "resolved"; f.resolvedTs = Date.now(); f.resolvedBy = stampId(); touch(f);
     save(); render(); toast("Marked as resolved");
   }));
 }
@@ -762,7 +782,7 @@ function renderToday() {
     <button class="cta" id="ctaRec"><span class="mic">${ICON.mic}</span><span><strong>Record care note</strong><span>Speak as things happen. You check it before it's saved.</span></span></button>
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="muted small">${flags.length || "None"} open</span></div>
       <div class="flags">${flags.length ? flags.map((f) => flagHTML(f)).join("") : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div></div>
-    <div class="card"><div class="card-h"><h3>Previous handover</h3>${ho ? `<span class="muted small">${esc(carer(ho.fromId).name)} · ${dayLabel(ho.ts)} ${fmtTime(ho.ts)}</span>` : ""}</div>
+    <div class="card"><div class="card-h"><h3>Previous handover</h3>${ho ? `<span class="muted small">${esc(carer(ho.fromId, ho.fromName).name)} · ${dayLabel(ho.ts)} ${fmtTime(ho.ts)}</span>` : ""}</div>
       ${ho ? `<p class="note-text" style="white-space:pre-line">${esc(ho.text)}</p>` : '<div class="empty">No handover yet.</div>'}</div>
     <div class="card"><div class="card-h"><h3>Today &amp; coming up</h3></div>
       <div class="list">${sched.length ? sched.map((s) => `<div class="item ${s.when < Date.now() ? "past" : ""}"><div class="when">${fmtTime(s.when)}</div><div class="body"><div><strong>${esc(s.label)}</strong></div><div class="muted small">${dayLabel(s.when)}${s.detail ? " · " + esc(s.detail) : ""}</div></div></div>`).join("") : '<div class="empty">Nothing scheduled.</div>'}</div>
@@ -770,7 +790,7 @@ function renderToday() {
     <div class="card"><div class="card-h"><h3>Going out with someone else?</h3></div>
       <p class="small muted" style="margin:0 0 12px">Record when an authorised person takes ${esc(S.client.name)} out, so it's clear they were not in your care.</p>
       ${activeTransfer() ? `<button class="btn secondary block" id="ctaBack">${ICON.out} Back in my care</button>` : `<button class="btn secondary block" id="ctaOut">${ICON.out} Hand over to someone else</button>`}</div>
-    ${latest ? `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId).name)} · ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p></div>` : ""}`;
+    ${latest ? `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId, latest.carerName).name)} · ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p></div>` : ""}`;
   $("#ctaRec").onclick = () => openRecorder();
   bindStorageBanner(v);
   $("#addEvent").onclick = () => openEventSheet();
@@ -832,7 +852,7 @@ function renderLog() {
     if (it.type === "note") {
       const n = it.n; const fl = S.flags.filter((f) => f.noteId === n.id);
       return head + `<article class="card entry">
-        <div class="entry-top"><span class="t">${fmtTime(n.ts)}</span><span class="muted">${esc(carer(n.carerId).name)}</span>${n.source === "example" ? '<span class="chip">Example</span>' : ""}</div>
+        <div class="entry-top"><span class="t">${fmtTime(n.ts)}</span><span class="muted">${esc(carer(n.carerId, n.carerName).name)}</span>${n.source === "example" ? '<span class="chip">Example</span>' : ""}</div>
         ${fl.length ? `<div class="chips">${fl.map((f) => `<span class="chip ${f.kind === "incident" ? "incident" : "follow"}">${esc(f.title)}</span>`).join("")}</div>` : ""}
         <p class="note-text">${esc(n.note)}</p>
         <div class="chips">${n.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>
@@ -840,12 +860,12 @@ function renderLog() {
           ${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}"></audio>` : ""}
           ${n.heard ? `<p class="small muted" style="margin:8px 0 0"><strong>The phone heard:</strong> ${esc(n.heard)}</p>
           <p class="small muted" style="margin:6px 0 0"><strong>Checked by the carer:</strong> ${esc(n.transcript)}</p>` : `<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p>`}
-          <p class="tiny muted" style="margin:6px 0 0">Approved by ${esc(carer(n.carerId).name)} at ${fmtTime(n.approvedTs || n.ts)}</p></details>
+          <p class="tiny muted" style="margin:6px 0 0">Approved by ${esc(carer(n.carerId, n.carerName).name)} at ${fmtTime(n.approvedTs || n.ts)}</p></details>
       </article>`;
     }
     if (it.type === "out") return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip follow">Out of carer's care</span></div><div class="small">${esc(S.client.name)} went out with <strong>${esc(it.t.withWhom)}</strong>${it.t.relationship ? " (" + esc(it.t.relationship) + ")" : ""}${it.t.purpose ? " for " + esc(it.t.purpose) : ""}. Logged by ${esc(carer(it.t.carerId).name)}.</div></div>`;
     if (it.type === "back") return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Back in carer's care</span></div><div class="small">Returned from ${esc(it.t.withWhom)}.${it.t.backNote ? " " + esc(it.t.backNote) : ""}</div></div>`;
-    return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Handover</span><span class="muted">${esc(carer(it.h.fromId).name)} → ${esc(it.h.toId ? carer(it.h.toId).name : "next carer")}</span></div><details ${logOpen ? "open" : ""}><summary>Read handover</summary><p class="small" style="white-space:pre-line;margin:0">${esc(it.h.text)}</p></details></div>`;
+    return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Handover</span><span class="muted">${esc(carer(it.h.fromId, it.h.fromName).name)} → ${esc(it.h.toId ? carer(it.h.toId).name : "next carer")}</span></div><details ${logOpen ? "open" : ""}><summary>Read handover</summary><p class="small" style="white-space:pre-line;margin:0">${esc(it.h.text)}</p></details></div>`;
   }).join("");
   v.innerHTML = `<div class="hello"><h2>Record log</h2><p>Every saved note, outing and handover, newest first.</p></div>
     <div class="seg" role="group" aria-label="Filter">${[["all", "Everything"], ["incident", "Incidents"], ["follow", "To note"]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${logFilter === k}">${l}</button>`).join("")}</div>
@@ -868,7 +888,7 @@ function renderHandover() {
       ${handoverDraft ? `
         ${sourceTag(handoverDraft.source, handoverDraft.reason)}
         <label class="f" style="margin-top:10px">Handover (edit if needed)<textarea id="hoText" class="note-edit">${esc(handoverDraft.text)}</textarea></label>
-        ${others.length ? `<label class="f" style="margin-top:12px">Handing over to<select id="hoTo">${others.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}${c.shift ? " · " + esc(c.shift) : ""}</option>`).join("")}</select></label>`
+        ${others.length ? `<label class="f" style="margin-top:12px">Handing over to<select id="hoTo"><option value="">Choose who…</option><option value="next">Whoever is on next</option>${others.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}${c.shift ? " · " + esc(c.shift) : ""}</option>`).join("")}</select></label>`
           : `<p class="small muted" style="margin:12px 0 0">No other carers are on ${esc(S.client.name)} yet. The handover is saved for the next carer. An administrator can add carers in Manage people.</p>`}
         <div class="row" style="margin-top:14px"><button class="btn ghost" id="hoRedo">Prepare again</button><button class="btn primary" id="hoSave">Approve and hand over</button></div>`
       : `<p class="small muted" style="margin:0 0 12px">When your shift ends, prepare the handover. You can edit it before approving.</p>
@@ -881,8 +901,9 @@ function renderHandover() {
   if ($("#hoPrep")) $("#hoPrep").onclick = (e) => prep(e.currentTarget);
   if ($("#hoRedo")) $("#hoRedo").onclick = (e) => prep(e.currentTarget);
   if ($("#hoSave")) $("#hoSave").onclick = () => {
-    const toId = $("#hoTo") ? $("#hoTo").value : null; const text = $("#hoText").value.trim(); if (!text) return toast("The handover is empty");
-    S.handovers.push({ id: uid(), ts: Date.now(), fromId: S.onDuty, toId, text, source: handoverDraft.source });
+    if ($("#hoTo") && !$("#hoTo").value) { $("#hoTo").focus(); return toast("Choose who you're handing over to"); }
+    const toId = $("#hoTo") && $("#hoTo").value !== "next" ? $("#hoTo").value : null; const text = $("#hoText").value.trim(); if (!text) return toast("The handover is empty");
+    S.handovers.push({ id: uid(), ts: Date.now(), fromId: stampId(), toId, text, source: handoverDraft.source });
     handoverDraft = null; save(); go("today"); toast(toId ? `Handed over to ${carer(toId).name}` : "Handover saved for the next carer");
   };
 }
@@ -941,7 +962,11 @@ function openCarerSheet() {
   const s = sheet(`${sheetHead("Who's on duty?")}
     <div class="list card">${roster().map((c) => `<button class="item" data-c="${esc(c.id)}" style="border-left:0;border-right:0;border-bottom:0;background:none;text-align:left;width:100%;align-items:center"><span class="avatar">${esc(c.name.charAt(0))}</span><span class="body"><strong>${esc(c.name)}</strong><div class="small muted">${esc(c.shift || "No shift set")}</div></span>${c.id === S.onDuty ? '<span class="chip accent">On duty</span>' : ""}</button>`).join("")}</div>
     <p class="small muted" style="margin:0">Every note is stamped with the carer on duty. Use Handover at the end of a shift to pass on properly. Who cares for ${esc(S.client.name)} is set by an administrator in Manage people.</p>`);
-  s.root.querySelectorAll("[data-c]").forEach((b) => (b.onclick = () => { S.onDuty = b.dataset.c; save(); s.close(); render(); toast(`${onDuty().name} is now on duty`); }));
+  s.root.querySelectorAll("[data-c]").forEach((b) => (b.onclick = () => {
+    // Real accounts: notes are always saved under the person signed in on this phone.
+    if (session && !session.local) return toast(b.dataset.c === myId() ? "You're on duty on this phone" : "Each carer signs in on their own phone, so their notes carry their name");
+    S.onDuty = b.dataset.c; save(); s.close(); render(); toast(`${onDuty().name} is now on duty`);
+  }));
 }
 
 function openTransferSheet() {
@@ -953,7 +978,7 @@ function openTransferSheet() {
     <button class="btn primary block" id="trSave">Confirm handover at ${fmtTime(Date.now())}</button>`);
   $("#trSave").onclick = () => {
     const who = $("#trWho").value.trim(); if (!who) return toast("Enter who is taking them");
-    S.transfers.push({ id: uid(), outTs: Date.now(), withWhom: who, relationship: $("#trRel").value.trim(), purpose: $("#trWhy").value.trim(), carerId: S.onDuty });
+    S.transfers.push({ id: uid(), outTs: Date.now(), withWhom: who, relationship: $("#trRel").value.trim(), purpose: $("#trWhy").value.trim(), carerId: stampId() });
     save(); s.close(); render(); toast(`${S.client.name} is now with ${who}`);
   };
 }
@@ -963,7 +988,7 @@ function openReturnSheet() {
     <p class="small" style="margin:0">${esc(S.client.name)} went out with <strong>${esc(t.withWhom)}</strong> at ${fmtTime(t.outTs)}.</p>
     <label class="f">Anything to note on return? (optional)<input type="text" id="bkNote" placeholder="e.g. Had lunch out, seemed tired" autocomplete="off"></label>
     <button class="btn primary block" id="bkSave">Confirm back at ${fmtTime(Date.now())}</button>`);
-  $("#bkSave").onclick = () => { t.backTs = Date.now(); t.backNote = $("#bkNote").value.trim(); t.backCarerId = S.onDuty; touch(t); save(); s.close(); render(); toast("Back in your care"); };
+  $("#bkSave").onclick = () => { t.backTs = Date.now(); t.backNote = $("#bkNote").value.trim(); t.backCarerId = stampId(); touch(t); save(); s.close(); render(); toast("Back in your care"); };
 }
 function openEventSheet() {
   const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1);
@@ -975,7 +1000,7 @@ function openEventSheet() {
     <label class="f" style="flex:1">Time<input type="text" id="evTime" value="${pad(d.getHours())}:00" inputmode="numeric"></label></div>
     <button class="btn primary block" id="evSave">Add</button>`);
   $("#evSave").onclick = () => {
-    const label = $("#evLabel").value.trim(); const m = $("#evTime").value.match(/^(\d{1,2})[:.](\d{2})$/);
+    const label = $("#evLabel").value.trim(); const m = $("#evTime").value.match(/^([01]?\d|2[0-3])[:.]([0-5]\d)$/);
     if (!label) return toast("Enter what it is"); if (!m) return toast("Time should look like 14:30");
     const w = new Date(); w.setHours(+m[1], +m[2], 0, 0);
     S.schedule.push({ id: uid(), when: w.getTime() + +$("#evDay").value * 864e5, label, detail: $("#evDetail").value.trim() });
@@ -1068,10 +1093,10 @@ function openSettings() {
   };
   $("#stReset").onclick = () => { $("#stResetYes").hidden = false; };
   $("#stResetYes").onclick = async () => {
-    if (cloudOn() && (unsynced().length || unsentAudio().length)) return toast("Some notes haven't been copied to the cloud yet. Connect to the internet, wait a moment, then try again.");
+    if (cloudOn() && (unsynced().length || unsentAudio().length || countFailed())) return toast("Some notes or recordings aren't in the cloud yet (see Settings > About). Connect to the internet, wait a moment, then try again.");
     const keep = S.settings, si = syncInfo();
-    // Only this person's recordings that are safely in the cloud (another person on this phone may share the store).
-    await audioDB.del(S.notes.filter((n) => n.audioId && (!cloudOn() || si.audio[n.audioId] === 1 || si.audio[n.audioId] === "cloud")).map((n) => n.audioId));
+    // Only recordings this phone has uploaded itself (another person on this phone may share the store).
+    await audioDB.del(S.notes.filter((n) => n.audioId && (!cloudOn() || si.audio[n.audioId] === 1)).map((n) => n.audioId));
     S = seed(); S.settings = keep; save(); loadUser(); s.close(); handoverDraft = familySummary = null; go("today"); };
 }
 
@@ -1225,7 +1250,7 @@ function speechLang() {
 
 function openRecorder() {
   if (activeTransfer()) toast(`Note: ${S.client.name} is out with ${activeTransfer().withWhom}`);
-  rec.final = rec.interim = ""; rec.blob = null; rec.speechOK = !!SR; rec.cancelled = false;
+  rec.final = rec.interim = ""; rec.blob = null; rec.speechOK = !!SR; rec.cancelled = false; rec.speechLostAt = 0;
   const s = sheet(`${sheetHead("Record care note")}
     <div class="recorder">
       <button class="big-mic" id="micBtn" aria-label="Start recording">${ICON.mic}</button>
@@ -1235,18 +1260,26 @@ function openRecorder() {
     </div>
     <div class="row"><button class="btn ghost" id="typeBtn">Type instead</button></div>
     <p class="tiny muted" style="margin:0;text-align:center">Recording as ${esc(onDuty().name)} · ${fmtTime(Date.now())}. The original recording is kept with the note.</p>`,
-    { onClose: () => stopRecording(true), guard: () => rec.on });
+    { onClose: () => { stopRecording(true); if (rec.finishing) rec.cancelled = true; }, guard: () => rec.on || rec.finishing });
   $("#micBtn").onclick = () => (rec.on ? stopRecording(false) : startRecording());
-  $("#typeBtn").onclick = () => { stopRecording(true); openReview({ transcript: "", typed: true }); };
+  $("#typeBtn").onclick = (e) => {
+    const go = () => { stopRecording(true); openReview({ transcript: "", typed: true }); };
+    if (rec.on) confirmInline(e.currentTarget, go, "Tap again: discards this recording"); else go();
+  };
 }
 
 async function startRecording() {
+  if (rec.on || rec.starting) return; // a second tap while the microphone is starting
+  rec.starting = true;
   try {
     rec.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
   } catch (e) {
+    rec.starting = false;
     $("#recHint").textContent = "The microphone is blocked. Allow microphone access for this site in your browser settings, or use Type instead.";
     return;
   }
+  rec.starting = false;
+  if (rec.cancelled || !$("#micBtn")) { rec.stream.getTracks().forEach((t) => t.stop()); return; } // closed while starting
   rec.chunks = [];
   try { try { rec.media = new MediaRecorder(rec.stream, { audioBitsPerSecond: 32000 }); } catch { rec.media = new MediaRecorder(rec.stream); } rec.media.ondataavailable = (e) => e.data.size && rec.chunks.push(e.data); rec.media.start(1000); }
   catch { rec.media = null; }
@@ -1262,14 +1295,16 @@ async function startRecording() {
         }
         drawLive();
       };
-      rec.recog.onerror = (e) => { if (["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"].includes(e.error)) { rec.speechOK = false; drawLive(); } };
+      rec.recog.onerror = (e) => { if (["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"].includes(e.error)) { rec.speechOK = false; if (rec.on) rec.speechLostAt = Date.now() - rec.started; drawLive(); } };
       // Some phones (iPhone Safari) end recognition repeatedly; restarting at once can lock up the page,
       // so wait a moment, and give up on live words after 4 quick endings in a row (the audio keeps recording).
       rec.recogEnds = [];
       rec.recog.onend = () => {
+        // iPhones end recognition now and then: keep any words not yet marked final before restarting.
+        if (rec.interim.trim()) { rec.final += rec.interim.trim() + " "; rec.interim = ""; }
         if (!rec.on || !rec.speechOK) return;
         const now = Date.now(); rec.recogEnds = rec.recogEnds.filter((t) => now - t < 5000).concat(now);
-        if (rec.recogEnds.length >= 4) { rec.speechOK = false; drawLive(); return; }
+        if (rec.recogEnds.length >= 4) { rec.speechOK = false; rec.speechLostAt = Date.now() - rec.started; drawLive(); return; }
         setTimeout(() => { if (rec.on && rec.speechOK) { try { rec.recog.start(); } catch { rec.speechOK = false; drawLive(); } } }, 400);
       };
       rec.recog.start();
@@ -1283,23 +1318,23 @@ async function startRecording() {
 }
 function drawLive() {
   const l = $("#live"); if (!l) return;
-  l.innerHTML = rec.final || rec.interim ? `${esc(rec.final)}<span class="interim">${esc(rec.interim)}</span>`
+  l.innerHTML = rec.final || rec.interim ? `${esc(rec.final)}<span class="interim">${esc(rec.interim)}</span>${!rec.speechOK && rec.speechLostAt ? '<div class="warn small" style="margin-top:8px">The phone stopped turning your words into text. Keep talking: the recording carries on, and you can add the rest when you check the note.</div>' : ""}`
     : `<span class="interim">${rec.speechOK ? "Your words will appear here as you speak…" : "Live words aren't available in this browser. Your recording is still being kept."}</span>`;
 }
 function stopRecording(cancel) {
   if (cancel) rec.cancelled = true;
   if (!rec.on) return;
-  rec.on = false; clearInterval(rec.timer);
+  rec.on = false; clearInterval(rec.timer); rec.finishing = !cancel;
   try { rec.recog && rec.recog.stop(); } catch {}
   let done = false;
   const finish = () => {
-    if (done) return; done = true;
+    if (done) return; done = true; rec.finishing = false;
     rec.stream && rec.stream.getTracks().forEach((t) => t.stop());
     if (rec.cancelled) return;
     rec.blob = rec.chunks.length ? new Blob(rec.chunks, { type: (rec.media && rec.media.mimeType) || "audio/webm" }) : null;
     // A clip under ~2 KB is silence or a failed capture: don't claim it was kept.
     if (rec.blob && rec.blob.size < 2000) rec.blob = null;
-    openReview({ transcript: (rec.final + " " + rec.interim).trim(), blob: rec.blob });
+    openReview({ transcript: (rec.final + " " + rec.interim).trim(), blob: rec.blob, lostAt: rec.speechLostAt && rec.final ? rec.speechLostAt : 0 });
   };
   const mic = $("#micBtn"); if (mic && !cancel) { mic.disabled = true; $("#recHint").textContent = "Finishing…"; }
   if (rec.media && rec.media.state !== "inactive") {
@@ -1309,7 +1344,7 @@ function stopRecording(cancel) {
   } else setTimeout(finish, 300);
 }
 
-async function openReview({ transcript, blob, typed }) {
+async function openReview({ transcript, blob, typed, lostAt }) {
   const spoken = !typed && !!transcript; // words came from the phone's speech recognition
   const rawHeard = transcript; // exactly what the phone heard, kept with the note
   let baseline = transcript, reps = []; // baseline = heard words after remembered fixes
@@ -1336,6 +1371,7 @@ async function openReview({ transcript, blob, typed }) {
   const showDraft = () => {
     const fixes = chips();
     rv.innerHTML = `${sourceTag(draft.source, draft.reason)}
+      ${lostAt ? `<div class="warn">Only the first ${Math.floor(lostAt / 60000)}:${String(Math.floor(lostAt / 1000) % 60).padStart(2, "0")} of your recording was turned into words. Play it back and add anything missing under "What you said", then tap Rewrite.</div>` : ""}
       <label class="f">Care note<textarea id="rvNote" class="note-edit">${esc(draft.note)}</textarea></label>
       ${draft.unclear && draft.unclear.length ? `<div class="warn" style="display:grid;gap:8px"><span><strong>Check these words:</strong> ${draft.unclear.map(esc).join(", ")}</span>
         ${draft.unclear.map((w, k) => { const c = wordInContext(transcript, w) || wordInContext(draft.note, w); return c ? `<div class="small" style="display:flex;gap:8px;align-items:baseline;justify-content:space-between"><span>${c.html}</span><button class="link small" data-showword="${k}" style="flex:none">Show me</button></div>` : ""; }).join("")}
@@ -1406,11 +1442,29 @@ async function openReview({ transcript, blob, typed }) {
       rememberFixes(keep);
       noteFixesUsed([...new Set(reps.map((r) => r.key))].filter((k) => finalSaid.toLowerCase().includes(String(reps.find((r) => r.key === k).to).toLowerCase())));
       const id = uid(); let audioId = null;
-      if (blob) { audioId = "a_" + id; if (!(await audioDB.put(audioId, blob))) { audioId = null; toast("The recording couldn't be stored. The note is still saved."); } }
+      if (blob) {
+        audioId = "a_" + id;
+        if (!(await audioDB.put(audioId, blob))) {
+          // Keep the screen open so nothing is lost: try again, or save the note without the recording.
+          const btn = $("#rvSave");
+          if (btn && !btn.dataset.noAudioOk) {
+            saving = false; btn.disabled = false; btn.textContent = "Save without the recording";
+            btn.dataset.noAudioOk = "1";
+            return toast("The phone couldn't store the recording. Tap Save again to try, or it saves the note without the recording.");
+          }
+          audioId = null;
+        }
+      }
       const ts = Date.now();
-      S.notes.push({ id, ts, approvedTs: ts, carerId: S.onDuty, transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard } : {}), note, categories: draft.categories, audioId, source: draft.source });
+      S.notes.push({ id, ts, approvedTs: ts, carerId: stampId(), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard } : {}), note, categories: draft.categories, audioId, source: draft.source });
       draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
-      if (!save()) { saving = false; return; }
+      if (!save()) {
+        // Not saved on this phone: take it back out so it isn't sent to the cloud half-saved.
+        S.notes = S.notes.filter((n) => n.id !== id); S.flags = S.flags.filter((f) => f.noteId !== id);
+        if (audioId) audioDB.del([audioId]);
+        saving = false; const b = $("#rvSave"); if (b) { b.disabled = false; b.textContent = "Save to record"; }
+        return;
+      }
       s.close(); render();
       const inc = draft.flags.filter((f) => f.kind === "incident").length;
       toast((inc ? "Saved. Incident report added to Needs attention." : "Saved to the record.") + (keep.length ? ` Remembered ${keep.length} word fix${keep.length > 1 ? "es" : ""}.` : ""));
@@ -1565,10 +1619,12 @@ function showLogin(msg) {
   setTimeout(() => $("#lgUser") && $("#lgUser").focus(), 50);
 }
 
-const WORDS = ["plum", "rose", "maple", "river", "cloud", "lemon", "harbour", "meadow", "pebble", "willow", "copper", "sunny", "garden", "breeze", "orchard", "velvet"];
+// Random passwords like "k7m2-p9xq-4tbn": 12 characters with no look-alikes (0/o, 1/l/i), about
+// 59 bits, so they can't be guessed even by someone trying from many places at once.
+const PW_CHARS = "abcdefghjkmnpqrstuvwxyz23456789";
 function suggestPassword() {
-  const r = crypto.getRandomValues(new Uint32Array(4));
-  return `${WORDS[r[0] % WORDS.length]}-${WORDS[r[1] % WORDS.length]}-${WORDS[r[2] % WORDS.length]}-${10 + (r[3] % 90)}`;
+  const r = crypto.getRandomValues(new Uint32Array(12));
+  return [0, 4, 8].map((i) => Array.from(r.slice(i, i + 4), (n) => PW_CHARS[n % PW_CHARS.length]).join("")).join("-");
 }
 function loginText(username, password) {
   return `Dignity Notes test login\nLink: ${location.href.split("#")[0]}\nUsername: ${username}\nPassword: ${password}`;
@@ -1886,6 +1942,7 @@ async function checkClient() {
   const fresh = clients.find((c) => c.id === session.client.id);
   if (!fresh) {
     toast(`You're no longer a carer for ${session.client.name}, or it was removed`);
+    try { localStorage.removeItem(KEY); } catch {} // so it can't be picked again offline
     session.client = null; saveSession(); KEY = null; S = seed(); showClients(false);
   } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name) {
     // Carers or shifts changed elsewhere (e.g. an administrator assigned someone): pick that up.
@@ -1970,6 +2027,19 @@ const settleViewport = () => setTimeout(() => { window.scrollBy(0, 1); window.sc
 document.addEventListener("focusout", (e) => { if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) settleViewport(); });
 if (window.visualViewport) { let lastH = visualViewport.height; visualViewport.addEventListener("resize", () => { if (visualViewport.height > lastH + 100) settleViewport(); lastH = visualViewport.height; }); }
 
+/* ---------- when nothing is open ----------
+ * Things that wait for a quiet moment: an app update reload, a sign-in or privacy request from the
+ * relay, and other carers' new notes arriving while someone is reading or typing.
+ */
+let pendingReload = false;
+setInterval(() => {
+  if (appBusy()) return;
+  if (pendingReload) { location.reload(); return; }
+  if (syncState.blocked) { handleSyncBlocked(); return; }
+  if (syncState.redraw && !userIsReading()) { syncState.redraw = false; render(); }
+}, 3000);
+const userIsReading = () => { const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || [...document.querySelectorAll("audio")].some((x) => !x.paused); };
+
 /* ---------- boot ---------- */
 checkStorage().then(() => { if (session && session.client && tab === "today") render(); });
 if (session && (session.token || session.local)) {
@@ -1986,7 +2056,8 @@ else { render(); showLogin(); }
 if ("serviceWorker" in navigator && location.protocol === "https:") {
   // When a new version of the app is published, reload once so nobody keeps running an old copy.
   const hadController = !!navigator.serviceWorker.controller;
-  navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController && !window.__reloaded) { window.__reloaded = true; location.reload(); } });
+  // Reload for the new version only when nothing is open, so a recording or a note being checked is never lost.
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController && !window.__reloaded) { window.__reloaded = true; if (appBusy()) pendingReload = true; else location.reload(); } });
   navigator.serviceWorker.register("sw.js").then((reg) => {
     reg.update().catch(() => {});
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });

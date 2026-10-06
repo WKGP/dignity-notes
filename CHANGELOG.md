@@ -6,8 +6,8 @@ Cloud copy. Notes, flags, handovers, outings and recordings are copied to secure
 
 ## Since 1.0.0 (patch releases)
 
+- 1.1.2: Safety fixes before release: app updates, sign-in requests and other carers' new notes wait until nothing is open (no lost recordings); iPhone keeps words when speech recognition restarts and says if live words stopped; recordings retried until uploaded; storing a recording retries once and never drops it silently; example entries never go into handovers or family summaries, and new clients start empty; records carry the author's name; handover covers the time since the last handover and asks who it's for; stronger generated passwords and a per-account sign-in limit.
 - 1.1.1: User manual search: matches as you type, and Ask for an AI answer written only from the manual, with links to the right sections (signed-in users).
-
 - 1.0.10: iPhone banner: open links from WhatsApp in Safari first (compass button), because the WhatsApp browser keeps separate notes.
 - 1.0.9: "Check these words" shows each word highlighted in what you said, with Show me to jump to it; Earlier notes today on the review screen; Record log "Show all words and recordings".
 - 1.0.8: The private-tab warning now gives step-by-step fixes (iPhone: Tabs → leave Private → Add to Home Screen; Android: reopen in a normal tab → Install).
