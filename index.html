@@ -416,7 +416,7 @@ function basicTidy(transcript) {
 const validTidy = (o) => o && typeof o.note === "string" && o.note.trim() && Array.isArray(o.categories) && Array.isArray(o.flags);
 async function tidy(transcript) {
   try {
-    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()) });
+    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary() });
     if (!validTidy(out)) throw new Error("Unexpected reply from the relay");
     return { unclear: [], ...out, source: "ai" };
   } catch (e) {
@@ -557,9 +557,10 @@ function renderLog() {
         ${fl.length ? `<div class="chips">${fl.map((f) => `<span class="chip ${f.kind === "incident" ? "incident" : "follow"}">${esc(f.title)}</span>`).join("")}</div>` : ""}
         <p class="note-text">${esc(n.note)}</p>
         <div class="chips">${n.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>
-        <details><summary>${n.audioId ? "Play original recording" : "Original words"}</summary>
+        <details><summary>${n.audioId ? "Play original recording" : "Words"}</summary>
           ${n.audioId ? `<audio controls preload="none" data-audio="${n.audioId}"></audio>` : ""}
-          <p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p>
+          ${n.heard ? `<p class="small muted" style="margin:8px 0 0"><strong>The phone heard:</strong> ${esc(n.heard)}</p>
+          <p class="small muted" style="margin:6px 0 0"><strong>Checked by the carer:</strong> ${esc(n.transcript)}</p>` : `<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p>`}
           <p class="tiny muted" style="margin:6px 0 0">Approved by ${esc(carer(n.carerId).name)} at ${fmtTime(n.approvedTs || n.ts)}</p></details>
       </article>`;
     }
@@ -737,6 +738,9 @@ function openSettings() {
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Demo data</h3>
       <p class="small muted" style="margin:0">Start again with the example day. Deletes this client's notes and recordings on this phone.</p>
       <button class="btn ghost" id="stReset">Reset demo</button><button class="btn danger" id="stResetYes" hidden>Yes, delete everything</button></div>
+    <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">My words</h3>
+      <p class="small muted" style="margin:0">Misheard words you've chosen to remember. They're fixed automatically on your next recordings. Saved on this phone only.</p>
+      <div class="list" id="stDict"></div></div>
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Your accent</h3>
       <label class="f">The phone turns your speech into words more accurately when it knows your accent<select id="stAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
       <p class="tiny muted" style="margin:0">Saved on this phone only.</p></div>
@@ -750,6 +754,13 @@ function openSettings() {
       <p class="tiny muted" style="margin:4px 0 0">Dignity Notes pilot · fictional test use only<br>${COPYRIGHT}</p></div>`);
   showVersions(s.root);
   $("#stPrivacy").onclick = () => { s.close(); viewPrivacy(); };
+  const drawDict = () => {
+    const d = loadDict(); const keys = Object.keys(d).sort((a, b) => d[b].t - d[a].t);
+    $("#stDict", s.root).innerHTML = keys.length ? keys.map((k) => `<div class="item" style="align-items:center"><div class="body small"><strong>${esc(k)}</strong> → ${esc(d[k].to)} <span class="muted tiny">${d[k].used ? `· used ${d[k].used} time${d[k].used > 1 ? "s" : ""}` : ""}</span></div><button class="link small" style="color:var(--record)" data-forget="${esc(k)}">Remove</button></div>`).join("")
+      : '<div class="empty">No words yet. Fix a misheard word on the "Check before saving" screen and choose to remember it.</div>';
+    $("#stDict", s.root).querySelectorAll("[data-forget]").forEach((b) => (b.onclick = () => { forgetWord(b.dataset.forget); drawDict(); toast("Removed"); }));
+  };
+  drawDict();
   $("#stAccent").onchange = (e) => { try { localStorage.setItem("dignitynotes.speechlang", e.target.value); toast("Accent saved"); } catch { toast("Couldn't save on this phone"); } };
   $("#stTest").onclick = async () => {
     const m = $("#stMsg"); m.textContent = "Checking…"; m.style.color = "";
@@ -782,6 +793,139 @@ function openSettings() {
 /* ---------- recorder ---------- */
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const rec = { media: null, chunks: [], stream: null, recog: null, on: false, final: "", interim: "", started: 0, timer: null, blob: null, speechOK: !!SR };
+
+/* ---------- my words (personal dictionary) ----------
+ * When a carer fixes words the phone misheard, the app offers to remember the fix on this phone
+ * ("Nanna" -> "Nana", "for arm" -> "forearm") and applies it to their next recordings before the
+ * AI sees them. The phone's original words are still kept with each note.
+ * Only sound-alike mishearings are offered. Never learned, because they change meaning:
+ * negatives, numbers and amounts, left/right, units, singular/plural and similar word endings,
+ * capital letters alone, and very common words. The carer confirms each fix before it's kept,
+ * and typing back over an automatic fix (or tapping Undo) forgets it.
+ */
+const DICT_COMMON = new Set(("a an the and or but so to too two in on at of off for four with by from up is was were be been being am are it its it's this that these those there their they're they them " +
+  "he she his her hers him we our us you your i me my mine do did done has had have went go got get").split(" "));
+const DICT_BLOCK = new Set(("no not nor never none nothing nobody cannot yes ok okay " +
+  "zero one two three four five six seven eight nine ten eleven twelve fifteen twenty thirty forty fifty hundred half quarter once twice double single both few several many more less most least some any all every each " +
+  "left right upper lower top bottom front back inner outer " +
+  "ml mg g kg cup cups glass glasses mug mugs litre litres liter liters tablet tablets pill pills dose doses spoon spoons spoonful hour hours minute minutes am pm morning afternoon evening night").split(" "));
+const DICT_MAX = 300;
+const dictKey = () => "dignitynotes.dict." + (session ? session.username : "");
+const dictNorm = (s) => String(s).toLowerCase().replace(/\s+/g, " ").trim();
+function loadDict() { try { return JSON.parse(localStorage.getItem(dictKey()) || "{}") || {}; } catch { return {}; } }
+function saveDict(d) {
+  const keys = Object.keys(d);
+  if (keys.length > DICT_MAX) keys.sort((a, b) => d[a].t - d[b].t).slice(0, keys.length - DICT_MAX).forEach((k) => delete d[k]);
+  try { localStorage.setItem(dictKey(), JSON.stringify(d)); } catch {}
+}
+const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const bare = (w) => w.replace(/^[^\p{L}\p{N}']+|[^\p{L}\p{N}']+$/gu, "");
+const tokens = (t) => String(t).split(/\s+/).map(bare).filter(Boolean);
+
+// 0..1: how alike two words are (1 - edit distance / longer length), ignoring case.
+function similarity(a, b) {
+  a = a.toLowerCase(); b = b.toLowerCase(); if (a === b) return 1;
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return 1 - d[a.length][b.length] / Math.max(a.length, b.length);
+}
+
+// Apply remembered fixes in one pass. Returns the text plus each replacement's position,
+// so Undo can put back exactly those words. (No lookbehind: older iPhones don't support it.)
+function applyDict(text) {
+  const d = loadDict(); const keys = Object.keys(d).filter((k) => k.trim()).sort((a, b) => b.length - a.length);
+  if (!keys.length || !text) return { text, reps: [] };
+  try {
+    const reps = []; let delta = 0;
+    const re = new RegExp(`(^|[^\\p{L}\\p{N}'])(${keys.map((k) => k.split(" ").map(reEsc).join("\\s+")).join("|")})(?=$|[^\\p{L}\\p{N}'])`, "giu");
+    const out = text.replace(re, (m, pre, word, offset) => {
+      const key = dictNorm(word), e = d[key];
+      if (!e || word === e.to) return m; // already right: nothing to change or undo
+      reps.push({ key, from: word, to: e.to, start: offset + pre.length + delta });
+      delta += e.to.length - word.length;
+      return pre + e.to;
+    });
+    return { text: out, reps };
+  } catch { return { text, reps: [] }; } // never lose a recording over a dictionary problem
+}
+// Put back the words one remembered fix changed. Returns the new text and the remaining replacements.
+function undoFix(text, reps, key) {
+  let out = text; const keep = [];
+  for (const r of [...reps].sort((a, b) => b.start - a.start)) {
+    if (r.key !== key) { keep.push(r); continue; }
+    if (out.slice(r.start, r.start + r.to.length) !== r.to) continue; // text moved: leave it
+    out = out.slice(0, r.start) + r.from + out.slice(r.start + r.to.length);
+    const shift = r.from.length - r.to.length;
+    keep.forEach((k) => { if (k.start > r.start) k.start += shift; });
+  }
+  return { text: out, reps: keep.sort((a, b) => a.start - b.start) };
+}
+
+// Word-level differences (longest common subsequence) between two texts.
+function diffRuns(a, b) {
+  const A = tokens(a), B = tokens(b), n = A.length, m = B.length;
+  if (!n || !m || n * m > 250000) return [];
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const runs = []; let i = 0, j = 0, ra = [], rb = [];
+  const flush = () => { if (ra.length && rb.length) runs.push([ra, rb]); ra = []; rb = []; };
+  while (i < n || j < m) {
+    if (i < n && j < m && A[i] === B[j]) { flush(); i++; j++; }
+    else if (j < m && (i === n || L[i][j + 1] >= L[i + 1][j])) { rb.push(B[j]); j++; }
+    else { ra.push(A[i]); i++; }
+  }
+  flush();
+  return runs;
+}
+
+// Is this edit a mishearing worth remembering (rather than a change of meaning)?
+function isMishearing(ra, rb, minSim) {
+  if (!ra.length || !rb.length || ra.length > 3 || rb.length > 3) return false;
+  const all = [...ra, ...rb].map((w) => w.toLowerCase());
+  if (all.some((w) => /\d/.test(w) || DICT_BLOCK.has(w) || /n't$/.test(w))) return false;
+  const f = ra.join("").toLowerCase(), t = rb.join("").toLowerCase();
+  if (f === t) return false; // capital letters or spacing only
+  if (t.startsWith(f) || f.startsWith(t) || t.endsWith(f) || f.endsWith(t)) return false; // plural, -ed, un-, -n't...
+  if (ra.every((w) => DICT_COMMON.has(w.toLowerCase())) && rb.every((w) => DICT_COMMON.has(w.toLowerCase()))) return false;
+  return similarity(f, t) >= minSim;
+}
+
+// What the carer changed: fixes worth offering to remember, and remembered fixes to forget
+// (when the carer typed the heard words back over an automatic fix).
+function findFixes(baseline, corrected) {
+  const d = loadDict(); const toKey = new Map(Object.entries(d).map(([k, e]) => [dictNorm(e.to), k]));
+  const offer = [], forget = [];
+  for (const [ra, rb] of diffRuns(baseline, corrected)) {
+    const pairs = ra.length <= 3 && rb.length <= 3 ? [[ra, rb, 0.5]]
+      : ra.map((w) => { const best = rb.map((v) => [v, similarity(w, v)]).sort((x, y) => y[1] - x[1])[0]; return best ? [[w], [best[0]], 0.6] : null; }).filter(Boolean);
+    for (const [fa, fb, minSim] of pairs) {
+      const reverted = toKey.get(dictNorm(fa.join(" ")));
+      if (reverted && dictNorm(fb.join(" ")) === reverted) { forget.push(reverted); continue; }
+      if (isMishearing(fa, fb, minSim)) {
+        const from = dictNorm(fa.join(" ")), to = fb.join(" ");
+        if (!offer.some((o) => o.from === from) && !(d[from] && d[from].to === to)) offer.push({ from, to });
+      }
+    }
+  }
+  return { offer: offer.slice(0, 6), forget };
+}
+function rememberFixes(list) {
+  if (!list.length) return;
+  const d = loadDict();
+  for (const { from, to } of list) d[dictNorm(from)] = { to, used: 0, t: Date.now() };
+  saveDict(d);
+}
+function noteFixesUsed(keys) {
+  if (!keys.length) return;
+  const d = loadDict();
+  keys.forEach((k) => { if (d[k]) { d[k].used = (d[k].used || 0) + 1; d[k].t = Date.now(); } });
+  saveDict(d);
+}
+function forgetWord(from) { const d = loadDict(); delete d[dictNorm(from)]; saveDict(d); }
+// Spellings to suggest to the AI (data, not instructions): the most used fixes.
+const dictVocabulary = () => { const d = loadDict(); return [...new Set(Object.values(d).sort((a, b) => (b.used || 0) - (a.used || 0)).map((e) => e.to))].slice(0, 40); };
 
 /* ---------- speech accent ----------
  * The phone's speech recognition works much better when it knows the speaker's accent.
@@ -882,7 +1026,11 @@ function stopRecording(cancel) {
 
 async function openReview({ transcript, blob, typed }) {
   const spoken = !typed && !!transcript; // words came from the phone's speech recognition
-  let draft = null; const blobUrl = blob ? URL.createObjectURL(blob) : null;
+  const rawHeard = transcript; // exactly what the phone heard, kept with the note
+  let baseline = transcript, reps = []; // baseline = heard words after remembered fixes
+  if (spoken) ({ text: baseline, reps } = applyDict(transcript));
+  transcript = baseline;
+  let draft = null, needsRewrite = false, offered = null; const blobUrl = blob ? URL.createObjectURL(blob) : null;
   let saving = false;
   const s = sheet(`${sheetHead(typed ? "Type a care note" : "Check before saving")}<div id="rv" style="display:grid;gap:14px"></div>`,
     { guard: () => !saving && (!!blob || !!draft || !!(document.querySelector("#rvTx") || {}).value) });
@@ -896,9 +1044,12 @@ async function openReview({ transcript, blob, typed }) {
   };
   const run = async () => {
     rv.innerHTML = `<div class="recorder"><div class="spinner"></div><p class="muted" style="margin:0">Writing your care note…</p></div>`;
-    draft = await tidy(transcript); showDraft();
+    draft = await tidy(transcript); draft.from = transcript; needsRewrite = false; offered = null; showDraft();
   };
+  // Remembered fixes still in the words, one chip per fix.
+  const chips = () => { const seen = new Map(); reps.forEach((r) => { if (!seen.has(r.key)) seen.set(r.key, r); }); return [...seen.values()]; };
   const showDraft = () => {
+    const fixes = chips();
     rv.innerHTML = `${sourceTag(draft.source, draft.reason)}
       <label class="f">Care note<textarea id="rvNote" class="note-edit">${esc(draft.note)}</textarea></label>
       ${draft.unclear && draft.unclear.length ? `<div class="warn" style="display:grid;gap:8px"><span><strong>Check these words:</strong> ${draft.unclear.map(esc).join(", ")}</span>
@@ -907,26 +1058,62 @@ async function openReview({ transcript, blob, typed }) {
           <span class="tiny muted">A change applies to your next recording. You can also change it in Settings.</span>` : ""}</div>` : ""}
       <div><div class="eyebrow" style="margin-bottom:6px">Covers</div><div class="chips">${draft.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("") || '<span class="small muted">No categories found</span>'}</div></div>
       <div><div class="eyebrow" style="margin-bottom:6px">Flags</div><div class="flags" id="rvFlags">${draft.flags.length ? draft.flags.map((f, i) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"}</span><strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div><button class="link" data-rmflag="${i}">Remove</button></div>`).join("") : '<div class="empty">No flags. Nothing to note.</div>'}</div></div>
-      <details><summary>What you said</summary>${blobUrl ? `<audio controls src="${blobUrl}" style="margin-bottom:8px"></audio>` : ""}<p class="small muted" style="margin:0">${esc(transcript)}</p></details>
+      <div class="card" style="display:grid;gap:10px;box-shadow:none">
+        ${blobUrl ? `<audio controls src="${blobUrl}"></audio>` : ""}
+        <label class="f">What you said${spoken ? ' <span class="muted" style="font-weight:400">(fix any misheard words)</span>' : ""}<textarea id="rvSaid" style="min-height:96px">${esc(transcript)}</textarea></label>
+        ${fixes.length ? `<div class="small" style="display:grid;gap:6px"><span class="muted">Fixed from your words:</span><div class="chips">${fixes.map((r) => `<span class="chip accent">${esc(r.from)} → ${esc(r.to)} <button class="link small" data-undo="${esc(r.key)}" style="padding:0 0 0 4px">Undo</button></span>`).join("")}</div></div>` : ""}
+        ${needsRewrite ? '<div class="warn small">The care note above was written before this change. Rewrite it so it matches.</div>' : ""}
+        <button class="btn secondary" id="rvRewrite" ${needsRewrite ? "" : "hidden"}>Rewrite the note from these words</button>
+      </div>
+      <div id="rvLearn"></div>
       <div class="row"><button class="btn ghost" id="rvAgain">Re-record</button><button class="btn primary" id="rvSave">Save to record</button></div>
       <button class="link" id="rvDiscard" style="justify-self:center;color:var(--ink-2)">Discard</button>`;
+    const said = $("#rvSaid", rv);
+    said.oninput = () => { transcript = said.value; offered = null; $("#rvLearn", rv).innerHTML = ""; $("#rvRewrite", rv).hidden = !needsRewrite && said.value.trim() === draft.from.trim(); };
+    $("#rvRewrite", rv).onclick = (e) => confirmInline(e.currentTarget, () => { transcript = said.value.trim(); if (!transcript) return toast("Add some words first"); run(); });
+    rv.querySelectorAll("[data-undo]").forEach((b) => (b.onclick = () => {
+      // A remembered fix was wrong here: put back exactly the words it changed, and forget it.
+      const key = b.dataset.undo, fix = reps.find((r) => r.key === key);
+      const unedited = said.value === baseline;
+      const u = undoFix(baseline, reps, key); baseline = u.text; reps = u.reps;
+      transcript = unedited ? baseline : said.value;
+      forgetWord(key); needsRewrite = true; draft.note = $("#rvNote").value; showDraft();
+      toast(unedited ? `Forgot: ${fix.from} → ${fix.to}` : `Forgot: ${fix.from} → ${fix.to}. You'd edited the words, so change them in the box too.`);
+    }));
     if ($("#rvAccent", rv)) $("#rvAccent", rv).onchange = (e) => { try { localStorage.setItem("dignitynotes.speechlang", e.target.value); toast("Accent saved for your next recording"); } catch { toast("Couldn't save on this phone"); } };
-    rv.querySelectorAll("[data-rmflag]").forEach((b) => (b.onclick = () => { draft.flags.splice(+b.dataset.rmflag, 1); draft.note = $("#rvNote").value; showDraft(); }));
+    rv.querySelectorAll("[data-rmflag]").forEach((b) => (b.onclick = () => { draft.flags.splice(+b.dataset.rmflag, 1); draft.note = $("#rvNote").value; transcript = said.value; showDraft(); }));
     $("#rvAgain").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); openRecorder(); });
     $("#rvDiscard").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); toast("Discarded. Nothing was saved."); });
     $("#rvSave").onclick = async (e) => {
       if (saving) return;
       const note = $("#rvNote").value.trim(); if (!note) return toast("The note is empty");
+      const finalSaid = (said.value || "").trim() || transcript;
+      if (spoken && offered === null) {
+        // First tap: offer to remember any misheard-word fixes (the carer confirms each one).
+        const f = findFixes(baseline, finalSaid);
+        f.forget.forEach(forgetWord);
+        offered = f.offer;
+        if (offered.length) {
+          $("#rvLearn", rv).innerHTML = `<div class="card" style="display:grid;gap:8px;box-shadow:none"><strong class="small">Remember these fixes for next time?</strong>
+            ${offered.map((o, i) => `<label class="check small"><input type="checkbox" data-learn="${i}" checked><span>${esc(o.from)} → ${esc(o.to)}</span></label>`).join("")}
+            <span class="tiny muted">Untick any that were a change of meaning rather than a misheard word. Then tap Save again.</span></div>`;
+          $("#rvLearn", rv).scrollIntoView({ block: "center" });
+          return;
+        }
+      }
       saving = true; e.currentTarget.disabled = true; e.currentTarget.textContent = "Saving…";
+      const keep = (offered || []).filter((o, i) => { const c = rv.querySelector(`[data-learn="${i}"]`); return c && c.checked; });
+      rememberFixes(keep);
+      noteFixesUsed([...new Set(reps.map((r) => r.key))].filter((k) => finalSaid.toLowerCase().includes(String(reps.find((r) => r.key === k).to).toLowerCase())));
       const id = uid(); let audioId = null;
       if (blob) { audioId = "a_" + id; if (!(await audioDB.put(audioId, blob))) { audioId = null; toast("The recording couldn't be stored. The note is still saved."); } }
       const ts = Date.now();
-      S.notes.push({ id, ts, approvedTs: ts, carerId: S.onDuty, transcript, note, categories: draft.categories, audioId, source: draft.source });
+      S.notes.push({ id, ts, approvedTs: ts, carerId: S.onDuty, transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard } : {}), note, categories: draft.categories, audioId, source: draft.source });
       draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
       if (!save()) { saving = false; return; }
       s.close(); render();
       const inc = draft.flags.filter((f) => f.kind === "incident").length;
-      toast(inc ? `Saved. Incident report added to Needs attention.` : "Saved to the record");
+      toast((inc ? "Saved. Incident report added to Needs attention." : "Saved to the record.") + (keep.length ? ` Remembered ${keep.length} word fix${keep.length > 1 ? "es" : ""}.` : ""));
     };
   };
   if (typed || !transcript) showInput(!typed ? (blob ? "We couldn't turn your speech into words on this phone. Play it back and type a short version below." : "Nothing was picked up. Check the microphone, try again, or type the note.") : "");
