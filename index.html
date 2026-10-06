@@ -110,6 +110,7 @@ main{padding-block:20px calc(110px + env(safe-area-inset-bottom,0px))}
 .flag.incident{background:var(--incident-soft);border-left-color:var(--incident)}
 .flag .body{flex:1;min-width:0}
 .flag strong{display:block}
+mark{background:#FFE08A;color:inherit;border-radius:3px;padding:0 2px}
 .flags{display:grid;gap:8px}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{font-size:12.5px;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--surface-2);color:var(--ink-2)}
@@ -584,6 +585,25 @@ function renderToday() {
 }
 
 let logFilter = "all";
+let logOpen = false; // "Show all words and recordings" in the record log
+try { logOpen = localStorage.getItem("dignitynotes.logopen") === "1"; } catch {}
+// Where a word appears in a text, with a few words either side ("…had her porridge at…").
+function wordInContext(text, word) {
+  const t = String(text || ""), i = t.toLowerCase().indexOf(String(word).toLowerCase());
+  if (!word || i < 0) return null;
+  let a = Math.max(0, i - 40), b = Math.min(t.length, i + word.length + 40);
+  if (a > 0) a = t.indexOf(" ", a) + 1 || a;
+  if (b < t.length) b = t.lastIndexOf(" ", b) > i + word.length ? t.lastIndexOf(" ", b) : b;
+  return { i, html: (a > 0 ? "…" : "") + esc(t.slice(a, i)) + "<mark>" + esc(t.slice(i, i + word.length)) + "</mark>" + esc(t.slice(i + word.length, b)) + (b < t.length ? "…" : "") };
+}
+// Load a saved recording into an <audio> the first time it's needed.
+async function loadAudio(a) {
+  if (!a || a.src || a.dataset.loading) return;
+  a.dataset.loading = "1";
+  const blob = await audioDB.get(a.dataset.audio);
+  if (blob) a.src = URL.createObjectURL(blob); else a.replaceWith(Object.assign(document.createElement("p"), { className: "small muted", textContent: "Recording is stored on the phone that made it." }));
+}
+
 function renderLog() {
   const v = $("#view-log");
   const items = [
@@ -606,7 +626,7 @@ function renderLog() {
         ${fl.length ? `<div class="chips">${fl.map((f) => `<span class="chip ${f.kind === "incident" ? "incident" : "follow"}">${esc(f.title)}</span>`).join("")}</div>` : ""}
         <p class="note-text">${esc(n.note)}</p>
         <div class="chips">${n.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>
-        <details><summary>${n.audioId ? "Play original recording" : "Words"}</summary>
+        <details ${logOpen ? "open" : ""}><summary>${n.audioId ? "Recording and words" : "Words"}</summary>
           ${n.audioId ? `<audio controls preload="none" data-audio="${n.audioId}"></audio>` : ""}
           ${n.heard ? `<p class="small muted" style="margin:8px 0 0"><strong>The phone heard:</strong> ${esc(n.heard)}</p>
           <p class="small muted" style="margin:6px 0 0"><strong>Checked by the carer:</strong> ${esc(n.transcript)}</p>` : `<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p>`}
@@ -615,17 +635,16 @@ function renderLog() {
     }
     if (it.type === "out") return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip follow">Out of carer's care</span></div><div class="small">${esc(S.client.name)} went out with <strong>${esc(it.t.withWhom)}</strong>${it.t.relationship ? " (" + esc(it.t.relationship) + ")" : ""}${it.t.purpose ? " for " + esc(it.t.purpose) : ""}. Logged by ${esc(carer(it.t.carerId).name)}.</div></div>`;
     if (it.type === "back") return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Back in carer's care</span></div><div class="small">Returned from ${esc(it.t.withWhom)}.${it.t.backNote ? " " + esc(it.t.backNote) : ""}</div></div>`;
-    return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Handover</span><span class="muted">${esc(carer(it.h.fromId).name)} → ${esc(it.h.toId ? carer(it.h.toId).name : "next carer")}</span></div><details><summary>Read handover</summary><p class="small" style="white-space:pre-line;margin:0">${esc(it.h.text)}</p></details></div>`;
+    return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Handover</span><span class="muted">${esc(carer(it.h.fromId).name)} → ${esc(it.h.toId ? carer(it.h.toId).name : "next carer")}</span></div><details ${logOpen ? "open" : ""}><summary>Read handover</summary><p class="small" style="white-space:pre-line;margin:0">${esc(it.h.text)}</p></details></div>`;
   }).join("");
   v.innerHTML = `<div class="hello"><h2>Record log</h2><p>Every saved note, outing and handover, newest first.</p></div>
     <div class="seg" role="group" aria-label="Filter">${[["all", "Everything"], ["incident", "Incidents"], ["follow", "To note"]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${logFilter === k}">${l}</button>`).join("")}</div>
+    ${rows ? `<button class="link small" id="logOpen" style="justify-self:start">${logOpen ? "Hide words and recordings" : "Show all words and recordings"}</button>` : ""}
     ${rows || '<div class="empty">Nothing here yet.</div>'}`;
   v.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { logFilter = b.dataset.f; renderLog(); }));
-  v.querySelectorAll("details").forEach((d) => d.addEventListener("toggle", async () => {
-    const a = d.querySelector("audio[data-audio]"); if (!d.open || !a || a.src) return;
-    const blob = await audioDB.get(a.dataset.audio);
-    if (blob) a.src = URL.createObjectURL(blob); else a.replaceWith(Object.assign(document.createElement("p"), { className: "tiny muted", textContent: "Recording is stored on the phone that made it." }));
-  }));
+  if ($("#logOpen", v)) $("#logOpen", v).onclick = () => { logOpen = !logOpen; try { localStorage.setItem("dignitynotes.logopen", logOpen ? "1" : "0"); } catch {} renderLog(); };
+  if (logOpen) v.querySelectorAll("audio[data-audio]").forEach(loadAudio);
+  v.querySelectorAll("details").forEach((d) => d.addEventListener("toggle", () => { if (d.open) loadAudio(d.querySelector("audio[data-audio]")); }));
 }
 
 let handoverDraft = null;
@@ -1103,6 +1122,8 @@ async function openReview({ transcript, blob, typed }) {
     rv.innerHTML = `${sourceTag(draft.source, draft.reason)}
       <label class="f">Care note<textarea id="rvNote" class="note-edit">${esc(draft.note)}</textarea></label>
       ${draft.unclear && draft.unclear.length ? `<div class="warn" style="display:grid;gap:8px"><span><strong>Check these words:</strong> ${draft.unclear.map(esc).join(", ")}</span>
+        ${draft.unclear.map((w, k) => { const c = wordInContext(transcript, w) || wordInContext(draft.note, w); return c ? `<div class="small" style="display:flex;gap:8px;align-items:baseline;justify-content:space-between"><span>${c.html}</span><button class="link small" data-showword="${k}" style="flex:none">Show me</button></div>` : ""; }).join("")}
+        <span class="tiny muted">${blobUrl ? "Play the recording to hear what you said, then fix" : "Fix"} the words in "What you said" below.</span>
         ${spoken ? `<label class="f small" style="font-weight:400">Words often get misheard when the phone expects a different accent. Your accent is set to:
           <select id="rvAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
           <span class="tiny muted">A change applies to your next recording. You can also change it in Settings.</span>` : ""}</div>` : ""}
@@ -1115,10 +1136,23 @@ async function openReview({ transcript, blob, typed }) {
         ${needsRewrite ? '<div class="warn small">The care note above was written before this change. Rewrite it so it matches.</div>' : ""}
         <button class="btn secondary" id="rvRewrite" ${needsRewrite ? "" : "hidden"}>Rewrite the note from these words</button>
       </div>
+      ${(() => { const earlier = S.notes.filter((n) => isToday(n.ts)).sort((a, b) => a.ts - b.ts);
+        return earlier.length ? `<details class="card" style="box-shadow:none"><summary><strong>Earlier notes today (${earlier.length})</strong></summary>
+          ${earlier.map((n) => `<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px"><div class="tiny muted">${fmtTime(n.ts)} · ${esc(carer(n.carerId).name)}</div><p class="small" style="margin:4px 0 0">${esc(n.note)}</p>
+            <p class="tiny muted" style="margin:4px 0 0">Words: ${esc(n.transcript)}</p></div>`).join("")}</details>` : ""; })()}
       <div id="rvLearn"></div>
       <div class="row"><button class="btn ghost" id="rvAgain">Re-record</button><button class="btn primary" id="rvSave">Save to record</button></div>
       <button class="link" id="rvDiscard" style="justify-self:center;color:var(--ink-2)">Discard</button>`;
     const said = $("#rvSaid", rv);
+    rv.querySelectorAll("[data-showword]").forEach((b) => (b.onclick = () => {
+      // Select the word where it is, so it's easy to see and fix.
+      const w = draft.unclear[+b.dataset.showword];
+      for (const box of [said, $("#rvNote", rv)]) {
+        const i = box.value.toLowerCase().indexOf(w.toLowerCase());
+        if (i >= 0) { box.scrollIntoView({ block: "center" }); box.focus(); box.setSelectionRange(i, i + w.length); return; }
+      }
+      toast("Those words have already been changed");
+    }));
     said.oninput = () => { transcript = said.value; offered = null; $("#rvLearn", rv).innerHTML = ""; $("#rvRewrite", rv).hidden = !needsRewrite && said.value.trim() === draft.from.trim(); };
     $("#rvRewrite", rv).onclick = (e) => confirmInline(e.currentTarget, () => { transcript = said.value.trim(); if (!transcript) return toast("Add some words first"); run(); });
     rv.querySelectorAll("[data-undo]").forEach((b) => (b.onclick = () => {
