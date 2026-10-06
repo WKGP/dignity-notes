@@ -881,6 +881,7 @@ function stopRecording(cancel) {
 }
 
 async function openReview({ transcript, blob, typed }) {
+  const spoken = !typed && !!transcript; // words came from the phone's speech recognition
   let draft = null; const blobUrl = blob ? URL.createObjectURL(blob) : null;
   let saving = false;
   const s = sheet(`${sheetHead(typed ? "Type a care note" : "Check before saving")}<div id="rv" style="display:grid;gap:14px"></div>`,
@@ -900,12 +901,16 @@ async function openReview({ transcript, blob, typed }) {
   const showDraft = () => {
     rv.innerHTML = `${sourceTag(draft.source, draft.reason)}
       <label class="f">Care note<textarea id="rvNote" class="note-edit">${esc(draft.note)}</textarea></label>
-      ${draft.unclear && draft.unclear.length ? `<div class="warn"><strong>Check these words:</strong> ${draft.unclear.map(esc).join(", ")}</div>` : ""}
+      ${draft.unclear && draft.unclear.length ? `<div class="warn" style="display:grid;gap:8px"><span><strong>Check these words:</strong> ${draft.unclear.map(esc).join(", ")}</span>
+        ${spoken ? `<label class="f small" style="font-weight:400">Words often get misheard when the phone expects a different accent. Your accent is set to:
+          <select id="rvAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
+          <span class="tiny muted">A change applies to your next recording. You can also change it in Settings.</span>` : ""}</div>` : ""}
       <div><div class="eyebrow" style="margin-bottom:6px">Covers</div><div class="chips">${draft.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("") || '<span class="small muted">No categories found</span>'}</div></div>
       <div><div class="eyebrow" style="margin-bottom:6px">Flags</div><div class="flags" id="rvFlags">${draft.flags.length ? draft.flags.map((f, i) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"}</span><strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div><button class="link" data-rmflag="${i}">Remove</button></div>`).join("") : '<div class="empty">No flags. Nothing to note.</div>'}</div></div>
       <details><summary>What you said</summary>${blobUrl ? `<audio controls src="${blobUrl}" style="margin-bottom:8px"></audio>` : ""}<p class="small muted" style="margin:0">${esc(transcript)}</p></details>
       <div class="row"><button class="btn ghost" id="rvAgain">Re-record</button><button class="btn primary" id="rvSave">Save to record</button></div>
       <button class="link" id="rvDiscard" style="justify-self:center;color:var(--ink-2)">Discard</button>`;
+    if ($("#rvAccent", rv)) $("#rvAccent", rv).onchange = (e) => { try { localStorage.setItem("dignitynotes.speechlang", e.target.value); toast("Accent saved for your next recording"); } catch { toast("Couldn't save on this phone"); } };
     rv.querySelectorAll("[data-rmflag]").forEach((b) => (b.onclick = () => { draft.flags.splice(+b.dataset.rmflag, 1); draft.note = $("#rvNote").value; showDraft(); }));
     $("#rvAgain").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); openRecorder(); });
     $("#rvDiscard").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); toast("Discarded. Nothing was saved."); });
