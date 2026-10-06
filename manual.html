@@ -21,6 +21,20 @@
   --f-display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
   --f-body:"Source Sans 3","Segoe UI",system-ui,sans-serif; color-scheme:light;
 }
+.ask{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:14px 16px;box-shadow:var(--shadow);margin:0 0 22px;display:grid;gap:10px}
+.ask label{font-weight:700;font-family:var(--f-display)}
+.ask form{display:flex;gap:8px}
+.ask input{flex:1;min-width:0;font:inherit;font-size:16px;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--ground);color:var(--ink)}
+.ask button{font:inherit;font-weight:700;padding:10px 16px;border-radius:10px;border:0;background:var(--accent);color:var(--accent-ink);cursor:pointer}
+.ask button:disabled{opacity:.6;cursor:default}
+.hits{display:grid;gap:6px;margin:0;padding:0;list-style:none}
+.hits a{display:block;padding:8px 10px;border-radius:10px;background:var(--surface-2);color:var(--ink);text-decoration:none}
+.hits a strong{display:block;color:var(--accent)}
+.hits .snip{font-size:14px;color:var(--ink-2)}
+.answer{border-left:4px solid var(--accent);padding:4px 0 4px 12px;white-space:pre-line}
+.answer .src{white-space:normal;font-size:14px;color:var(--ink-2);margin-top:6px}
+.ask .note{font-size:13px;color:var(--ink-2);margin:0}
+mark{background:#FFE08A;color:#231B33;border-radius:3px;padding:0 2px}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --ground:#15111C; --surface:#1E1828; --surface-2:#2A2236; --ink:#EDE8F4; --ink-2:#A79EB8; --line:#352C42;
   --accent:#B79AE8; --accent-ink:#1A1325; --accent-soft:#2E2342; --record:#F07A8E;
@@ -134,6 +148,13 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
 <div class="hero">
   <h1>Dignity Notes user manual</h1>
   <p>Speak a short note as things happen. Dignity Notes keeps your words and the recording, writes a tidy care note, and builds the handover for the next carer.</p>
+</div>
+<div class="ask" role="search">
+  <label for="askQ">Search the manual or ask a question</label>
+  <form id="askForm"><input id="askQ" type="search" placeholder="e.g. How do I fix a misheard word?" autocomplete="off" maxlength="500" enterkeyhint="search"><button id="askGo" type="submit">Ask</button></form>
+  <ul class="hits" id="askHits" aria-live="polite"></ul>
+  <div id="askAnswer" aria-live="polite"></div>
+  <p class="note" id="askNote">Matches appear as you type. Tap <strong>Ask</strong> for an answer written by AI from this manual (you need to be signed in to the app). Don't type anything about a real person.</p>
 </div>
 <div class="callout"><strong>This is a pilot. Use made-up information only.</strong>Don't record or type anything real about a real person: no real names, health details, medication or addresses. Use pretend examples like the ones in this guide.</div>
 
@@ -448,7 +469,7 @@ footer{color:var(--ink-2);font-size:14px;text-align:center;margin-top:30px}
   <div class="step"><div>
     <h3>The help menu</h3>
     <ul>
-      <li><span class="btnref p">Open the user manual</span> opens this guide.</li>
+      <li><span class="btnref p">Open the user manual</span> opens this guide. At the top, type in <strong>Search the manual or ask a question</strong>: matching parts of the manual appear as you type. Tap <strong>Ask</strong> for a short answer written by AI from this manual, with links to read more. Asking needs you to be signed in to the app on the same phone, and only your question is sent.</li>
       <li><strong>Report a problem</strong>: something didn't work as expected.</li>
       <li><strong>Suggest an idea</strong>: something that would make your day easier.</li>
     </ul>
@@ -559,6 +580,68 @@ const toc = document.querySelector("nav.toc details");
 const narrow = matchMedia("(max-width:860px)");
 if (narrow.matches) toc.open = false;
 toc.querySelectorAll("a").forEach((a) => a.addEventListener("click", () => { if (narrow.matches) toc.open = false; }));
+
+/* Search and ask. Searching happens on this device. Ask sends only the question (no notes or client
+   details) to the Dignity Notes relay, which answers from this manual using AI. */
+const RELAY_URL = "https://dignity-notes-relay.workgroup-works.workers.dev";
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const STOP = new Set("the a an and or to of in on at for is it do does how can i my me we you your what when where why which who with this that be are was if not from by as".split(" "));
+const words = (q) => q.toLowerCase().split(/[^a-z0-9']+/).filter((w) => w.length > 1 && !STOP.has(w));
+// Every section and every question in "Problems and questions" is a search result.
+const items = [];
+document.querySelectorAll("section.s").forEach((sec) => {
+  const title = sec.querySelector("h2").textContent.replace(/^\d+/, "").trim();
+  if (sec.id === "faq") sec.querySelectorAll("details.faq").forEach((d) => items.push({ el: d, id: sec.id, title: d.querySelector("summary").textContent.trim(), text: d.textContent }));
+  else items.push({ el: sec, id: sec.id, title, text: sec.textContent });
+});
+items.forEach((it) => { it.lt = it.title.toLowerCase(); it.lx = it.text.toLowerCase().replace(/\s+/g, " "); });
+function search(q) {
+  const ws = words(q); if (!ws.length) return [];
+  return items.map((it) => {
+    let score = 0, hit = 0;
+    for (const w of ws) { const re = new RegExp("\\b" + w.replace(/'/g, "")), inT = re.test(it.lt), inX = re.test(it.lx); if (inT || inX) hit++; score += (inT ? 3 : 0) + (inX ? 1 : 0); }
+    return { it, score: hit >= Math.ceil(ws.length / 2) ? score + hit * 2 : 0 };
+  }).filter((r) => r.score > 0).sort((a, b) => b.score - a.score).slice(0, 5).map((r) => r.it);
+}
+function snippet(it, q) {
+  const ws = words(q), t = it.text.replace(/\s+/g, " ").trim();
+  const i = Math.max(0, ws.map((w) => t.toLowerCase().indexOf(w)).filter((x) => x >= 0).sort((a, b) => a - b)[0] || 0);
+  let s = t.slice(Math.max(0, i - 50), i + 110);
+  s = esc((i > 50 ? "…" : "") + s + "…");
+  for (const w of ws) s = s.replace(new RegExp("(" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "gi"), "<mark>$1</mark>");
+  return s;
+}
+function goTo(it) {
+  if (it.el.tagName === "DETAILS") it.el.open = true;
+  it.el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+const q = document.getElementById("askQ"), hits = document.getElementById("askHits"), ans = document.getElementById("askAnswer"), go = document.getElementById("askGo");
+function showHits() {
+  const found = search(q.value);
+  hits.innerHTML = found.map((it, i) => `<li><a href="#${esc(it.id)}" data-hit="${i}"><strong>${esc(it.title)}</strong><span class="snip">${snippet(it, q.value)}</span></a></li>`).join("");
+  hits.querySelectorAll("[data-hit]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); goTo(found[+a.dataset.hit]); }));
+}
+let t; q.addEventListener("input", () => { clearTimeout(t); t = setTimeout(showHits, 150); ans.innerHTML = ""; });
+const sectionTitle = (id) => { const h = document.querySelector(`#${CSS.escape(id)} h2`); return h ? h.textContent.replace(/^\d+/, "").trim() : id; };
+document.getElementById("askForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const question = q.value.trim(); if (question.length < 3) return;
+  showHits();
+  let session = null; try { session = JSON.parse(localStorage.getItem("nanacare.session") || "null"); } catch {}
+  if (!session || !session.token || session.local) { ans.innerHTML = `<p class="note">To get an AI answer, <a href="./">open the app</a> and sign in, then come back to the manual. The matches above are from this manual.</p>`; return; }
+  go.disabled = true; go.textContent = "Asking…"; ans.innerHTML = `<p class="note">Looking through the manual…</p>`;
+  try {
+    const r = await fetch(RELAY_URL + "/manual/ask", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.token }, body: JSON.stringify({ question }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) throw new Error("Your sign-in has ended. Open the app and sign in again.");
+    if (r.status === 428) throw new Error("Open the app and accept the privacy notice first.");
+    if (!r.ok) throw new Error(j.error || "Couldn't get an answer right now.");
+    const links = (j.sections || []).filter((id) => document.getElementById(id)).map((id) => `<a href="#${esc(id)}">${esc(sectionTitle(id))}</a>`).join(" · ");
+    ans.innerHTML = `<div class="answer">${esc(j.answer)}${links ? `<div class="src">Read more: ${links}</div>` : ""}</div><p class="note">Written by AI from this manual. If it doesn't look right, follow the links or use Help in the app.</p>`;
+  } catch (err) {
+    ans.innerHTML = `<p class="note">${esc(err.message === "Failed to fetch" ? "No connection. The matches above are from this manual." : err.message)}</p>`;
+  } finally { go.disabled = false; go.textContent = "Ask"; }
+});
 </script>
 </body>
 </html>

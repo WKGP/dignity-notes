@@ -6,6 +6,8 @@ Cloud copy. Notes, flags, handovers, outings and recordings are copied to secure
 
 ## Since 1.0.0 (patch releases)
 
+- 1.1.1: User manual search: matches as you type, and Ask for an AI answer written only from the manual, with links to the right sections (signed-in users).
+
 - 1.0.10: iPhone banner: open links from WhatsApp in Safari first (compass button), because the WhatsApp browser keeps separate notes.
 - 1.0.9: "Check these words" shows each word highlighted in what you said, with Show me to jump to it; Earlier notes today on the review screen; Record log "Show all words and recordings".
 - 1.0.8: The private-tab warning now gives step-by-step fixes (iPhone: Tabs → leave Private → Add to Home Screen; Android: reopen in a normal tab → Install).
