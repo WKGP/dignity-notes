@@ -622,14 +622,14 @@ function basicTidy(transcript) {
   }
   if (flags.some((f) => f.kind === "follow_up") && !categories.includes("To note")) categories.push("To note");
   // Aggression or agitation is part of conditions like dementia: recorded as behaviour, not an incident.
-  return { note, categories, flags, unclear: [] };
+  return { note, categories, flags, unclear: [], record_gaps: flags.some((f) => f.kind === "incident") ? ["when", "seen", "done", "told"] : [] };
 }
 const validTidy = (o) => o && typeof o.note === "string" && o.note.trim() && Array.isArray(o.categories) && Array.isArray(o.flags);
 async function tidy(transcript) {
   try {
     const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary() });
     if (!validTidy(out)) throw new Error("Unexpected reply from the relay");
-    return { unclear: [], ...out, source: "ai" };
+    return { unclear: [], record_gaps: [], ...out, source: "ai" };
   } catch (e) {
     return { ...basicTidy(transcript), source: "basic", reason: e.message };
   }
@@ -710,11 +710,41 @@ function render() {
   ({ today: renderToday, log: renderLog, handover: renderHandover, family: renderFamily })[tab]();
 }
 
+/* ---------- incident record checklist ----------
+ * For an incident or a change in condition, a good record says when it happened, what was seen,
+ * what was done and who was told (good practice for care records in the UK and Australia).
+ * The AI lists which of these the carer didn't mention; the carer can add them or save as it is.
+ */
+const GAP_TEXT = {
+  when: "When it happened, or when you noticed it",
+  seen: "What you saw (where, how much, how they seemed)",
+  done: "What you did about it",
+  told: "Who you told (GP, 111, 999, family, the agency), or that you haven't told anyone yet",
+};
+function gapsHTML(draft) {
+  const gaps = (Array.isArray(draft.record_gaps) ? draft.record_gaps : []).filter((g) => GAP_TEXT[g]);
+  const serious = draft.flags.some((f) => f.kind === "incident");
+  if (!gaps.length) return "";
+  return `<div class="warn" style="display:grid;gap:8px">
+    <span><strong>${serious ? "For a full incident record" : "For a full record of this change"}, ${draft.source === "basic" ? "check you've said" : "you haven't said"}:</strong></span>
+    <ul style="margin:0;padding-left:20px">${gaps.map((g) => `<li>${esc(GAP_TEXT[g])}</li>`).join("")}</ul>
+    <button class="btn secondary" id="rvGapAdd" style="justify-self:start;min-height:40px;padding:8px 14px;font-size:14px">Add details</button>
+    <span class="tiny muted">Type or use the keyboard's microphone, then tap Rewrite. You can also save it as it is.</span></div>`;
+}
+// Who to tell about an incident (UK). Shown with every incident flag; information, not a decision.
+const WHO_TO_TELL = `<details class="small" style="margin-top:6px"><summary>Who to tell</summary>
+  <ul style="margin:6px 0 0;padding-left:18px">
+    <li><strong>Emergency</strong> (serious bleeding, can't breathe, unconscious, a serious fall): call <strong>999</strong>.</li>
+    <li><strong>Urgent but not an emergency</strong>: call their GP, or <strong>111</strong> out of hours.</li>
+    <li><strong>Suspected abuse or neglect</strong>: tell your agency, and contact the local council's adult safeguarding team. If someone is in danger, call 999.</li>
+    <li>Tell the family member or attorney, and your agency, as agreed for this client.</li>
+    <li>Then add who you told to the note, so the record is complete.</li>
+  </ul></details>`;
 function flagHTML(f, actions = true) {
   return `<div class="flag ${f.kind === "incident" ? "incident" : ""}">
     <div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}</span>
-    <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div>
-    ${actions ? `<button class="link" data-resolve="${f.id}">Resolved</button>` : ""}</div>`;
+    <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span>${f.kind === "incident" ? WHO_TO_TELL : ""}</div>
+    ${actions ? `<button class="link" data-resolve="${esc(f.id)}">Resolved</button>` : ""}</div>`;
 }
 function bindResolve(root) {
   root.querySelectorAll("[data-resolve]").forEach((b) => b.addEventListener("click", () => {
@@ -1406,6 +1436,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
         ${spoken ? `<label class="f small" style="font-weight:400">Words often get misheard when the phone expects a different accent. Your accent is set to:
           <select id="rvAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
           <span class="tiny muted">A change applies to your next recording. You can also change it in Settings.</span>` : ""}</div>` : ""}
+      ${gapsHTML(draft)}
       <div><div class="eyebrow" style="margin-bottom:6px">Covers</div><div class="chips">${draft.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("") || '<span class="small muted">No categories found</span>'}</div></div>
       <div><div class="eyebrow" style="margin-bottom:6px">Flags</div><div class="flags" id="rvFlags">${draft.flags.length ? draft.flags.map((f, i) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"}</span><strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span></div><button class="link" data-rmflag="${i}">Remove</button></div>`).join("") : '<div class="empty">No flags. Nothing to note.</div>'}</div></div>
       <div class="card" style="display:grid;gap:10px;box-shadow:none">
@@ -1423,6 +1454,13 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
       <div class="row"><button class="btn ghost" id="rvAgain">Re-record</button><button class="btn primary" id="rvSave">Save to record</button></div>
       <button class="link" id="rvDiscard" style="justify-self:center;color:var(--ink-2)">Discard</button>`;
     const said = $("#rvSaid", rv);
+    if ($("#rvGapAdd", rv)) $("#rvGapAdd", rv).onclick = () => {
+      // Jump to the end of "What you said" to add the missing details, then Rewrite.
+      said.scrollIntoView({ block: "center" }); said.focus();
+      if (!/\s$/.test(said.value)) said.value += " ";
+      said.setSelectionRange(said.value.length, said.value.length); said.dispatchEvent(new Event("input"));
+      $("#rvRewrite", rv).hidden = false;
+    };
     rv.querySelectorAll("textarea.grow, #rvNote").forEach(autoGrow);
     rv.querySelectorAll("[data-showword]").forEach((b) => (b.onclick = () => {
       // Select the word where it is, so it's easy to see and fix.
