@@ -1581,6 +1581,7 @@ function signedOut(msg) {
   if (rec.on) stopRecording(true);
   clearDocCache(); saveLocal();
   audioDB.keys().then((ks) => audioDB.del((ks || []).filter((k) => String(k).startsWith("doc_")))); // every client's documents
+  try { caches.delete("dn-manual"); } catch {} // the manual copy kept for reading without signal
   session = null; saveSession(); KEY = null; S = seed(); $("#sheetRoot").innerHTML = ""; handoverDraft = familySummary = null; showLogin(msg);
 }
 function showLogin(msg) {

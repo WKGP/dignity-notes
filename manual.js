@@ -1,5 +1,31 @@
 // Dignity Notes user manual: contents, search and Ask. Kept out of the page for the content policy.
 if (window.top !== window.self) { document.documentElement.innerHTML = ""; throw new Error("framed"); }
+const RELAY_URL = "https://dignity-notes-relay.workgroup-works.workers.dev";
+const MANUAL_CACHE = "dn-manual";
+// The manual is only given to signed-in people: fetch it with the app's sign-in, keep a copy for
+// reading without signal, then set up the contents, search and Ask.
+(async function loadManual() {
+  const gate = (html) => { document.getElementById("manualGate").innerHTML = html; };
+  let session = null; try { session = JSON.parse(localStorage.getItem("nanacare.session") || "null"); } catch {}
+  if (!session || !session.token || session.local) return gate('<h2>Sign in to read the user manual</h2><p>The manual is for Dignity Notes carers and administrators.</p><p><a href="./">Open Dignity Notes and sign in</a>, then open the manual from the <strong>?</strong> button.</p>');
+  let html = null;
+  try {
+    const r = await fetch(RELAY_URL + "/manual/page", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + session.token }, body: "{}" });
+    if (r.status === 401) return gate('<h2>Your sign-in has ended</h2><p><a href="./">Open Dignity Notes and sign in again</a>, then open the manual.</p>');
+    if (r.status === 428) return gate('<h2>One more step</h2><p><a href="./">Open Dignity Notes</a> and accept the updated privacy notice, then open the manual.</p>');
+    if (!r.ok) throw new Error("status " + r.status);
+    html = (await r.json()).html;
+    try { const c = await caches.open(MANUAL_CACHE); await c.put("./__manual", new Response(html)); } catch {}
+  } catch {
+    try { const c = await caches.open(MANUAL_CACHE); const r = await c.match("./__manual"); if (r) html = await r.text(); } catch {}
+  }
+  if (!html) return gate('<h2>No signal</h2><p>Connect to the internet to open the user manual. After that, it opens without signal on this phone.</p>');
+  document.getElementById("manualRoot").innerHTML = html; // the relay's own manual (trusted content)
+  initManual();
+  if (location.hash) { const el = document.getElementById(location.hash.slice(1)); if (el) el.scrollIntoView(); }
+})();
+
+function initManual() {
 // On a phone, start with the contents folded so the guide is the first thing you see; close it after picking a section.
 const toc = document.querySelector("nav.toc details");
 const narrow = matchMedia("(max-width:860px)");
@@ -8,7 +34,6 @@ toc.querySelectorAll("a").forEach((a) => a.addEventListener("click", () => { if 
 
 /* Search and ask. Searching happens on this device. Ask sends only the question (no notes or client
    details) to the Dignity Notes relay, which answers from this manual using AI. */
-const RELAY_URL = "https://dignity-notes-relay.workgroup-works.workers.dev";
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const STOP = new Set("the a an and or to of in on at for is it do does how can i my me we you your what when where why which who with this that be are was if not from by as".split(" "));
 const words = (q) => q.toLowerCase().split(/[^a-z0-9']+/).filter((w) => w.length > 1 && !STOP.has(w));
@@ -67,3 +92,4 @@ document.getElementById("askForm").addEventListener("submit", async (e) => {
     ans.innerHTML = `<p class="note">${esc(err.message === "Failed to fetch" ? "No connection. The matches above are from this manual." : err.message)}</p>`;
   } finally { go.disabled = false; go.textContent = "Ask"; }
 });
+}
