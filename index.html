@@ -726,9 +726,13 @@ function openSettings() {
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Demo data</h3>
       <p class="small muted" style="margin:0">Start again with the example day. Deletes this client's notes and recordings on this phone.</p>
       <button class="btn ghost" id="stReset">Reset demo</button><button class="btn danger" id="stResetYes" hidden>Yes, delete everything</button></div>
+    <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Your accent</h3>
+      <label class="f">The phone turns your speech into words more accurately when it knows your accent<select id="stAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
+      <p class="tiny muted" style="margin:0">Saved on this phone only.</p></div>
     <button class="btn ghost" id="stPrivacy">Read the privacy notice</button>
     <p class="tiny muted" style="margin:0;text-align:center">Dignity Notes pilot · fictional test use only<br>${COPYRIGHT}</p>`);
   $("#stPrivacy").onclick = () => { s.close(); viewPrivacy(); };
+  $("#stAccent").onchange = (e) => { try { localStorage.setItem("dignitynotes.speechlang", e.target.value); toast("Accent saved"); } catch { toast("Couldn't save on this phone"); } };
   $("#stTest").onclick = async () => {
     const m = $("#stMsg"); m.textContent = "Checking…"; m.style.color = "";
     try { const me = await relay("/me", {}); if (!me.username) throw new Error("that address isn't the Dignity Notes relay"); m.textContent = "Connected. Notes will be written by AI."; m.style.color = "var(--accent)"; }
@@ -761,6 +765,17 @@ function openSettings() {
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const rec = { media: null, chunks: [], stream: null, recog: null, on: false, final: "", interim: "", started: 0, timer: null, blob: null, speechOK: !!SR };
 
+/* ---------- speech accent ----------
+ * The phone's speech recognition works much better when it knows the speaker's accent.
+ * Chosen per phone in Settings; defaults to the phone's own English variant, else UK.
+ */
+const ACCENTS = [["en-GB", "UK"], ["en-AU", "Australia"], ["en-ZA", "South Africa"], ["en-IE", "Ireland"], ["en-NZ", "New Zealand"], ["en-US", "United States"], ["en-IN", "India"]];
+function speechLang() {
+  try { const v = localStorage.getItem("dignitynotes.speechlang"); if (ACCENTS.some(([c]) => c === v)) return v; } catch {}
+  const nav = (navigator.languages || [navigator.language || ""]).find((l) => ACCENTS.some(([c]) => c.toLowerCase() === String(l).toLowerCase()));
+  return nav ? ACCENTS.find(([c]) => c.toLowerCase() === nav.toLowerCase())[0] : "en-GB";
+}
+
 function openRecorder() {
   if (activeTransfer()) toast(`Note: ${S.client.name} is out with ${activeTransfer().withWhom}`);
   rec.final = rec.interim = ""; rec.blob = null; rec.speechOK = !!SR; rec.cancelled = false;
@@ -790,7 +805,7 @@ async function startRecording() {
   catch { rec.media = null; }
   if (SR) {
     try {
-      rec.recog = new SR(); rec.recog.lang = "en-GB"; rec.recog.continuous = true; rec.recog.interimResults = true;
+      rec.recog = new SR(); rec.recog.lang = speechLang(); rec.recog.continuous = true; rec.recog.interimResults = true;
       rec.recog.onresult = (e) => {
         rec.interim = "";
         for (let i = e.resultIndex; i < e.results.length; i++) {
