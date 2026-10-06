@@ -506,6 +506,51 @@ function bindResolve(root) {
   }));
 }
 
+/* ---------- storage safety ----------
+ * Notes and recordings live only on this phone. Browsers can delete them: private tabs when
+ * closed, Safari after 7 days without a visit (unless added to the Home Screen), any browser
+ * when storage runs low. Ask for permanent storage, and warn when the data looks at risk.
+ */
+const storageState = { checked: false, persisted: false, installed: false, ios: false, privateLikely: false, quotaMB: null };
+let installPrompt = null; // Android Chrome's "install app" offer, when available
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; if (tab === "today" && session && session.client) render(); });
+async function checkStorage() {
+  const st = storageState;
+  st.installed = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  st.ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  try { if (navigator.storage && navigator.storage.persist) st.persisted = (await navigator.storage.persisted()) || (await navigator.storage.persist()); } catch {}
+  try {
+    if (navigator.storage && navigator.storage.estimate) {
+      const { quota } = await navigator.storage.estimate();
+      st.quotaMB = quota ? Math.round(quota / 1048576) : null;
+      // Private tabs get a small fixed allowance (around 100 MB or less); normal tabs get far more.
+      st.privateLikely = !!quota && quota < 120 * 1048576;
+    }
+  } catch {}
+  st.checked = true;
+}
+const hideKey = () => "dignitynotes.hidehomescreen";
+function storageBanner() {
+  const st = storageState; if (!st.checked) return "";
+  if (st.privateLikely) return `<div class="flag incident" role="alert"><div class="body"><span class="eyebrow">Your notes may be deleted</span>
+    <strong>This looks like a private browsing tab</strong><span class="small">Private tabs delete everything (notes and recordings) when they close. Open Dignity Notes in a normal tab${st.ios ? ", then add it to your Home Screen" : ""}.</span></div></div>`;
+  if (st.installed || st.persisted) return "";
+  let hidden = 0; try { hidden = +localStorage.getItem(hideKey()) || 0; } catch {}
+  if (Date.now() < hidden) return "";
+  if (st.ios) return `<div class="flag"><div class="body"><span class="eyebrow">Keep your notes safe</span>
+    <strong>Add Dignity Notes to your Home Screen</strong><span class="small">Safari deletes a website's saved notes and recordings if it isn't opened for 7 days. Apps on the Home Screen are kept.
+    <br>1. Tap the Share button (square with an arrow)<br>2. Tap <strong>Add to Home Screen</strong><br>3. Open Dignity Notes from the new icon from now on.</span>
+    <button class="link small" id="hideHome" style="justify-self:start">Hide for a week</button></div></div>`;
+  if (installPrompt) return `<div class="flag"><div class="body"><span class="eyebrow">Keep your notes safe</span>
+    <strong>Install Dignity Notes on this phone</strong><span class="small">Installed apps keep their notes and recordings safer from being cleared by the browser.</span>
+    <div class="row" style="margin-top:6px"><button class="btn primary" id="doInstall" style="min-height:40px;padding:8px 14px;font-size:14px">Install</button><button class="link small" id="hideHome">Not now</button></div></div></div>`;
+  return "";
+}
+function bindStorageBanner(root) {
+  const h = $("#hideHome", root); if (h) h.onclick = () => { try { localStorage.setItem(hideKey(), String(Date.now() + 7 * 864e5)); } catch {} render(); };
+  const i = $("#doInstall", root); if (i) i.onclick = async () => { try { installPrompt.prompt(); await installPrompt.userChoice; } catch {} installPrompt = null; await checkStorage(); render(); };
+}
+
 function renderToday() {
   const v = $("#view-today"); const now = new Date(); const h = now.getHours();
   const greet = h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
@@ -514,7 +559,8 @@ function renderToday() {
   const sched = [...S.schedule].filter((s) => s.when > Date.now() - 6 * 36e5).sort((a, b) => a.when - b.when);
   const flags = openFlags().sort((a, b) => (a.kind === "incident" ? -1 : 1) - (b.kind === "incident" ? -1 : 1) || b.ts - a.ts);
   v.innerHTML = `
-    <div class="hello"><h2>${greet}, ${esc(onDuty().name)}</h2><p>${fmtDay(Date.now())} · ${esc(onDuty().shift)}</p></div>
+    <div class="hello"><h2>${greet}, ${esc(onDuty().name)}</h2><p>${fmtDay(Date.now())}${onDuty().shift ? " · " + esc(onDuty().shift) : ""}</p></div>
+    ${storageBanner()}
     <button class="cta" id="ctaRec"><span class="mic">${ICON.mic}</span><span><strong>Record care note</strong><span>Speak as things happen. You check it before it's saved.</span></span></button>
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="muted small">${flags.length || "None"} open</span></div>
       <div class="flags">${flags.length ? flags.map((f) => flagHTML(f)).join("") : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div></div>
@@ -528,6 +574,7 @@ function renderToday() {
       ${activeTransfer() ? `<button class="btn secondary block" id="ctaBack">${ICON.out} Back in my care</button>` : `<button class="btn secondary block" id="ctaOut">${ICON.out} Hand over to someone else</button>`}</div>
     ${latest ? `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId).name)} · ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p></div>` : ""}`;
   $("#ctaRec").onclick = () => openRecorder();
+  bindStorageBanner(v);
   $("#addEvent").onclick = () => openEventSheet();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
   if ($("#ctaBack")) $("#ctaBack").onclick = () => openReturnSheet();
@@ -749,6 +796,7 @@ function openSettings() {
       <div>App version <strong id="abApp">checking…</strong></div>
       <div>Server (relay) version <strong id="abRelay">checking…</strong></div>
       <div>Privacy notice version <strong>${esc(PRIVACY_VERSION)}</strong></div>
+      <div>Notes on this phone: <strong>${storageState.privateLikely ? "may be deleted (private tab)" : storageState.installed || storageState.persisted ? "kept permanently" : "may be cleared by the browser"}</strong></div>
       <div class="muted" id="abMatch"></div>
       <a class="link" href="CHANGELOG.md" target="_blank" rel="noopener" style="justify-self:start">What's new</a>
       <p class="tiny muted" style="margin:4px 0 0">Dignity Notes pilot · fictional test use only<br>${COPYRIGHT}</p></div>`);
@@ -1661,6 +1709,7 @@ async function showClients(manual) {
 }
 
 /* ---------- boot ---------- */
+checkStorage().then(() => { if (session && session.client && tab === "today") render(); });
 if (session && (session.token || session.local)) {
   if (session.client) { loadUser(); render(); } else render();
   if (session.local || session.privacyAccepted === PRIVACY_VERSION) { if (session.client) checkClient(); else showClients(false); }
