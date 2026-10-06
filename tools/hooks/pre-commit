@@ -2,6 +2,8 @@
 # Bumps the patch version on every commit (Workgroup convention, see tools/bump.mjs) and
 # stages the bumped files so the new version is inside the commit being made.
 GIT_DIR=$(git rev-parse --git-dir)
+# Opt-out for amends: git can't tell this hook a commit is an amend, so use  SKIP_BUMP=1 git commit --amend
+[ -n "$SKIP_BUMP" ] && exit 0
 # Merges must not bump.
 [ -f "$GIT_DIR/MERGE_HEAD" ] && exit 0
 # Already bumped in this commit (amend, conflict resolution): don't bump twice.
