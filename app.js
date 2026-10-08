@@ -1249,6 +1249,8 @@ function openRecorder() {
 async function startRecording() {
   if (rec.on || rec.starting) return; // a second tap while the microphone is starting
   rec.starting = true;
+  // The first recording on a phone is often lost to the phone's permission questions (microphone, speech).
+  try { rec.firstUse = !localStorage.getItem("dn.recorded"); localStorage.setItem("dn.recorded", "1"); } catch { rec.firstUse = false; }
   try {
     rec.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
   } catch (e) {
@@ -1475,7 +1477,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
       toast((inc ? "Saved. Incident report added to Needs attention." : "Saved to the record.") + (keep.length ? ` Remembered ${keep.length} word fix${keep.length > 1 ? "es" : ""}.` : ""));
     };
   };
-  if (typed || !transcript) showInput(!typed ? (blob ? "We couldn't turn your speech into words on this phone. Play it back and type a short version below." : "Nothing was picked up. Check the microphone, try again, or type the note.") : "");
+  if (typed || !transcript) showInput(!typed ? (blob ? "We couldn't turn your speech into words on this phone. Play it back and type a short version below." : rec.firstUse ? "Nothing was picked up, because the phone was asking for permission to use the microphone. Close this and tap Record again: it works from now on." : "Nothing was picked up. Check the microphone, try again, or type the note.") : "");
   else run();
 }
 
