@@ -1863,12 +1863,41 @@ function openChangePassword() {
   setTimeout(() => $("#pwCur", s.root)?.focus(), 50);
 }
 
+// Spoken editing commands in dictated text: "delete that" / "scratch that" (the last sentence),
+// "delete last word", "new line", "new paragraph", and punctuation ("full stop", "comma",
+// "question mark", "exclamation mark"). Speech-to-text may add its own punctuation around them.
+function applyVoiceCommands(text) {
+  const CMD = /[\s,.]*\b(delete that sentence|delete that|scratch that|delete (?:the )?last word|new paragraph|new line|full stop|period|comma|question mark|exclamation mark)\b[.,!?]?/gi;
+  const PUNCT = { "full stop": ".", period: ".", comma: ",", "question mark": "?", "exclamation mark": "!" };
+  let out = "", last = 0, m;
+  while ((m = CMD.exec(text))) {
+    out += text.slice(last, m.index); last = m.index + m[0].length;
+    const c = m[1].toLowerCase();
+    if (c.startsWith("delete that") || c === "scratch that") {
+      // Drop the sentence being spoken (or, if it has just ended, the previous one).
+      let t = out.replace(/\s+$/, "");
+      if (/[.?!]$/.test(t)) t = t.slice(0, -1);
+      const i = Math.max(t.lastIndexOf(". "), t.lastIndexOf("? "), t.lastIndexOf("! "), t.lastIndexOf("\n"));
+      out = i < 0 ? "" : t.slice(0, i + (t[i] === "\n" ? 1 : 2));
+    } else if (c.startsWith("delete")) out = out.replace(/\s*\S+\s*$/, "");
+    else if (c === "new line") out = out.replace(/[ \t]+$/, "") + "\n";
+    else if (c === "new paragraph") out = out.replace(/[ \t]+$/, "") + "\n\n";
+    else out = out.replace(/[\s,.]+$/, "") + PUNCT[c];
+  }
+  out += text.slice(last);
+  // Tidy: single spaces, no space before punctuation, a capital at the start of each sentence and line.
+  return out.replace(/^\s+/, "").replace(/[ \t]+/g, " ").replace(/ ([.,?!])/g, "$1")
+    .replace(/([.?!]) *([a-z])/g, (x, p, l) => `${p} ${l.toUpperCase()}`)
+    .replace(/\n +/g, "\n").replace(/(^|\n)([a-z])/g, (x, n, l) => n + l.toUpperCase())
+    .replace(/^\s+|[ \t]+$/g, "");
+}
+
 // Speak instead of typing (used for feedback). Words appear live when the phone can; otherwise, when
 // you stop, the recording is turned into words by the relay. The recording itself isn't kept.
 function dictation(textarea, btn, status) {
   const d = { on: false, final: "", base: "" };
   const label = () => { btn.innerHTML = d.on ? `${ICON.stop} Stop` : `${ICON.mic} Speak`; btn.setAttribute("aria-pressed", String(d.on)); };
-  const put = (words) => { textarea.value = (d.base + (d.base && words ? " " : "") + words).slice(0, 2000); textarea.dispatchEvent(new Event("input")); };
+  const put = (words) => { words = applyVoiceCommands(words); textarea.value = (d.base + (d.base && words ? " " : "") + words).slice(0, 2000); textarea.dispatchEvent(new Event("input")); };
   const onHide = () => { if (document.visibilityState === "hidden" && d.on) stop(); };
   async function start() {
     btn.disabled = true;
@@ -1876,7 +1905,7 @@ function dictation(textarea, btn, status) {
     catch { btn.disabled = false; status("The microphone is blocked. Allow it in your phone's settings, or type instead."); return; }
     btn.disabled = false;
     d.base = textarea.value.trim(); d.final = ""; d.chunks = []; d.srLost = false; d.on = true; label();
-    status("Listening… tap Stop when you've finished.");
+    status("Listening… Say \"full stop\", \"new line\" or \"scratch that\" if you like. Tap Stop when you've finished.");
     try { d.media = new MediaRecorder(d.stream, { audioBitsPerSecond: 32000 }); } catch { try { d.media = new MediaRecorder(d.stream); } catch { d.media = null; } }
     if (d.media) { d.media.ondataavailable = (e) => e.data.size && d.chunks.push(e.data); d.media.start(1000); }
     d.recog = null;
