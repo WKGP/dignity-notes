@@ -1835,6 +1835,61 @@ function downscaleImage(file) {
   });
 }
 
+// Speak instead of typing (used for feedback). Words appear live when the phone can; otherwise, when
+// you stop, the recording is turned into words by the relay. The recording itself isn't kept.
+function dictation(textarea, btn, status) {
+  const d = { on: false, final: "", base: "" };
+  const label = () => { btn.innerHTML = d.on ? `${ICON.stop} Stop` : `${ICON.mic} Speak`; btn.setAttribute("aria-pressed", String(d.on)); };
+  const put = (words) => { textarea.value = (d.base + (d.base && words ? " " : "") + words).slice(0, 2000); textarea.dispatchEvent(new Event("input")); };
+  const onHide = () => { if (document.visibilityState === "hidden" && d.on) stop(); };
+  async function start() {
+    btn.disabled = true;
+    try { d.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+    catch { btn.disabled = false; status("The microphone is blocked. Allow it in your phone's settings, or type instead."); return; }
+    btn.disabled = false;
+    d.base = textarea.value.trim(); d.final = ""; d.chunks = []; d.srLost = false; d.on = true; label();
+    status("Listening… tap Stop when you've finished.");
+    try { d.media = new MediaRecorder(d.stream, { audioBitsPerSecond: 32000 }); } catch { try { d.media = new MediaRecorder(d.stream); } catch { d.media = null; } }
+    if (d.media) { d.media.ondataavailable = (e) => e.data.size && d.chunks.push(e.data); d.media.start(1000); }
+    d.recog = null;
+    if (SR) try {
+      d.recog = new SR(); d.recog.lang = speechLang(); d.recog.continuous = true; d.recog.interimResults = true;
+      d.recog.onresult = (e) => {
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) { const r = e.results[i]; if (r.isFinal) d.final += r[0].transcript.trim() + " "; else interim += r[0].transcript; }
+        put((d.final + interim).trim());
+      };
+      d.recog.onerror = () => {};
+      d.recog.onend = () => { if (d.on) d.srLost = true; }; // the phone stopped listening early: the relay fills in
+      d.recog.start();
+    } catch { d.recog = null; }
+    document.addEventListener("visibilitychange", onHide);
+    d.timer = setTimeout(() => d.on && stop(), 5 * 60 * 1000); // 5 minutes at most
+  }
+  async function stop(discard) {
+    if (!d.on) return;
+    d.on = false; clearTimeout(d.timer); document.removeEventListener("visibilitychange", onHide); label();
+    try { d.recog && d.recog.stop(); } catch {}
+    const blob = await new Promise((res) => {
+      if (!d.media || d.media.state === "inactive") return res(null);
+      let done = false; const fin = () => { if (done) return; done = true; res(d.chunks.length ? new Blob(d.chunks, { type: d.media.mimeType || "audio/webm" }) : null); };
+      d.media.onstop = () => setTimeout(fin, 200); try { d.media.stop(); } catch { fin(); } setTimeout(fin, 2000);
+    });
+    d.stream && d.stream.getTracks().forEach((t) => t.stop());
+    if (discard) return;
+    if (blob && blob.size >= 2000 && (!d.final.trim() || d.srLost || !d.recog)) {
+      status("Turning your words into text…"); btn.disabled = true;
+      try { const t = await serverWords(blob); if (t) put(t); else if (!d.final.trim()) { status("Nothing was picked up. Try again, or type."); btn.disabled = false; return; } }
+      catch (e) { status(e.message || "Couldn't turn that into words. Please type it."); btn.disabled = false; return; }
+      btn.disabled = false;
+    } else if (d.final.trim()) put(d.final.trim());
+    status(textarea.value.trim() ? "Check the words, then tap Send." : "Nothing was picked up. Try again, or type.");
+  }
+  label();
+  btn.onclick = () => (d.on ? stop() : start());
+  return { cancel: () => stop(true), finish: () => stop(false), busy: () => d.on || btn.disabled };
+}
+
 function openFeedback(kind) {
   const saved = fbLoad(kind);
   // ready: show Submit. modelReady: the helper itself said it had enough (tells the analysis the interview finished).
@@ -1846,15 +1901,17 @@ function openFeedback(kind) {
     <p class="tiny muted" style="margin:0">Please leave out real names, addresses, phone numbers and health details. Screenshots are seen by the administrators and the AI helper, so avoid screens that show care notes. Nothing is sent until you press Submit.</p>
     <div class="thread" id="fbThread" style="max-height:44vh"></div>
     <div id="fbShot"></div>
-    <textarea id="fbText" rows="3" style="min-height:84px" placeholder="Type here…" aria-label="Your message"></textarea>
+    <textarea id="fbText" rows="3" style="min-height:84px" placeholder="Type here, or tap Speak…" aria-label="Your message"></textarea>
     <div class="row">
+      <button class="btn ghost" id="fbMic" style="flex:0 0 auto"></button>
       <label class="btn ghost" style="flex:0 0 auto">Add screenshot<input type="file" id="fbFile" accept="image/*" hidden></label>
       <button class="btn secondary" id="fbSend">Send</button></div>
     <button class="btn primary block" id="fbSubmit" hidden>Submit</button>
     <div class="small" id="fbMsg" role="status"></div>`,
     // A report being written can't be closed by a stray tap outside it; the close button asks twice (it's kept as a draft anyway).
-    { onClose: () => document.removeEventListener("paste", onPaste), guard: () => fbHasDraft(st) });
+    { onClose: () => { document.removeEventListener("paste", onPaste); dict && dict.cancel(); }, guard: () => fbHasDraft(st) || (dict && dict.busy()) });
   const thread = $("#fbThread", s.root), msg = $("#fbMsg", s.root);
+  const dict = dictation($("#fbText", s.root), $("#fbMic", s.root), (t) => { msg.style.color = ""; msg.textContent = t; });
   const persist = () => { if (fbHasDraft(st)) fbSave(st); else fbClear(kind); };
   const draw = () => {
     thread.innerHTML = `<div class="msg"><span class="who">Helper</span>${esc(opener)}</div>` + st.transcript.map((t) =>
@@ -1879,6 +1936,7 @@ function openFeedback(kind) {
   $("#fbText", s.root).value = st.pending || "";
   $("#fbText", s.root).oninput = (e) => { st.pending = e.target.value.slice(0, 2000); persist(); };
   $("#fbSend", s.root).onclick = async () => {
+    if (dict.busy()) { await dict.finish(); return; } // first tap while speaking: stop and show the words to check
     const text = $("#fbText", s.root).value.trim();
     if (!text) return toast("Type something first");
     st.transcript.push({ role: "user", content: text.slice(0, 2000) }); $("#fbText", s.root).value = ""; st.pending = ""; msg.textContent = "";
