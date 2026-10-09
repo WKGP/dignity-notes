@@ -1852,7 +1852,8 @@ function openFeedback(kind) {
       <button class="btn secondary" id="fbSend">Send</button></div>
     <button class="btn primary block" id="fbSubmit" hidden>Submit</button>
     <div class="small" id="fbMsg" role="status"></div>`,
-    { onClose: () => document.removeEventListener("paste", onPaste) });
+    // A report being written can't be closed by a stray tap outside it; the close button asks twice (it's kept as a draft anyway).
+    { onClose: () => document.removeEventListener("paste", onPaste), guard: () => fbHasDraft(st) });
   const thread = $("#fbThread", s.root), msg = $("#fbMsg", s.root);
   const persist = () => { if (fbHasDraft(st)) fbSave(st); else fbClear(kind); };
   const draw = () => {
