@@ -153,7 +153,7 @@ const cloudOn = () => !!(session && session.token && !session.local && session.c
 // records from other phones are displayed here.
 const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SYNC_SHAPES = {
-  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
+  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", heardBy: "str:10", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
   flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", raisedBy: "id", resolvedTs: "num", resolvedBy: "id" } },
   handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", fromName: "str:60", toId: "id", text: "str:10000", source: "str:20" } },
   event: { req: ["ts", "when", "label"], f: { ts: "num", when: "num", label: "str:120", detail: "str:300", by: "id" } },
@@ -197,9 +197,11 @@ let syncTimer = null;
 function scheduleSync(ms = 1500) { if (!cloudOn()) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms); }
 // Background requests: errors are reported in the cloud status, never acted on mid-task.
 async function syncFetch(path, init) {
+  const { signal: outer, ...rest } = init; init = rest;
   const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 60000);
+  if (outer) { if (outer.aborted) ctl.abort(); else outer.addEventListener("abort", () => ctl.abort(), { once: true }); }
   try {
-    const r = await fetch(relayBase() + path, { method: "POST", signal: ctl.signal, ...init, headers: { "Content-Type": "application/json", ...(init.headers || {}), Authorization: "Bearer " + session.token } });
+    const r = await fetch(relayBase() + path, { method: "POST", ...init, signal: ctl.signal, headers: { "Content-Type": "application/json", ...(init.headers || {}), Authorization: "Bearer " + session.token } });
     if (r.status === 401 || r.status === 428) { syncState.blocked = { why: r.status === 401 ? "signin" : "privacy", token: session.token }; }
     if (!r.ok) { const j = await r.json().catch(() => ({})); const e = new Error(j.error || "Error " + r.status); e.status = r.status; e.code = j.code; throw e; }
     return r;
@@ -830,7 +832,7 @@ function renderLog() {
         <div class="chips">${n.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>
         <details ${logOpen ? "open" : ""}><summary>${n.audioId ? "Recording and words" : "Words"}</summary>
           ${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}"></audio>` : ""}
-          ${n.heard ? `<p class="small muted" style="margin:8px 0 0"><strong>The phone heard:</strong> ${esc(n.heard)}</p>
+          ${n.heard ? `<p class="small muted" style="margin:8px 0 0"><strong>${n.heardBy === "relay" ? "Speech-to-text heard" : "The phone heard"}:</strong> ${esc(n.heard)}</p>
           <p class="small muted" style="margin:6px 0 0"><strong>Checked by the carer:</strong> ${esc(n.transcript)}</p>` : `<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p>`}
           <p class="tiny muted" style="margin:6px 0 0">Approved by ${esc(carer(n.carerId, n.carerName).name)} at ${fmtTime(n.approvedTs || n.ts)}</p></details>
       </article>`;
@@ -974,16 +976,32 @@ function openEventSheet() {
     <label class="f">What<input type="text" id="evLabel" placeholder="e.g. Hairdresser" autocomplete="off"></label>
     <label class="f">Details (optional)<input type="text" id="evDetail" placeholder="e.g. Coming to the house" autocomplete="off"></label>
     <div class="row"><label class="f" style="flex:1">Day<select id="evDay"><option value="0">Today</option><option value="1">Tomorrow</option><option value="2">In 2 days</option></select></label>
-    <label class="f" style="flex:1">Time<input type="text" id="evTime" value="${pad(d.getHours())}:00" inputmode="numeric"></label></div>
+    <label class="f" style="flex:1">Time<input type="text" id="evTime" value="${pad(d.getHours())}:00" inputmode="numeric" placeholder="e.g. 14:30 or 1430" aria-describedby="evTimeHelp"><span class="tiny muted" id="evTimeHelp">Type 11, 1130 or 11:30</span></label></div>
     <button class="btn primary block" id="evSave">Add</button>`);
   $("#evSave").onclick = () => {
-    const label = $("#evLabel").value.trim(); const m = $("#evTime").value.match(/^([01]?\d|2[0-3])[:.]([0-5]\d)$/);
-    if (!label) return toast("Enter what it is"); if (!m) return toast("Time should look like 14:30");
+    const label = $("#evLabel").value.trim(); const m = parseClock($("#evTime").value);
+    if (!label) return toast("Enter what it is"); if (!m) return toast("Type the time like 11, 1130 or 11:30");
     const w = new Date(); w.setHours(+m[1], +m[2], 0, 0);
     w.setDate(w.getDate() + +$("#evDay").value); // calendar days, so a clock change doesn't move it by an hour
+    if (w.getTime() < Date.now() - 60000) return toast(`${pad(m[1])}:${pad(m[2])} today has already passed. Check the time or the day.`);
     S.schedule.push({ id: uid(), ts: Date.now(), when: w.getTime(), label, detail: $("#evDetail").value.trim() });
-    save(); s.close(); render(); toast("Added");
+    save(); s.close(); render(); toast(`Added: ${label}, ${["today", "tomorrow", "in 2 days"][+$("#evDay").value] || ""} at ${pad(m[1])}:${pad(m[2])}`);
   };
+}
+
+// A time typed on a phone keypad (no ":" on an iPhone number pad): 11, 930, 1130, 11.30, 11:30, 2pm, 2.30pm.
+// 1 to 6 on their own mean the afternoon (3 = 15:00); type 03:00 for the early morning.
+function parseClock(v) {
+  const t = String(v || "").trim().toLowerCase().replace(/\s+/g, "");
+  let m = t.match(/^(\d{1,2})(?:[:.h]?(\d{2}))?(am|pm)?$/) || t.match(/^(\d)(\d{2})(am|pm)?$/);
+  if (!m) return null;
+  let h = +m[1]; const min = m[2] ? +m[2] : 0;
+  if (m[3] && (h === 0 || h > 12)) return null; // "0pm", "13pm"
+  if (m[3] === "pm" && h < 12) h += 12; if (m[3] === "am" && h === 12) h = 0;
+  // A bare 1 to 6 (no am/pm, no leading 0) is an afternoon appointment: "3" means 15:00.
+  if (!m[3] && h >= 1 && h <= 6 && !t.startsWith("0")) h += 12;
+  if (h > 23 || min > 59) return null;
+  return [null, h, min];
 }
 
 // App version comes from package.json (bumped on every commit); the relay reports its own on /health.
@@ -1015,7 +1033,7 @@ function openSettings() {
       ${session.role === "admin" ? `<button class="link" id="stWho" style="justify-self:start">Change who cares for ${esc(S.client.name)}</button>` : `<p class="tiny muted" style="margin:0">An administrator decides who cares for ${esc(S.client.name)}.</p>`}</div>
     <div class="card small"><h3 style="font-size:17px;margin-bottom:6px">Consent</h3>
       ${c ? `Agreed by <strong>${esc(c.name)}</strong> (${esc(c.role)}) on ${fmtDay(c.ts)} at ${fmtTime(c.ts)}.` : "Not recorded."}
-      <p class="muted" style="margin:8px 0 0">Notes and recordings are saved on this phone and copied to the cloud (in the EU) for this client's carers and the pilot administrators. Only the words of a note (never the recording) are sent to the AI to tidy.</p></div>
+      <p class="muted" style="margin:8px 0 0">Notes and recordings are saved on this phone and copied to the cloud (in the EU) for this client's carers and the pilot administrators. Only the words of a note (never the recording) are sent to the AI to tidy. If the phone can't turn speech into words, the recording is sent through the relay to Cloudflare's speech-to-text service to work out the words.</p></div>
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Demo data</h3>
       <p class="small muted" style="margin:0">Start again with the example day on this phone. Notes already copied to the cloud come back from there.</p>
       <button class="btn ghost" id="stReset">Reset demo</button><button class="btn danger" id="stResetYes" hidden>Yes, delete everything</button></div>
@@ -1229,6 +1247,8 @@ function speechLang() {
 function openRecorder() {
   if (activeTransfer()) toast(`Note: ${S.client.name} is out with ${activeTransfer().withWhom}`);
   rec.final = rec.interim = ""; rec.blob = null; rec.speechOK = !!SR; rec.cancelled = false; rec.speechLostAt = 0; rec.stoppedAt = 0;
+  if (rec.abort) rec.abort.abort(); rec.finishing = false; // an earlier recording still being turned into words is dropped
+  rec.gen = (rec.gen || 0) + 1; rec.skipServer = false; // each recording has its own number, so a late answer can't land on a newer one
   const s = sheet(`${sheetHead("Record care note")}
     <div class="recorder">
       <button class="big-mic" id="micBtn" aria-label="Start recording">${ICON.mic}</button>
@@ -1238,9 +1258,11 @@ function openRecorder() {
     </div>
     <div class="row"><button class="btn ghost" id="typeBtn">Type instead</button></div>
     <p class="tiny muted" style="margin:0;text-align:center">Recording as ${esc(onDuty().name)} · ${fmtTime(Date.now())}. The original recording is kept with the note. Keep the app open while recording: the screen stays on, and recording stops if the phone locks.</p>`,
-    { onClose: () => { stopRecording(true); if (rec.finishing) rec.cancelled = true; }, guard: () => rec.on || rec.finishing });
+    { onClose: () => { stopRecording(true); if (rec.finishing) { rec.cancelled = true; rec.abort && rec.abort.abort(); } }, guard: () => rec.on || rec.finishing });
   $("#micBtn").onclick = () => (rec.on ? stopRecording(false) : startRecording());
   $("#typeBtn").onclick = (e) => {
+    // While the recording is being turned into words: skip that and type, keeping the recording.
+    if (rec.finishing) { rec.skipServer = true; rec.abort && rec.abort.abort(); return; }
     const go = () => { stopRecording(true); openReview({ transcript: "", typed: true }); };
     if (rec.on) confirmInline(e.currentTarget, go, "Tap again: discards this recording"); else go();
   };
@@ -1316,20 +1338,42 @@ function drawLive() {
   l.innerHTML = rec.final || rec.interim ? `${esc(rec.final)}<span class="interim">${esc(rec.interim)}</span>${!rec.speechOK && rec.speechLostAt ? '<div class="warn small" style="margin-top:8px">The phone stopped turning your words into text. Keep talking: the recording carries on, and you can add the rest when you check the note.</div>' : ""}`
     : `<span class="interim">${rec.speechOK ? "Your words will appear here as you speak…" : "Live words aren't available in this browser. Your recording is still being kept."}</span>`;
 }
+// Words from a recording, worked out on the relay (Cloudflare speech-to-text). Empty when offline or not set up.
+async function serverWords(blob, signal) {
+  if (!session || session.local || !session.token || !navigator.onLine || !relayBase()) return "";
+  const r = await syncFetch("/transcribe", { signal, headers: { "Content-Type": blob.type || "application/octet-stream", "X-Lang": speechLang().slice(0, 2).toLowerCase(), "X-Hint": encodeURIComponent(`A care note about ${(S.client && S.client.name) || "the client"}.`) }, body: blob });
+  return String((await r.json()).text || "").trim();
+}
+
 function stopRecording(cancel) {
   if (cancel) rec.cancelled = true;
   if (!rec.on) return;
   rec.on = false; clearInterval(rec.timer); rec.finishing = !cancel; keepAwake(false);
   try { rec.recog && rec.recog.stop(); } catch {}
   let done = false;
-  const finish = () => {
-    if (done) return; done = true; rec.finishing = false;
+  const gen = rec.gen;
+  const finish = async () => {
+    if (done) return; done = true;
     rec.stream && rec.stream.getTracks().forEach((t) => t.stop());
     if (rec.cancelled) return;
-    rec.blob = rec.chunks.length ? new Blob(rec.chunks, { type: (rec.media && rec.media.mimeType) || "audio/webm" }) : null;
+    let blob = rec.chunks.length ? new Blob(rec.chunks, { type: (rec.media && rec.media.mimeType) || "audio/webm" }) : null;
     // A clip under ~2 KB is silence or a failed capture: don't claim it was kept.
-    if (rec.blob && rec.blob.size < 2000) rec.blob = null;
-    openReview({ transcript: (rec.final + " " + rec.interim).trim(), blob: rec.blob, lostAt: rec.speechLostAt && rec.final ? rec.speechLostAt : 0, lockedAt: rec.stoppedAt });
+    if (blob && blob.size < 2000) blob = null;
+    rec.blob = blob;
+    let transcript = (rec.final + " " + rec.interim).trim(), lostAt = rec.speechLostAt && rec.final ? rec.speechLostAt : 0, byRelay = false, serverError = "";
+    // The phone heard nothing, or stopped listening part-way (common on iPhone Home Screen apps and some
+    // Android phones): turn the whole recording into words with the relay's speech-to-text instead.
+    // If that returns nothing, any words the phone did catch are kept.
+    if (blob && (!transcript || rec.speechLostAt) && !rec.skipServer) {
+      const h = $("#recHint"); if (h) h.textContent = "Turning your recording into words… (or tap Type instead)";
+      rec.abort = new AbortController();
+      try { const t = await serverWords(blob, rec.abort.signal); if (t) { transcript = t; lostAt = 0; byRelay = true; } }
+      catch (e) { if (!rec.skipServer && !rec.cancelled) serverError = e.message || ""; }
+      rec.abort = null;
+      if (rec.cancelled || gen !== rec.gen) { if (gen === rec.gen) rec.finishing = false; return; } // closed, or a new recording started
+    }
+    rec.finishing = false;
+    openReview({ transcript, blob, lostAt, lockedAt: rec.stoppedAt, byRelay, serverError });
   };
   const mic = $("#micBtn"); if (mic && !cancel) { mic.disabled = true; $("#recHint").textContent = "Finishing…"; }
   if (rec.media && rec.media.state !== "inactive") {
@@ -1339,7 +1383,7 @@ function stopRecording(cancel) {
   } else setTimeout(finish, 300);
 }
 
-async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
+async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, serverError }) {
   const spoken = !typed && !!transcript; // words came from the phone's speech recognition
   const rawHeard = transcript; // exactly what the phone heard, kept with the note
   let baseline = transcript, reps = []; // baseline = heard words after remembered fixes
@@ -1463,7 +1507,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
         }
       }
       const ts = Date.now();
-      S.notes.push({ id, ts, approvedTs: ts, carerId: stampId(), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
+      S.notes.push({ id, ts, approvedTs: ts, carerId: stampId(), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard, ...(byRelay ? { heardBy: "relay" } : {}) } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
       draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
       if (!save()) {
         // Not saved on this phone: take it back out so it isn't sent to the cloud half-saved.
@@ -1477,14 +1521,14 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt }) {
       toast((inc ? "Saved. Incident report added to Needs attention." : "Saved to the record.") + (keep.length ? ` Remembered ${keep.length} word fix${keep.length > 1 ? "es" : ""}.` : ""));
     };
   };
-  if (typed || !transcript) showInput(!typed ? (blob ? "We couldn't turn your speech into words on this phone. Play it back and type a short version below." : rec.firstUse ? "Nothing was picked up, because the phone was asking for permission to use the microphone. Close this and tap Record again: it works from now on." : "Nothing was picked up. Check the microphone, try again, or type the note.") : "");
+  if (typed || !transcript) showInput(!typed ? (blob ? (serverError && !/took too long|abort/i.test(serverError) ? serverError : "We couldn't turn your speech into words. Play it back and type a short version below.") : rec.firstUse ? "Nothing was picked up, because the phone was asking for permission to use the microphone. Close this and tap Record again: it works from now on." : "Nothing was picked up. Check the microphone, try again, or type the note.") : "");
   else run();
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-07.6";
+const PRIVACY_VERSION = "2026-10-09.7";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 6 · 7 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 7 · 9 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -1504,12 +1548,14 @@ const PRIVACY_HTML = `
 <h3>AI note writing</h3>
 <p>When you ask the user manual a question, your question (nothing else) is sent through our relay to Anthropic so the AI can answer it from the manual. It isn't stored.</p>
 <p>When you use the feedback helper, your messages and any screenshot are also sent to Anthropic, so the helper can ask questions and write a summary for the developer. Email addresses and phone numbers are removed automatically before a report is stored.</p>
+<p><strong>Turning speech into words.</strong> While you record, your phone's own speech recognition may show your words as you speak: on an iPhone this may send your voice to <strong>Apple</strong>, and on Android to <strong>Google</strong>, under their own terms (Apple says it may use it to improve its speech recognition; you can turn this off in your phone's settings). If your phone can't turn your speech into words, the recording, with the client's first name as a spelling hint, is sent through our relay to <strong>Cloudflare</strong>'s speech-to-text service, which returns the words. This may happen outside the European Union. Our relay doesn't keep that copy; the recording is kept only as described under Care notes and recordings.</p>
 <p>When you ask the app to write a note, handover or summary, the <strong>words</strong> of your note (never the recording), the client's first name, the names of the carers involved, the names of the client's care plan sections, and your saved word fixes ("My words"), are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text it sends for tidying; the note you save is stored as described under Care notes and recordings. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
 <h3>Who else handles data for us</h3>
 <ul>
-<li><strong>Cloudflare:</strong> runs our relay and stores accounts, sign-in records, clients, who cares for each client and their shifts, feedback reports, and the care records and recordings described above (in the European Union).</li>
+<li><strong>Cloudflare:</strong> runs our relay, turns recordings into words when your phone can't (possibly outside the EU), and stores accounts, sign-in records, clients, who cares for each client and their shifts, feedback reports, and the care records and recordings described above (in the European Union).</li>
 <li><strong>GitHub (Microsoft):</strong> hosts the app's web pages.</li>
 <li><strong>Anthropic:</strong> AI note writing, as described above.</li>
+<li><strong>Apple or Google:</strong> your phone's own speech recognition, as described above.</li>
 </ul>
 <p>These providers may process data outside the UK and Australia, including in the United States, under their own data protection safeguards.</p>
 <h3>Why we use it</h3>
@@ -1989,7 +2035,7 @@ async function showClients(manual) {
       <p class="muted" style="margin:0">Carers record short voice notes about the client's day. The app keeps the original recording, writes a tidy note and builds the handover for the next carer.</p>
       <div class="card small" style="display:grid;gap:8px">
         <div><strong>What is recorded:</strong> the carer's voice. Other voices nearby may be picked up.</div>
-        <div><strong>Who can see it:</strong> the client's carers and the pilot administrators (kept securely in the cloud, in the EU), the authorised family member, and health staff in an emergency.</div>
+        <div><strong>Who can see it:</strong> the client's carers and the pilot administrators (kept securely in the cloud, in the EU), the authorised family member, and health staff in an emergency. Service providers handle it for us: Anthropic (AI note writing), Cloudflare (storage and speech-to-text) and the carer's phone maker, Apple or Google (speech-to-text).</div>
         <div><strong>Why:</strong> to keep an accurate record that protects the client and the carer.</div>
       </div>
       <p class="small" style="margin:0">The client, or the person holding Lasting Power of Attorney for health and welfare, must agree before this is used. This is asked once, when the client is added.</p>
