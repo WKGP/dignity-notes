@@ -1022,6 +1022,7 @@ function openSettings() {
       <p class="small" style="margin:0">Signed in as <strong>${esc(session.name)}</strong> <span class="muted">(${esc(session.username)} · ${session.role === "admin" ? "Administrator" : "Tester"})</span></p>
       ${session.role === "admin" ? '<button class="btn primary" id="stTesters">Manage people</button>' : ""}
       <button class="btn secondary" id="stTest">Check AI connection</button><div class="small" id="stMsg"></div>
+      ${session.local ? "" : '<button class="btn secondary" id="stPw">Change my password</button>'}
       <button class="btn ghost" id="stOut">Sign out</button></div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Client</h3>
       <p class="small" style="margin:0">Notes are for <strong>${esc(S.client.name)}</strong>.</p>
@@ -1069,6 +1070,7 @@ function openSettings() {
     catch (e) { m.textContent = "Not connected: " + e.message + ". Notes will use the basic offline tidy."; m.style.color = "var(--incident)"; }
   };
   if ($("#stTesters")) $("#stTesters").onclick = () => { s.close(); openTesters(); };
+  if ($("#stPw")) $("#stPw").onclick = openChangePassword;
   $("#stOut").onclick = async (e) => confirmInline(e.currentTarget, async () => {
     if (!session.local) relay("/logout", {}).catch(() => {});
     s.close(); signedOut("You've signed out.");
@@ -1833,6 +1835,32 @@ function downscaleImage(file) {
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't read that picture")); };
     img.src = url;
   });
+}
+
+// Change your own password. The relay checks the current one, signs out every other phone, and
+// keeps this one signed in.
+function openChangePassword() {
+  const s = sheet(`${sheetHead("Change my password")}
+    <p class="small muted" style="margin:0">At least 12 characters. A few unrelated words with a number is easy to remember and hard to guess. Your other phones will be signed out.</p>
+    <label class="f">Current password<input type="password" id="pwCur" autocomplete="current-password"></label>
+    <label class="f">New password<input type="password" id="pwNew" autocomplete="new-password" minlength="12"></label>
+    <label class="f">New password again<input type="password" id="pwNew2" autocomplete="new-password"></label>
+    <label class="small" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="pwShow"> Show passwords</label>
+    <div class="small" id="pwMsg" role="status"></div>
+    <button class="btn primary block" id="pwGo">Change password</button>`,
+    { guard: () => !!($("#pwNew") && $("#pwNew").value) });
+  const msg = $("#pwMsg", s.root), bad = (t) => { msg.style.color = "var(--incident)"; msg.textContent = t; };
+  $("#pwShow", s.root).onchange = (e) => ["#pwCur", "#pwNew", "#pwNew2"].forEach((id) => ($(id, s.root).type = e.target.checked ? "text" : "password"));
+  $("#pwGo", s.root).onclick = async () => {
+    const current = $("#pwCur", s.root).value, next = $("#pwNew", s.root).value;
+    if (!current) return bad("Type your current password.");
+    if (next.length < 12) return bad("Your new password needs at least 12 characters.");
+    if (next !== $("#pwNew2", s.root).value) return bad("The two new passwords don't match.");
+    const b = $("#pwGo", s.root); b.disabled = true; msg.style.color = ""; msg.textContent = "Changing…";
+    try { await relay("/me/password", { current, next }); s.close(); toast("Password changed. Your other phones are signed out."); }
+    catch (e) { b.disabled = false; bad(e.message); }
+  };
+  setTimeout(() => $("#pwCur", s.root)?.focus(), 50);
 }
 
 // Speak instead of typing (used for feedback). Words appear live when the phone can; otherwise, when
