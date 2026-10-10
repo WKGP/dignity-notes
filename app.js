@@ -1466,8 +1466,9 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
   const showInput = (msg) => {
     rv.innerHTML = `${msg ? `<div class="warn">${msg}</div>` : ""}
       ${blobUrl ? `<audio controls src="${blobUrl}"></audio>` : ""}
-      <label class="f">${typed ? "What happened?" : "What you said"}<textarea id="rvTx" placeholder="e.g. Nana had porridge and a cup of tea, took her tablets with help.">${esc(transcript)}</textarea></label>
+      <label class="f">${typed ? "What happened?" : "What you said"}<textarea id="rvTx" class="grow" style="min-height:200px" placeholder="e.g. Nana had porridge and a cup of tea, took her tablets with help.">${esc(transcript)}</textarea></label>
       <button class="btn primary block" id="rvGo">Write the note</button>`;
+    autoGrow($("#rvTx")); // grows with the words as they're typed
     $("#rvGo").onclick = () => { transcript = $("#rvTx").value.trim(); if (!transcript) return toast("Add some words first"); run(); };
   };
   const run = async () => {

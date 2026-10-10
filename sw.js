@@ -1,5 +1,5 @@
 // Offline shell: network first (4 s timeout), cached copy when there is no or weak signal.
-const CACHE = "dignitynotes-1.1.18";
+const CACHE = "dignitynotes-1.1.19";
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["./", "./index.html", "./app.js", "./manual.html", "./manual.js", "./fonts/fonts.css", "./icon-192.png", "./logo-wordmark.png", "./manifest.json"].map((u) => new Request(u, { cache: "reload" }))))); self.skipWaiting(); });
 self.addEventListener("activate", (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k))))); self.clients.claim(); });
 self.addEventListener("fetch", (e) => {
