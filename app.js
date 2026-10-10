@@ -90,7 +90,7 @@ function loadUser() {
   // Kept with the notes too, so the client list can be shown from this phone when offline.
   S.client = { name: session.client.name, carers: session.client.carers || [] }; S.consent = session.client.consent;
   // The person signed in on this phone is on duty whenever the app opens, so notes carry the right name.
-  S.tasks = S.tasks || []; // task ticks (done / not done) for this client
+  if (!S.tasks) { S.tasks = []; if (S.sync) S.sync.seq = 0; } // ticks for this client; an older app skipped them, so pull everything once (duplicates are ignored)
   S.onDuty = myId(); S.detached = false; // back on this client: anything kept unsent goes now
   Object.assign(syncState, { error: "", pending: 0, audioPending: 0, failed: 0, last: null, again: false });
   save();
@@ -398,7 +398,7 @@ function basicTidy(transcript) {
 const validTidy = (o) => o && typeof o.note === "string" && o.note.trim() && Array.isArray(o.categories) && Array.isArray(o.flags);
 async function tidy(transcript) {
   try {
-    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary(), country: clientCountry(), tasks: tasksNow().due.filter((x) => !x.tick).map((x) => x.t.title), planSections: plan().sections.map((x) => x.title) });
+    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary(), country: clientCountry(), clientId: session && session.client ? session.client.id : "", tasks: tasksNow().due.filter((x) => !x.tick).map((x) => x.t.title), planSections: plan().sections.map((x) => x.title) });
     if (!validTidy(out)) throw new Error("Unexpected reply from the relay");
     return { unclear: [], record_gaps: [], plan_sections: [], tasks_done: [], ...out, source: "ai" };
   } catch (e) {
@@ -417,7 +417,7 @@ function shiftNotes() {
 }
 function summaryPayload(mode, toId) {
   return {
-    mode, country: clientCountry(), client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
+    mode, country: clientCountry(), clientId: session && session.client ? session.client.id : "", client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
     notes: shiftNotes().map((n) => { const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name, note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
     flags: openFlags().filter((f) => !isExample(f)).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
     transfers: S.transfers.filter((t) => t.outTs >= shiftStart() || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
@@ -668,50 +668,71 @@ function careSlot(ts = Date.now()) {
   return { day: dayKey(d), dow: d.getDay(), period: PERIODS.find(([, , a, b]) => h >= a && h < b)[0] };
 }
 const planTasks = () => (Array.isArray(plan().tasks) ? plan().tasks : []);
-const taskTick = (taskId, day) => (S.tasks || []).filter((t) => t.taskId === taskId && t.day === day).sort((a, b) => b.ts - a.ts)[0];
-// Tasks for the current care day: due now, and earlier parts of the day not ticked.
+// The latest tick wins: a mistaken tick is corrected by a newer one (ticks themselves never change).
+const taskTick = (taskId, day) => (S.tasks || []).filter((t) => t.taskId === taskId && t.day === day).reduce((best, t) => (!best || t.ts >= best.ts ? t : best), null) || undefined;
+// Every time a task falls due between two moments: { t, day, start, end } (an "any time" task spans its
+// whole care day, 06:00 to 06:00). Clock changes are handled by building times from calendar dates.
+function taskOccurrences(from, to) {
+  const out = [], first = new Date(from); first.setHours(0, 0, 0, 0); first.setDate(first.getDate() - 1);
+  for (const d = first; d.getTime() <= to; d.setDate(d.getDate() + 1)) {
+    const at = (h) => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setHours(h); return x.getTime(); };
+    for (const t of planTasks()) {
+      if (t.days.length && !t.days.includes(d.getDay())) continue;
+      const p = PERIODS.find((x) => x[0] === t.period), start = at(p ? p[2] : 6), end = at(p ? p[3] : 30);
+      if (end > from && start < to) out.push({ t, day: dayKey(d), start, end });
+    }
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+// For Today: what's due now, and what fell due in the last 12 hours without a tick (still tickable,
+// against the care day it belonged to, so a night carer's 05:00 task is ticked for that night).
 function tasksNow() {
-  const slot = careSlot(), order = PERIODS.map((p) => p[0]), cur = order.indexOf(slot.period);
-  const todays = planTasks().filter((t) => !t.days.length || t.days.includes(slot.dow));
-  const due = todays.filter((t) => t.period === slot.period || t.period === "any").map((t) => ({ t, tick: taskTick(t.id, slot.day) }));
-  const missed = todays.filter((t) => t.period !== "any" && order.indexOf(t.period) < cur && !taskTick(t.id, slot.day)).map((t) => ({ t }));
+  const now = Date.now(), slot = careSlot(now), occ = taskOccurrences(now - 12 * 36e5, now);
+  const due = occ.filter((o) => o.start <= now && now < o.end).map((o) => ({ ...o, tick: taskTick(o.t.id, o.day) }));
+  const missed = occ.filter((o) => o.end <= now && !taskTick(o.t.id, o.day));
   return { slot, due, missed };
 }
-function tickTask(t, status, extra = {}) {
-  const slot = careSlot();
-  S.tasks.push({ id: uid(), ts: Date.now(), taskId: t.id, title: t.title, day: slot.day, period: t.period, status, by: stampId(), ...extra });
+function tickTask(o, status, extra = {}) {
+  const t = o.t || o, day = o.day || careSlot().day;
+  S.tasks.push({ id: uid(), ts: Date.now(), taskId: t.id, title: t.title, day, period: t.period, status, by: stampId(), ...extra });
   save(); render();
   toast(status === "done" ? `Done: ${t.title}` : `Not done: ${t.title}`);
 }
-function notDoneSheet(t) {
+function notDoneSheet(o) {
+  const t = o.t;
   const s = sheet(`${sheetHead("Not done")}<p class="small" style="margin:0"><strong>${esc(t.title)}</strong></p>
     <label class="f">Why not?<input type="text" id="ndWhy" maxlength="300" placeholder="e.g. Refused, asleep, out with family" autocomplete="off"></label>
     <button class="btn primary block" id="ndSave">Save</button>`);
-  $("#ndSave", s.root).onclick = () => { const why = $("#ndWhy", s.root).value.trim(); if (!why) return toast("Say why it wasn't done"); s.close(); tickTask(t, "not_done", { reason: why }); };
+  $("#ndSave", s.root).onclick = () => { const why = $("#ndWhy", s.root).value.trim(); if (!why) return toast("Say why it wasn't done"); s.close(); tickTask(o, "not_done", { reason: why }); };
   setTimeout(() => $("#ndWhy", s.root)?.focus(), 50);
 }
+let taskBtns = []; // the occurrences behind the buttons on screen
 function tasksCardHTML() {
   if (!planTasks().length) return "";
-  const { slot, due, missed } = tasksNow();
-  const row = (t, tick) => `<div class="item"><div class="body"><div><strong>${esc(t.title)}</strong>${t.period !== slot.period && t.period !== "any" ? ` <span class="muted small">· ${esc(periodLabel(t.period))}</span>` : ""}</div>
-    ${tick ? `<div class="small ${tick.status === "done" ? "" : "muted"}">${tick.status === "done" ? "Done" : "Not done: " + esc(tick.reason || "")} · ${esc(carer(tick.by).name)} ${fmtTime(tick.ts)}</div>`
-      : `<div class="row" style="gap:6px;margin-top:6px"><button class="btn secondary" data-tdone="${esc(t.id)}">Done</button><button class="btn ghost" data-tnot="${esc(t.id)}">Not done</button></div>`}</div></div>`;
+  const { slot, due, missed } = tasksNow(); taskBtns = [];
+  const btns = (o, label = "") => { const i = taskBtns.push(o) - 1; return `<div class="row" style="gap:6px;margin-top:6px">${label}<button class="btn secondary" data-tdone="${i}">Done</button><button class="btn ghost" data-tnot="${i}">Not done</button></div>`; };
+  const row = (o, tick) => `<div class="item"><div class="body"><div><strong>${esc(o.t.title)}</strong>${o.day !== slot.day || (o.t.period !== slot.period && o.t.period !== "any") ? ` <span class="muted small">· ${esc(periodLabel(o.t.period))}${o.day !== slot.day ? " (" + esc(dayLabel(o.start)) + ")" : ""}</span>` : ""}</div>
+    ${tick ? `<div class="small ${tick.status === "done" ? "" : "muted"}">${tick.status === "done" ? "Done" : "Not done: " + esc(tick.reason || "")} · ${esc(carer(tick.by).name)} ${fmtTime(tick.ts)} <button class="link small" data-tchange="${taskBtns.length}">Change</button></div><div hidden data-tchangebox="${taskBtns.length}">${btns(o)}</div>` : btns(o)}</div></div>`;
   const open = due.filter((x) => !x.tick).length + missed.length;
   return `<div class="card"><div class="card-h"><h3>Tasks this shift</h3><span class="muted small">${esc(periodLabel(slot.period))}${open ? ` · ${open} to tick` : " · all ticked"}</span></div>
-    <div class="list">${due.length ? due.map((x) => row(x.t, x.tick)).join("") : '<div class="empty">No tasks for this part of the day.</div>'}</div>
-    ${missed.length ? `<div class="warn small" style="margin-top:10px">Not ticked from earlier today:</div><div class="list">${missed.map((x) => row(x.t)).join("")}</div>` : ""}</div>`;
+    <div class="list">${due.length ? due.map((x) => row(x, x.tick)).join("") : '<div class="empty">No tasks for this part of the day.</div>'}</div>
+    ${missed.length ? `<div class="warn small" style="margin-top:10px">Not ticked from earlier:</div><div class="list">${missed.map((x) => row(x)).join("")}</div>` : ""}</div>`;
 }
 function bindTasks(root) {
-  const find = (id) => planTasks().find((t) => t.id === id);
-  root.querySelectorAll("[data-tdone]").forEach((b) => (b.onclick = () => { const t = find(b.dataset.tdone); if (t) tickTask(t, "done"); }));
-  root.querySelectorAll("[data-tnot]").forEach((b) => (b.onclick = () => { const t = find(b.dataset.tnot); if (t) notDoneSheet(t); }));
+  root.querySelectorAll("[data-tdone]").forEach((b) => (b.onclick = () => { const o = taskBtns[+b.dataset.tdone]; if (o) tickTask(o, "done"); }));
+  root.querySelectorAll("[data-tnot]").forEach((b) => (b.onclick = () => { const o = taskBtns[+b.dataset.tnot]; if (o) notDoneSheet(o); }));
+  root.querySelectorAll("[data-tchange]").forEach((b) => (b.onclick = () => { const box = root.querySelector(`[data-tchangebox="${b.dataset.tchange}"]`); if (box) { box.hidden = false; b.hidden = true; } }));
 }
-// For the handover: tasks of this care day (and last night) whose time has passed without a tick.
+// For the handover: every task that fell due during this shift (since the last handover) and wasn't
+// done: not ticked, ticked "not done" (the latest tick), or due now and not ticked yet.
 function tasksMissedForHandover() {
-  const out = [], { slot, missed } = tasksNow();
-  missed.forEach(({ t }) => out.push(`${t.title} (${periodLabel(t.period)})`));
-  tasksNow().due.filter((x) => !x.tick && x.t.period !== "any").forEach(({ t }) => out.push(`${t.title} (${periodLabel(t.period)}, not ticked yet)`));
-  (S.tasks || []).filter((x) => x.day === slot.day && x.status === "not_done").forEach((x) => out.push(`${x.title}: not done (${x.reason || "no reason given"})`));
+  const now = Date.now(), out = [];
+  for (const o of taskOccurrences(shiftStart(), now)) {
+    const tick = taskTick(o.t.id, o.day), when = `${periodLabel(o.t.period)}${o.day !== careSlot(now).day ? ", " + dayLabel(o.start).toLowerCase() : ""}`;
+    if (tick && tick.status === "done") continue;
+    if (tick) out.push(`${o.t.title} (${when}): not done (${tick.reason || "no reason given"})`);
+    else out.push(`${o.t.title} (${when})${o.end > now ? ": not ticked yet" : ": not ticked"}`);
+  }
   return [...new Set(out)];
 }
 // Admin: the shift tasks (part of the care plan, saved with it).
@@ -1336,7 +1357,12 @@ function openSettings() {
   if ($("#stPush")) drawPushSetting($("#stPush"));
   if ($("#stCountry") && !$("#stCountry").disabled) $("#stCountry").onchange = async (e) => {
     const was = clientCountry(), want = e.target.value;
-    try { const out = await relay("/clients/country", { id: session.client.id, country: want }); session.client.country = out.client.country; saveSession(); render(); toast(want === "AU" ? "Care is in Australia" : "Care is in the United Kingdom"); }
+    try {
+      const out = await relay("/clients/country", { id: session.client.id, country: want }); session.client.country = out.client.country; saveSession(); render();
+      const roles = { UK: ["The client", "Lasting Power of Attorney (health and welfare)", "Other authorised family member"], AU: ["The client", "Enduring guardian", "Guardian appointed by a tribunal (e.g. SAT)", "Person responsible (family member)"] }[want];
+      const role = session.client.consent && session.client.consent.role;
+      toast(role && !roles.includes(role) ? `Changed. The agreement was given as "${role}", which doesn't apply there: record a new agreement with the right person.` : want === "AU" ? "Care is in Australia" : "Care is in the United Kingdom");
+    }
     catch (err) { e.target.value = was; toast(err.message); }
   };
   $("#stOut").onclick = async (e) => confirmInline(e.currentTarget, async () => {
@@ -1901,9 +1927,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
     // Raised automatically but not needed: resolved with a reason (flags are never deleted).
     const f = S.flags.find((x) => x.id === b.dataset.notneeded); if (!f || f.status !== "open") return;
     Object.assign(f, { status: "resolved", resolvedTs: Date.now(), resolvedBy: stampId(), resolvedNote: "Raised automatically; the carer marked it not needed" }); touch(f); save();
-    s.close(); openSavedNote(id, { unclear, gaps, lostAt, lockedAt }); render();
+    s.close(); openSavedNote(id, { unclear, gaps, lostAt, lockedAt, tasksDone }); render();
   }, "Tap again: not needed")));
-  s.root.querySelectorAll("[data-svtask]").forEach((b) => (b.onclick = () => { const t = planTasks().find((x) => x.id === b.dataset.svtask); if (t) { tickTask(t, "done", { noteId: id }); b.replaceWith(Object.assign(document.createElement("span"), { className: "small muted", textContent: "Ticked" })); } }));
+  s.root.querySelectorAll("[data-svtask]").forEach((b) => (b.onclick = () => { const t = planTasks().find((x) => x.id === b.dataset.svtask); if (t) { tickTask({ t, day: careSlot().day }, "done", { noteId: id }); b.replaceWith(Object.assign(document.createElement("span"), { className: "small muted", textContent: "Ticked" })); } }));
   const target = n.amends || n.id; // additions always hang off the original note
   $("#svAdd", s.root).onclick = () => openRecorder({ amends: target });
   $("#svType", s.root).onclick = () => openReview({ transcript: "", typed: true, amends: target });
@@ -1942,7 +1968,7 @@ const PRIVACY_HTML = `
 <li><strong>GitHub (Microsoft):</strong> hosts the app's web pages.</li>
 <li><strong>Anthropic:</strong> AI note writing, as described above.</li>
 <li><strong>Apple or Google:</strong> your phone's own speech recognition, as described above.</li>
-<li><strong>Notifications:</strong> if you turn on notifications, your phone's notification service (Apple, Google, Mozilla or Microsoft) delivers them. We keep the address that service gives your phone, and send only an encrypted note of the kind of thing that's waiting (a handover or an incident): never a name or care details. Turn them off in Settings at any time.</li>
+<li><strong>Notifications:</strong> if you turn on notifications, your phone's notification service (Apple, Google, Mozilla or Microsoft) delivers them. We keep the address that service gives your phone, and send only an encrypted note of the kind of thing that's waiting (a handover or an incident): never a name or care details. Turn them off in Settings at any time; signing out also turns them off on that phone.</li>
 </ul>
 <p>These providers may process data outside the UK and Australia, including in the United States, under their own data protection safeguards.</p>
 <h3>Why we use it</h3>
@@ -1995,7 +2021,7 @@ function viewPrivacy() {
 function afterSignIn(privacyAccepted) {
   if (!session) return;
   if (privacyAccepted && session.privacyAccepted !== PRIVACY_VERSION) { session.privacyAccepted = PRIVACY_VERSION; saveSession(); }
-  const go2 = () => { if (session.client) { $("#fullRoot").innerHTML = ""; loadUser(); go("today"); openFromHash(); checkClient(); } else showClients(false); };
+  const go2 = () => { if (session.client) { $("#fullRoot").innerHTML = ""; loadUser(); go("today"); openFromHash(); checkClient(); checkPush(); } else showClients(false); };
   if (session.local || privacyAccepted || session.privacyAccepted === PRIVACY_VERSION) go2(); else showPrivacy(go2);
 }
 
@@ -2014,6 +2040,7 @@ function saveSession() {
   try { session ? localStorage.setItem(SESSION_KEY, JSON.stringify(session)) : localStorage.removeItem(SESSION_KEY); } catch {} }
 function signedOut(msg) {
   if (rec.on) stopRecording(true);
+  dropPush(session && session.token);
   clearDocCache(); saveLocal();
   audioDB.keys().then((ks) => audioDB.del((ks || []).filter((k) => String(k).startsWith("doc_")))); // every client's documents
   try { caches.delete("dn-manual"); } catch {} // the manual copy kept for reading without signal
@@ -2233,24 +2260,55 @@ const pushSupported = () => "serviceWorker" in navigator && "PushManager" in win
 const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
 const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 const pushKeyBytes = (b64) => Uint8Array.from(atob(b64.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(b64.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
+const PUSH_REC = "dignitynotes.push"; // { u: username, endpoint, key }: who turned notifications on, on this phone
+const pushRec = () => { try { return JSON.parse(localStorage.getItem(PUSH_REC) || "null"); } catch { return null; } };
+const setPushRec = (r) => { try { r ? localStorage.setItem(PUSH_REC, JSON.stringify(r)) : localStorage.removeItem(PUSH_REC); } catch {} };
+let pushKeyCache = null;
+const getPushKey = async () => (pushKeyCache = pushKeyCache || (await relay("/push/key", {})).key);
+async function subscribePush() {
+  const reg = await navigator.serviceWorker.ready, key = await getPushKey();
+  const old = await reg.pushManager.getSubscription();
+  if (old) { try { await old.unsubscribe(); } catch {} } // another person's, or made with an older key
+  const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushKeyBytes(key) });
+  await relay("/push/subscribe", { subscription: s.toJSON() });
+  setPushRec({ u: session.username, endpoint: s.endpoint, key });
+}
+// On opening: if this person had notifications on here but the phone's subscription changed (renewed by
+// the browser, or a new relay key), quietly sign it up again.
+async function checkPush() {
+  try {
+    const r = pushRec();
+    if (!r || !session || r.u !== session.username || session.local || !pushSupported() || Notification.permission !== "granted" || !navigator.onLine) return;
+    const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
+    if (!sub || sub.endpoint !== r.endpoint || (await getPushKey()) !== r.key) await subscribePush();
+  } catch {}
+}
+// Signing out turns notifications off on this phone (they're the person's, not the phone's).
+function dropPush(token) {
+  const r = pushRec(); if (!r) return;
+  setPushRec(null);
+  if (token && relayBase()) fetch(relayBase() + "/push/unsubscribe", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token }, body: JSON.stringify({ endpoint: r.endpoint }) }).catch(() => {});
+  if (pushSupported()) navigator.serviceWorker.ready.then((reg) => reg.pushManager.getSubscription()).then((s) => s && s.unsubscribe()).catch(() => {});
+}
 async function drawPushSetting(box) {
   const say = (html) => { box.innerHTML = `<div class="card" style="display:grid;gap:8px;box-shadow:none"><strong class="small">Notifications on this phone</strong>${html}</div>`; };
   if (isIOS() && !isStandalone()) return say('<p class="small muted" style="margin:0">On an iPhone, notifications only work in the Home Screen app: open Dignity Notes from its Home Screen icon, then come back here.</p>');
   if (!pushSupported()) return say('<p class="small muted" style="margin:0">This browser can\'t show notifications. On Android use Chrome; on iPhone use the Home Screen app.</p>');
   if (Notification.permission === "denied") return say('<p class="small muted" style="margin:0">Notifications are blocked for Dignity Notes in this phone\'s settings. Allow them there, then come back here.</p>');
   let sub = null; try { sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription(); } catch {}
+  const r = pushRec(); if (sub && !(r && r.u === session.username && r.endpoint === sub.endpoint)) sub = null; // someone else's, or not registered
+  try { await getPushKey(); } catch {} // fetched now, so the tap only asks for permission (iPhone needs that)
   say(`<p class="small muted" style="margin:0">${session.role === "admin" ? "Tells you when a handover is waiting for you, and when an incident is recorded." : "Tells you when a handover is waiting for you."} They never show the client's name or any care details.</p>
     <button class="btn ${sub ? "ghost" : "secondary"}" id="pushBtn">${sub ? "Turn off notifications" : "Turn on notifications"}</button><div class="small" id="pushMsg" role="status"></div>`);
   $("#pushBtn", box).onclick = async () => {
-    const m = $("#pushMsg", box), b = $("#pushBtn", box); b.disabled = true; m.textContent = "";
+    const m = $("#pushMsg", box), b = $("#pushBtn", box);
+    const asked = sub ? null : Notification.requestPermission(); // first thing in the tap (iPhone)
+    b.disabled = true; m.textContent = "";
     try {
-      const reg = await navigator.serviceWorker.ready;
-      if (sub) { await relay("/push/unsubscribe", { endpoint: sub.endpoint }); await sub.unsubscribe(); toast("Notifications off on this phone"); }
+      if (sub) { await relay("/push/unsubscribe", { endpoint: sub.endpoint }); await sub.unsubscribe(); setPushRec(null); toast("Notifications off on this phone"); }
       else {
-        if ((await Notification.requestPermission()) !== "granted") throw new Error("Notifications weren't allowed.");
-        const { key } = await relay("/push/key", {});
-        const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushKeyBytes(key) });
-        await relay("/push/subscribe", { subscription: s.toJSON() });
+        if ((await asked) !== "granted") throw new Error("Notifications weren't allowed.");
+        await subscribePush();
         toast("Notifications on for this phone");
       }
       drawPushSetting(box);
@@ -2258,11 +2316,17 @@ async function drawPushSetting(box) {
   };
 }
 // A tapped notification opens the app on the right tab (#handover).
-function openFromHash() {
-  const h = location.hash.slice(1);
-  if (["handover", "today", "log"].includes(h) && session && session.client) { history.replaceState(null, "", location.pathname); go(h); }
+async function openFromHash(hash = location.hash) {
+  const m = String(hash || "").match(/^#(handover|today|log)(?::c=([A-Za-z0-9_-]{6,64}))?$/);
+  if (!m || !session || !session.client) return;
+  history.replaceState(null, "", location.pathname);
+  if (m[2] && m[2] !== session.client.id && !session.local) {
+    try { const c = (await clientsApi.list()).find((x) => x.id === m[2]); if (c) chooseClient(c); else toast("That notification was for a client you no longer care for"); } catch {}
+  }
+  go(m[1]);
 }
-window.addEventListener("hashchange", openFromHash);
+window.addEventListener("hashchange", () => openFromHash());
+if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", (e) => { if (e.data && e.data.openHash && !appBusy()) openFromHash(e.data.openHash); });
 
 function openChangePassword() {
   const s = sheet(`${sheetHead("Change my password")}
@@ -2671,7 +2735,7 @@ setInterval(() => {
 const userIsReading = () => { const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || [...document.querySelectorAll("audio")].some((x) => !x.paused); };
 
 /* ---------- boot ---------- */
-setTimeout(() => { try { openFromHash(); } catch {} }, 300); // opened from a notification
+setTimeout(() => { try { openFromHash(); checkPush(); } catch {} }, 300); // opened from a notification; notifications still signed up
 checkStorage().then(() => { if (session && session.client && tab === "today") render(); });
 if (session && (session.token || session.local)) {
   if (session.client) { loadUser(); render(); } else render();
