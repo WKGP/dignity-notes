@@ -1,5 +1,5 @@
 // Offline shell: network first (4 s timeout), cached copy when there is no or weak signal.
-const CACHE = "dignitynotes-1.2.2";
+const CACHE = "dignitynotes-1.2.3";
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(["./", "./index.html", "./app.js", "./manual.html", "./manual.js", "./fonts/fonts.css", "./icon-192.png", "./logo-wordmark.png", "./manifest.json"].map((u) => new Request(u, { cache: "reload" }))))); self.skipWaiting(); });
 self.addEventListener("activate", (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k))))); self.clients.claim(); });
 self.addEventListener("fetch", (e) => {
@@ -17,7 +17,7 @@ self.addEventListener("fetch", (e) => {
   e.respondWith(Promise.race([network.catch(fromCache), slow]).then((r) => r || network));
 });
 // Phone notifications (sent by the relay, see worker/src/push.js). They never contain care details.
-const NOTE = { handover: ["Handover waiting", "A handover is waiting for you in Dignity Notes.", "#handover"], incident: ["Incident recorded", "An incident was recorded in Dignity Notes. Open the app to see it.", "#today"] };
+const NOTE = { message: ["New message", "There's a new message in Dignity Notes.", "#today"], summary: ["Daily update", "Today's update is ready in Dignity Notes.", "#today"], handover: ["Handover waiting", "A handover is waiting for you in Dignity Notes.", "#handover"], incident: ["Incident recorded", "An incident was recorded in Dignity Notes. Open the app to see it.", "#today"] };
 self.addEventListener("push", (e) => {
   let m = {}; try { m = e.data ? e.data.json() : {}; } catch {}
   const [title, body, tab] = NOTE[m.t] || ["Dignity Notes", "Something new in Dignity Notes.", "#today"];

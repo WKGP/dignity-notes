@@ -90,6 +90,11 @@ function loadUser() {
   // Kept with the notes too, so the client list can be shown from this phone when offline.
   S.client = { name: session.client.name, carers: session.client.carers || [] }; S.consent = session.client.consent;
   // The person signed in on this phone is on duty whenever the app opens, so notes carry the right name.
+  S.messages = S.messages || [];
+  if (!S.summaries) { // first time with real family messages: pull them once, and never upload the old practice messages on this phone
+    S.summaries = []; const si = syncInfo(); si.seq = 0;
+    for (const m of S.messages) si.sent["message:" + m.id] = mtOf(m);
+  }
   if (!S.tasks) { S.tasks = []; if (S.sync) S.sync.seq = 0; } // ticks for this client; an older app skipped them, so pull everything once (duplicates are ignored)
   S.onDuty = myId(); S.detached = false; // back on this client: anything kept unsent goes now
   Object.assign(syncState, { error: "", pending: 0, audioPending: 0, failed: 0, last: null, again: false });
@@ -135,11 +140,11 @@ const audioDB = (() => {
  * Notes, flags, handovers and outings are saved on this phone first, then copied to the cloud
  * (our relay, stored in the EU), so they're safe if this phone's data is lost, and every carer on
  * the client sees the same record. Recordings are copied too. Anything not yet copied (no signal)
- * is sent the next time the app has a connection. Example entries and family messages stay local.
+ * is sent the next time the app has a connection. Example entries stay local.
  * Sync runs in the background, so it never signs anyone out or opens a screen in the middle of
  * something: if the sign-in has ended it pauses, and asks once nothing is open.
  */
-const SYNC_KINDS = { note: "notes", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule", task: "tasks" };
+const SYNC_KINDS = { note: "notes", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule", task: "tasks", message: "messages", summary: "summaries" };
 const DEMO_IDS = new Set(["n0", "f0", "h0", "s1", "s2", "s3", "m0"]);
 const SYNC_RECORD_MAX = 58000, SYNC_BATCH_MAX = 400000; // the relay allows 60,000 a record, 1,000,000 a request
 // When a record last changed (older records have no mt, so use their latest time).
@@ -148,7 +153,7 @@ const mtOf = (r) => r.mt || Math.max(r.ts || 0, r.approvedTs || 0, r.outTs || 0,
 const touch = (r) => { r.mt = Math.max(Date.now(), mtOf(r) + 1); };
 const syncState = { busy: false, again: false, last: null, error: "", pending: 0, audioPending: 0, failed: 0, blocked: null };
 const syncInfo = () => { const si = S.sync || (S.sync = { seq: 0, sent: {}, audio: {} }); si.failed = si.failed || {}; return si; };
-const cloudOn = () => !!(session && session.token && !session.local && session.client && session.privacyAccepted === PRIVACY_VERSION && relayBase());
+const cloudOn = () => !!(session && session.token && !session.local && session.role !== "family" && session.client && session.privacyAccepted === PRIVACY_VERSION && relayBase());
 
 // Same checks as the relay (worker/src/sync.js): only known, well-formed fields are kept, because
 // records from other phones are displayed here.
@@ -157,6 +162,8 @@ const SYNC_SHAPES = {
   note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", heardBy: "str:10", amends: "id", auto: "num", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
   flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", raisedBy: "id", resolvedNote: "str:200", resolvedTs: "num", resolvedBy: "id" } },
   task: { req: ["ts", "taskId", "day", "status"], f: { ts: "num", taskId: "str:40", title: "str:120", day: "str:10", period: ["morning", "afternoon", "evening", "night", "any"], status: ["done", "not_done"], reason: "str:300", by: "id", noteId: "id" } },
+  message: { req: ["ts", "text", "from"], f: { ts: "num", text: "str:2000", from: ["family", "carer"], name: "str:60", by: "id" } },
+  summary: { req: ["ts", "text"], f: { ts: "num", day: "str:10", text: "str:4000", by: "id", byName: "str:60" } },
   handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", fromName: "str:60", toId: "id", text: "str:10000", source: "str:20" } },
   event: { req: ["ts", "when", "label"], f: { ts: "num", when: "num", label: "str:120", detail: "str:300", by: "id" } },
   transfer: { req: ["outTs", "withWhom"], f: { outTs: "num", withWhom: "str:100", relationship: "str:100", purpose: "str:200", carerId: "id", backTs: "num", backNote: "str:2000", backCarerId: "id" } },
@@ -415,11 +422,12 @@ function shiftNotes() {
   const since = shiftStart();
   return S.notes.filter((n) => Math.max(n.ts, n.approvedTs || 0) >= since && !isExample(n)).sort((a, b) => a.ts - b.ts);
 }
+const familyIncidentsOn = () => (session && !session.local && session.client ? !!session.client.familyIncidents : !!S.settings.familyAlerts);
 function summaryPayload(mode, toId) {
   return {
     mode, country: clientCountry(), clientId: session && session.client ? session.client.id : "", client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
     notes: shiftNotes().map((n) => { const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name, note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
-    flags: openFlags().filter((f) => !isExample(f)).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
+    flags: openFlags().filter((f) => !isExample(f) && !(mode === "family" && f.kind === "incident" && !familyIncidentsOn())).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
     transfers: S.transfers.filter((t) => t.outTs >= shiftStart() || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
     planGaps: mode === "handover" ? planGaps() : [],
     tasksMissed: mode === "handover" ? tasksMissedForHandover() : [],
@@ -453,6 +461,65 @@ const sourceTag = (src, reason) => src === "ai"
   ? '<span class="source"><span class="dot"></span>Tidied by AI. Check it before saving.</span>'
   : src === "basic" ? `<span class="source"><span class="dot basic"></span>Basic tidy (offline${reason ? ": " + esc(reason) : ""})</span>` : "";
 
+
+/* ---------- family accounts ----------
+ * An authorised family member signs in to their own simple screen for the client: the daily
+ * summaries carers share, coming appointments, messages with the carers, and incidents if an
+ * administrator switched that on (as agreed). The relay enforces this; notes never reach family.
+ */
+const isFamily = () => !!(session && session.role === "family");
+let familyLoading = false;
+async function loadFamilyView(force) {
+  if (familyLoading || !session || !session.client || session.local || !navigator.onLine) return;
+  if (!force && S.familyView && Date.now() - (S.familyView.at || 0) < 60000) return;
+  familyLoading = true;
+  try { const v = await relay("/family/view", { client: session.client.id }); S.familyView = { ...v, at: Date.now(), error: "" }; saveLocal(); if (isFamily() && tab === "today" && !appBusy() && !userIsReading()) render(); }
+  catch (e) { S.familyView = { ...(S.familyView || {}), error: e.message }; if (isFamily() && tab === "today" && !appBusy()) render(); }
+  finally { familyLoading = false; }
+}
+function renderFamilyHome() {
+  const v = $("#view-today"), fv = S.familyView || {}, name = esc(S.client.name);
+  const sums = fv.summaries || [], msgs = fv.messages || [], coming = fv.coming || [];
+  v.innerHTML = `<div class="hello"><h2>Hello, ${esc(session.name)}</h2><p>Updates about ${name} from the carers.</p></div>
+    ${fv.error ? `<div class="warn small">Couldn't get the latest updates: ${esc(fv.error)}</div>` : ""}
+    ${!fv.at ? `<div class="card"><div class="empty">${fv.error ? "Tap Check for updates to try again." : navigator.onLine ? "Loading…" : "Connect to the internet to see the latest updates."}</div></div>` : ""}
+    <div class="card"><div class="card-h"><h3>Daily updates</h3>${fv.at ? `<span class="muted small">Checked ${isToday(fv.at) ? "" : esc(dayLabel(fv.at)) + " "}${fmtTime(fv.at)}</span>` : ""}</div>
+      ${sums.length ? sums.map((x) => `<div style="border-top:1px solid var(--line);padding-top:10px;margin-top:10px"><div class="tiny muted">${esc(dayLabel(x.ts))}${x.byName ? " · from " + esc(x.byName) : ""}</div><p class="note-text" style="white-space:pre-line;margin:4px 0 0">${esc(x.text)}</p></div>`).join("") : '<div class="empty">No updates shared yet. The carers share a short update when they can.</div>'}</div>
+    ${coming.length ? `<div class="card"><div class="card-h"><h3>Coming up</h3></div><div class="list">${coming.map((e) => `<div class="item"><div class="when">${fmtTime(e.when)}</div><div class="body"><div><strong>${esc(e.label)}</strong></div><div class="muted small">${esc(dayLabel(e.when))}${e.detail ? " · " + esc(e.detail) : ""}</div></div></div>`).join("")}</div></div>` : ""}
+    ${fv.incidents ? `<div class="card"><div class="card-h"><h3>Incidents</h3><span class="muted small">Last 14 days</span></div>${fv.incidents.length ? fv.incidents.map((f) => `<div class="flag incident"><div class="body"><strong>${esc(f.title)}</strong>${f.detail ? `<div class="small">${esc(f.detail)}</div>` : ""}<div class="tiny muted">${esc(dayLabel(f.ts))} ${fmtTime(f.ts)}${f.status === "resolved" ? " · resolved" : ""}</div></div></div>`).join("") : '<div class="empty">No incidents.</div>'}</div>` : ""}
+    <div class="card"><div class="card-h"><h3>Messages</h3><span class="muted small">With ${name}'s carers</span></div>
+      <div class="thread" id="fThread">${msgs.map((m) => `<div class="msg ${m.from === "family" ? "carer" : ""}"><span class="who">${esc(m.name || (m.from === "family" ? "Family" : "Carer"))} · ${esc(dayLabel(m.ts))} ${fmtTime(m.ts)}</span>${esc(m.text)}</div>`).join("") || '<div class="empty">No messages yet.</div>'}</div>
+      <form class="composer" id="fMsgForm" style="margin-top:12px"><input type="text" id="fMsgText" maxlength="2000" placeholder="Write a message to the carers" aria-label="Message" autocomplete="off"><button class="btn primary" style="min-height:46px">Send</button></form>
+      <div class="small" id="fMsgErr" role="status"></div></div>
+    <p class="tiny muted" style="text-align:center;margin:8px 0 0">You see what the carers share: daily updates, appointments and messages${fv.incidents ? ", and incidents" : ""}. Their care notes and recordings stay in the care record.</p>
+    <button class="link small" id="fRefresh" style="justify-self:center">Check for updates</button>`;
+  $("#fMsgForm").onsubmit = async (e) => {
+    e.preventDefault(); const t = $("#fMsgText").value.trim(); if (!t) return;
+    const btn = e.currentTarget.querySelector("button"); btn.disabled = true;
+    try {
+      const out = await relay("/family/message", { client: session.client.id, text: t });
+      S.familyView = S.familyView || {}; S.familyView.messages = [...(S.familyView.messages || []), out.message]; saveLocal();
+      $("#fMsgText").blur(); renderFamilyHome(); toast("Sent to the carers");
+    } catch (err) { $("#fMsgErr").textContent = err.message; btn.disabled = false; }
+  };
+  $("#fRefresh").onclick = () => loadFamilyView(true);
+  const th = $("#fThread"); if (th) th.scrollTop = th.scrollHeight;
+  loadFamilyView(false);
+}
+// Family settings: their account, notifications and sign-out only.
+function openFamilySettings() {
+  const s = sheet(`${sheetHead("Settings")}
+    <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Your account</h3>
+      <p class="small" style="margin:0">Signed in as <strong>${esc(session.name)}</strong> <span class="muted">(${esc(session.username)} · Family)</span></p>
+      <button class="btn secondary" id="stPw">Change my password</button><div id="stPush"></div>
+      <button class="btn secondary" id="stSwitch">Switch client</button>
+      <button class="btn ghost" id="stOut">Sign out</button></div>`);
+  $("#stPw", s.root).onclick = openChangePassword;
+  drawPushSetting($("#stPush", s.root));
+  $("#stSwitch", s.root).onclick = () => { s.close(); showClients(true); };
+  $("#stOut", s.root).onclick = (e) => confirmInline(e.currentTarget, async () => { relay("/logout", {}).catch(() => {}); s.close(); signedOut("You've signed out."); });
+}
+
 /* ---------- navigation ---------- */
 let tab = "today";
 let rosterChecked = 0;
@@ -467,13 +534,15 @@ function go(name) {
 document.querySelectorAll(".tab[data-tab]").forEach((b) => b.addEventListener("click", () => go(b.dataset.tab)));
 $("#recTab").addEventListener("click", () => openRecorder());
 $("#dutyBtn").addEventListener("click", () => openCarerSheet());
-$("#settingsBtn").addEventListener("click", () => openSettings());
+$("#settingsBtn").addEventListener("click", () => (isFamily() ? openFamilySettings() : openSettings()));
 $("#helpBtn").addEventListener("click", () => openHelp());
 $("#returnBtn").addEventListener("click", () => openReturnSheet());
 
 /* ---------- render ---------- */
 function render() {
   $("#clientName").textContent = S.client.name;
+  document.body.classList.toggle("family-mode", isFamily());
+  if (isFamily()) { if (tab !== "today") { tab = "today"; ["today", "log", "handover", "family"].forEach((x) => ($("#view-" + x).hidden = x !== "today")); } return renderFamilyHome(); }
   $("#dutyName").textContent = onDuty().name;
   $("#dutyAvatar").textContent = onDuty().name.charAt(0).toUpperCase();
   const n = openFlags().length; const badge = $("#flagBadge"); badge.hidden = !n; badge.textContent = n;
@@ -1164,31 +1233,48 @@ function renderHandover() {
 }
 
 let familySummary = null, sendAs = "family";
+// Carers' Family tab. Signed in, messages and shared updates are real records the family see in
+// their own app; on a phone without a sign-in it stays a demo with both sides on this phone.
 function renderFamily() {
-  const v = $("#view-family");
+  const v = $("#view-family"), live = cloudOn();
   const inc = S.flags.filter((f) => f.kind === "incident" && isToday(f.ts));
-  const msgs = [...S.messages].sort((a, b) => a.ts - b.ts);
-  v.innerHTML = `<div class="hello"><h2>Family</h2><p>What the authorised family member sees: a daily summary, incidents and messages. Not every note.</p></div>
-    <div class="card"><div class="card-h"><h3>Today's summary</h3><span class="muted small">${fmtDay(Date.now())}</span></div>
-      ${familySummary ? `${sourceTag(familySummary.source, familySummary.reason)}<p class="note-text" style="white-space:pre-line;margin-top:8px">${esc(familySummary.text)}</p><button class="link" id="famRedo" style="margin-top:8px">Write again</button>`
-      : `<p class="small muted" style="margin:0 0 12px">A short, plain-English update written from today's notes.</p><button class="btn primary block" id="famGen">Write today's summary</button>`}</div>
-    <div class="card"><div class="card-h"><h3>Incidents today</h3></div><div class="flags">${inc.length ? inc.map((f) => flagHTML(f, false)).join("") : '<div class="empty">No incidents today.</div>'}</div></div>
-    <div class="card"><div class="card-h"><h3>Messages</h3><span class="muted small">Reaches whoever is on duty</span></div>
-      <div class="thread" id="thread">${msgs.map((m) => `<div class="msg ${m.from === "carer" ? "carer" : ""}"><span class="who">${esc(m.name)} · ${dayLabel(m.ts)} ${fmtTime(m.ts)}</span>${esc(m.text)}</div>`).join("") || '<div class="empty">No messages yet.</div>'}</div>
-      <div class="seg" style="margin-top:12px" role="group" aria-label="Send as"><button data-as="family" aria-pressed="${sendAs === "family"}">Send as family</button><button data-as="carer" aria-pressed="${sendAs === "carer"}">Send as ${esc(onDuty().name)}</button></div>
-      <form class="composer" id="msgForm"><input type="text" id="msgText" placeholder="Write a message" aria-label="Message" autocomplete="off"><button class="btn primary" style="min-height:46px">Send</button></form>
-      <p class="tiny muted" style="margin:8px 0 0">Demo: both sides are on this phone. In the finished app family use their own login.</p></div>
-    <div class="card"><div class="switch"><div><strong>Alert family about incidents</strong><div class="small muted">Off by default. This is a care record, not a monitoring tool. Family can choose to switch it on.</div></div><input type="checkbox" id="famAlerts" ${S.settings.familyAlerts ? "checked" : ""} aria-label="Alert family about incidents"></div></div>`;
+  const msgs = [...(S.messages || [])].sort((a, b) => a.ts - b.ts);
+  const shared = [...(S.summaries || [])].sort((a, b) => b.ts - a.ts);
+  const fam = (session && session.client && session.client.family) || [];
+  const famInc = live ? !!session.client.familyIncidents : !!S.settings.familyAlerts;
+  v.innerHTML = `<div class="hello"><h2>Family</h2><p>What the authorised family member sees: daily updates you share, appointments and messages. Never the notes.</p></div>
+    <div class="card"><div class="card-h"><h3>Today's update</h3><span class="muted small">${fmtDay(Date.now())}</span></div>
+      ${familySummary ? `${sourceTag(familySummary.source, familySummary.reason)}${live ? `<textarea id="famText" rows="7" maxlength="4000" aria-label="Today's update" style="width:100%;margin-top:8px">${esc(familySummary.text)}</textarea>` : `<p class="note-text" style="white-space:pre-line;margin-top:8px">${esc(familySummary.text)}</p>`}<button class="link" id="famRedo" style="margin-top:8px">Write again</button>
+        ${live ? `<button class="btn primary block" id="famShare" style="margin-top:10px">Share with family</button><p class="tiny muted" style="margin:6px 0 0">Read and change it first if needed: family see exactly this, and it can't be taken back.</p>` : ""}`
+      : `<p class="small muted" style="margin:0 0 12px">A short, plain-English update written from today's notes.</p><button class="btn primary block" id="famGen">Write today's update</button>`}
+      ${shared.length ? `<details style="margin-top:10px"><summary class="small">Shared with family (${shared.length})</summary>${shared.slice(0, 7).map((x) => `<div class="small" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px"><span class="tiny muted">${esc(dayLabel(x.ts))} ${fmtTime(x.ts)}${x.byName ? " · " + esc(x.byName) : ""}</span><div style="white-space:pre-line">${esc(x.text)}</div></div>`).join("")}</details>` : ""}</div>
+    <div class="card"><div class="card-h"><h3>Incidents today</h3><span class="muted small">${famInc ? "Family can see these" : "For you; not shown to family"}</span></div><div class="flags">${inc.length ? inc.map((f) => flagHTML(f, false)).join("") : '<div class="empty">No incidents today.</div>'}</div></div>
+    <div class="card"><div class="card-h"><h3>Messages</h3><span class="muted small">${live ? "With the family" : "Reaches whoever is on duty"}</span></div>
+      <div class="thread" id="thread">${msgs.map((m) => `<div class="msg ${m.from === "carer" ? "carer" : ""}"><span class="who">${esc(m.name || (m.from === "carer" ? "Carer" : "Family"))} · ${dayLabel(m.ts)} ${fmtTime(m.ts)}</span>${esc(m.text)}</div>`).join("") || '<div class="empty">No messages yet.</div>'}</div>
+      ${live ? "" : `<div class="seg" style="margin-top:12px" role="group" aria-label="Send as"><button data-as="family" aria-pressed="${sendAs === "family"}">Send as family</button><button data-as="carer" aria-pressed="${sendAs === "carer"}">Send as ${esc(onDuty().name)}</button></div>`}
+      <form class="composer" id="msgForm" style="margin-top:12px"><input type="text" id="msgText" maxlength="2000" placeholder="Write a message" aria-label="Message" autocomplete="off"><button class="btn primary" style="min-height:46px">Send</button></form>
+      <p class="tiny muted" style="margin:8px 0 0">${live ? (fam.length ? "Family linked: " + fam.map((f) => esc(f.name)).join(", ") + ". They see your messages and shared updates in their own app." : "No family member is linked to this client yet. An administrator can add one in Manage people.") : "Demo: both sides are on this phone. Signed in, family use their own login."}</p></div>
+    <div class="card"><div class="switch"><div><strong>Family can see incidents</strong><div class="small muted">Off by default. Only switch on if agreed with the client or their representative. This is a care record, not a monitoring tool.${live && session.role !== "admin" ? " An administrator can change this." : ""}</div></div><input type="checkbox" id="famAlerts" ${famInc ? "checked" : ""} ${live && session.role !== "admin" ? "disabled" : ""} aria-label="Family can see incidents"></div></div>`;
   const gen = async (btn) => { btn.disabled = true; btn.textContent = "Writing…"; familySummary = await summarise("family"); renderFamily(); };
   if ($("#famGen")) $("#famGen").onclick = (e) => gen(e.currentTarget);
   if ($("#famRedo")) $("#famRedo").onclick = (e) => gen(e.currentTarget);
+  if ($("#famShare")) $("#famShare").onclick = (e) => confirmInline(e.currentTarget, () => {
+    S.summaries = S.summaries || [];
+    const text = ($("#famText") ? $("#famText").value : familySummary.text).trim().slice(0, 4000); if (!text) return toast("Write the update first");
+    S.summaries.push({ id: uid(), ts: Date.now(), day: new Date().toLocaleDateString("en-CA"), text }); save(); familySummary = null; renderFamily(); toast("Shared with family");
+  }, "Tap again to share with the family");
   v.querySelectorAll("[data-as]").forEach((b) => (b.onclick = () => { sendAs = b.dataset.as; renderFamily(); }));
   $("#msgForm").onsubmit = (e) => {
     e.preventDefault(); const text = $("#msgText").value.trim(); if (!text) return;
-    S.messages.push({ id: uid(), ts: Date.now(), from: sendAs, name: sendAs === "family" ? "Family" : onDuty().name, text }); save(); renderFamily();
-    const th = $("#thread"); th.scrollTop = th.scrollHeight;
+    const from = live ? "carer" : sendAs; // signed in, a carer's message is always the carer's (the relay stamps it too)
+    S.messages = S.messages || [];
+    S.messages.push({ id: uid(), ts: Date.now(), from, name: from === "family" ? "Family" : onDuty().name, text }); save(); renderFamily();
   };
-  $("#famAlerts").onchange = (e) => { S.settings.familyAlerts = e.target.checked; save(); toast(e.target.checked ? "Family will be alerted about incidents" : "Family alerts off"); };
+  $("#famAlerts").onchange = async (e) => {
+    if (!live) { S.settings.familyAlerts = e.target.checked; save(); return toast(e.target.checked ? "Family will see incidents" : "Incidents hidden from family"); }
+    try { const out = await relay("/clients/familyshare", { id: session.client.id, incidents: e.target.checked }); session.client.familyIncidents = !!out.client.familyIncidents; saveSession(); toast(session.client.familyIncidents ? "Family can now see incidents" : "Incidents are no longer shown to family"); }
+    catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+  };
   const th = $("#thread"); th.scrollTop = th.scrollHeight;
 }
 
@@ -1300,7 +1386,7 @@ function openSettings() {
   const c = S.consent;
   const s = sheet(`${sheetHead("Settings")}
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Your account</h3>
-      <p class="small" style="margin:0">Signed in as <strong>${esc(session.name)}</strong> <span class="muted">(${esc(session.username)} · ${session.role === "admin" ? "Administrator" : "Tester"})</span></p>
+      <p class="small" style="margin:0">Signed in as <strong>${esc(session.name)}</strong> <span class="muted">(${esc(session.username)} · ${session.role === "admin" ? "Administrator" : session.role === "family" ? "Family" : "Carer"})</span></p>
       ${session.role === "admin" ? '<button class="btn primary" id="stTesters">Manage people</button>' : ""}
       <button class="btn secondary" id="stTest">Check AI connection</button><div class="small" id="stMsg"></div>
       ${session.local ? "" : '<button class="btn secondary" id="stPw">Change my password</button><div id="stPush"></div>'}
@@ -1937,9 +2023,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-11.9";
+const PRIVACY_VERSION = "2026-10-11.10";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 9 · 11 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 10 · 11 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -1954,9 +2040,10 @@ const PRIVACY_HTML = `
 <li><strong>Feedback:</strong> if you report a problem or suggest an idea, your messages and the helper's replies, any screenshot you add, your name, username and role, which screen and page you were on, and the summary and analysis the AI writes for the developer. A screenshot shows whatever was on your screen, so avoid screens that show care notes.</li>
 </ul>
 <h3>Care notes and recordings</h3>
+<p><strong>Family accounts.</strong> An administrator can give an authorised family member their own sign-in, linked to a client. They see only the daily updates carers choose to share, coming appointments, messages with the carers, and incidents if that has been switched on for the client as agreed with the client or their representative. They never see care notes, recordings, the care plan, contacts or handovers. Messages and shared updates are kept in our cloud storage in the European Union with the client's record, and carers on the client see family messages.</p>
 <p>Each client's <strong>contacts</strong> (names, roles, phone numbers, email and postal addresses of people and services involved in their care, such as the GP, pharmacy and family) are kept in our cloud storage in the European Union, shared with the client's carers and the pilot administrators, and can be added or changed by any of them; every change is kept with who made it. The last list seen is kept on the carer's device so it can be read without signal, and is removed if the carer is taken off the client.</p>
 <p>Each client's <strong>care plan and documents</strong> (such as an emergency care plan or risk assessments) are kept in our cloud storage, added by pilot administrators, and shown to the client's carers. A copy of the care plan, and of any document a carer opens, is kept on their device so it can be read without signal; document copies are removed when the document is taken out of the care plan, when the carer signs out, or when the client is removed.</p>
-<p>Care notes (with the words you spoke), voice recordings, flags, handovers and outings are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Family messages and your settings stay on your device only.</p>
+<p>Care notes (with the words you spoke), voice recordings, flags, handovers and outings are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Your settings stay on your device only.</p>
 <h3>AI note writing</h3>
 <p>When you ask the user manual a question, your question (nothing else) is sent through our relay to Anthropic so the AI can answer it from the manual. It isn't stored.</p>
 <p>When you use the feedback helper, your messages and any screenshot are also sent to Anthropic, so the helper can ask questions and write a summary for the developer. Email addresses and phone numbers are removed automatically before a report is stored.</p>
@@ -2112,9 +2199,9 @@ function openTesters() {
       <label class="f">Name<input type="text" id="tName" placeholder="Mary Smith" autocomplete="off"></label>
       <label class="f">Username<input type="text" id="tUser" placeholder="mary.smith" autocapitalize="none" spellcheck="false" autocomplete="off"></label>
       <label class="f">Password<span class="row"><input type="text" id="tPass" style="flex:1 1 170px" autocomplete="off" spellcheck="false"><button class="btn ghost" type="button" id="tGen" style="flex:0 0 auto">Suggest</button></span></label>
-      ${session.client ? `<label class="check"><input type="checkbox" id="tCares" checked><span>Cares for ${esc(session.client.name)}</span></label>` : ""}
+      ${session.client ? `<label class="check"><input type="checkbox" id="tCares" checked><span>Link to ${esc(session.client.name)} (cares for, or family of)</span></label>` : ""}
       <label class="f">Their accent (for speech-to-text)<select id="tAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
-      <label class="check"><input type="checkbox" id="tAdmin"><span>Administrator: can add and remove people too</span></label>
+      <label class="f">They are<select id="tRole"><option value="tester">A carer</option><option value="family">A family member (sees shared updates and messages only)</option><option value="admin">An administrator (can add and remove people too)</option></select></label>
       <button class="btn primary">Add person</button><div class="small" id="tMsg"></div></form>`);
   const listEl = $("#tList", s.root);
   const showShare = (el, username, password, label) => {
@@ -2131,12 +2218,12 @@ function openTesters() {
       const { users, clients = [] } = await relay("/admin/users", {});
       listEl.innerHTML = users.length ? users.sort((a, b) => a.name.localeCompare(b.name)).map((u) => `<div class="item" style="flex-wrap:wrap">
         <span class="avatar">${esc((u.name || u.username).charAt(0).toUpperCase())}</span>
-        <div class="body" style="flex:1 1 220px"><strong>${esc(u.name || u.username)}</strong>${u.role === "admin" ? ' <span class="chip accent">Admin</span>' : ""}
+        <div class="body" style="flex:1 1 220px"><strong>${esc(u.name || u.username)}</strong>${u.role === "admin" ? ' <span class="chip accent">Admin</span>' : u.role === "family" ? ' <span class="chip">Family</span>' : ""}
           ${u.devices.length > 1 ? `<span class="chip incident">⚠ ${u.devices.length} devices</span>` : u.devices.length ? '<span class="chip">1 device</span>' : '<span class="chip">Not signed in yet</span>'}
           ${u.locked ? '<span class="chip follow">Locked to first device</span>' : ""}
           <div class="small muted">${esc(u.username)}${u.createdAt ? " · added " + esc(new Date(u.createdAt).toLocaleDateString("en-GB")) : ""} · ${u.agreedAt ? "privacy notice accepted " + esc(new Date(u.agreedAt).toLocaleDateString("en-GB")) : "privacy notice not yet accepted"}</div>
           ${u.devices.length ? `<details style="margin-top:4px"><summary>Devices</summary>${u.devices.map((d, i) => `<div class="small" style="padding:4px 0"><strong>${i === 0 ? "Home device" : "Other device"}:</strong> ${esc(d.device)} · ${esc(d.place)}<br><span class="tiny muted">First ${esc(new Date(d.first).toLocaleString("en-GB"))} · last ${esc(new Date(d.last).toLocaleString("en-GB"))}</span></div>`).join("")}</details>` : ""}
-          <div class="small" style="margin-top:8px"><strong>Cares for</strong>${u.role === "admin" ? ' <span class="muted">(administrators can open every client)</span>' : ""}
+          <div class="small" style="margin-top:8px"><strong>${u.role === "family" ? "Family of" : "Cares for"}</strong>${u.role === "admin" ? ' <span class="muted">(administrators can open every client)</span>' : ""}
             <div class="chips" style="margin-top:4px">${clients.length ? clients.map((c) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" data-assign="${esc(u.username)}" value="${esc(c.id)}" ${u.clients.includes(c.id) ? "checked" : ""} style="accent-color:var(--accent)">${esc(c.name)}</label>`).join("") : '<span class="muted">No clients yet</span>'}</div></div>
           ${u.main ? '<p class="tiny muted" style="margin:6px 0 0">Main administrator: signs in with the relay settings, so the password and device lock aren\'t managed here.</p>' : `<label class="check small" style="margin-top:6px"><input type="checkbox" data-lock="${esc(u.username)}" ${u.locked ? "checked" : ""}><span>Lock to first device (refuse sign-ins from any other device)</span></label>`}
           ${u.devices.length ? `<button class="link small" data-devreset="${esc(u.username)}">Reset devices (next sign-in becomes the home device)</button>` : ""}</div>
@@ -2191,13 +2278,13 @@ function openTesters() {
     m.textContent = ""; m.style.color = "var(--incident)";
     if (!name || !username) { m.textContent = "Enter a name and a username."; return; }
     try {
-      const role = $("#tAdmin").checked ? "admin" : "tester";
+      const role = $("#tRole").value;
       await relay("/admin/add", { name, username, password, role, accent: $("#tAccent") ? $("#tAccent").value : undefined });
       // Put them straight onto the client open on this phone, so they can be handed over to at once.
       const cares = $("#tCares") && $("#tCares").checked && session.client;
       if (cares) { try { await relay("/admin/assign", { username, clientIds: [session.client.id] }); await checkClient(); } catch (err) { toast("Added, but couldn't put them on " + session.client.name + ": " + err.message); } }
-      showShare(m, username, password, (role === "admin" ? "Administrator added" : "Tester added") + (cares ? ` and put on ${session.client.name}.` : "."));
-      $("#tAdmin").checked = false;
+      showShare(m, username, password, (role === "admin" ? "Administrator added" : role === "family" ? "Family member added" : "Carer added") + (cares ? ` and put on ${session.client.name}.` : "."));
+      $("#tRole").value = "tester";
       $("#tName").value = $("#tUser").value = ""; $("#tPass").value = suggestPassword(); load();
     } catch (err) { m.textContent = err.message; }
   };
@@ -2298,7 +2385,7 @@ async function drawPushSetting(box) {
   let sub = null; try { sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription(); } catch {}
   const r = pushRec(); if (sub && !(r && r.u === session.username && r.endpoint === sub.endpoint)) sub = null; // someone else's, or not registered
   try { await getPushKey(); } catch {} // fetched now, so the tap only asks for permission (iPhone needs that)
-  say(`<p class="small muted" style="margin:0">${session.role === "admin" ? "Tells you when a handover is waiting for you, and when an incident is recorded." : "Tells you when a handover is waiting for you."} They never show the client's name or any care details.</p>
+  say(`<p class="small muted" style="margin:0">${isFamily() ? `Tells you when the carers send a message or share a daily update${session.client && session.client.familyIncidents ? ", or record an incident" : ""}.` : session.role === "admin" ? "Tells you when a handover is waiting for you, a family member sends a message, or an incident is recorded." : "Tells you when a handover is waiting for you, or a family member sends a message."} They never show the client's name or any care details.</p>
     <button class="btn ${sub ? "ghost" : "secondary"}" id="pushBtn">${sub ? "Turn off notifications" : "Turn on notifications"}</button><div class="small" id="pushMsg" role="status"></div>`);
   $("#pushBtn", box).onclick = async () => {
     const m = $("#pushMsg", box), b = $("#pushBtn", box);
@@ -2625,17 +2712,17 @@ async function checkClient() {
   if (!session || !session.client) return;
   const fresh = clients.find((c) => c.id === session.client.id);
   if (!fresh) {
-    toast(`You're no longer a carer for ${session.client.name}, or it was removed`);
+    toast(isFamily() ? `You're no longer linked to ${session.client.name}, or it was removed` : `You're no longer a carer for ${session.client.name}, or it was removed`);
     detachClient();
     session.client = null; saveSession(); KEY = null; S = seed(); showClients(false);
-  } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name || (fresh.country || "UK") !== clientCountry()) {
+  } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name || (fresh.country || "UK") !== clientCountry() || JSON.stringify(fresh.family || []) !== JSON.stringify(session.client.family || []) || !!fresh.familyIncidents !== !!session.client.familyIncidents) {
     // Carers or shifts changed elsewhere (e.g. an administrator assigned someone): pick that up.
-    session.client = { id: fresh.id, name: fresh.name, country: fresh.country || "UK", consent: fresh.consent, carers: fresh.carers || [] };
+    session.client = { id: fresh.id, name: fresh.name, country: fresh.country || "UK", consent: fresh.consent, carers: fresh.carers || [], family: fresh.family || [], familyIncidents: !!fresh.familyIncidents };
     saveSession(); loadUser(); render();
   }
 }
 function chooseClient(client) {
-  session.client = { id: client.id, name: client.name, country: client.country || "UK", consent: client.consent, carers: client.carers || [] };
+  session.client = { id: client.id, name: client.name, country: client.country || "UK", consent: client.consent, carers: client.carers || [], family: client.family || [], familyIncidents: !!client.familyIncidents };
   saveSession(); loadUser(); $("#fullRoot").innerHTML = ""; go("today");
 }
 // manual = opened from Settings; otherwise a single client is picked automatically.
@@ -2645,7 +2732,7 @@ async function showClients(manual) {
   root.innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap">
     <div style="background:#FDFAF3;border-radius:16px;padding:10px 12px;box-shadow:var(--shadow);max-width:360px"><img src="logo-wordmark.png" alt="Dignity Notes: Spoken care notes" width="720" height="195" style="width:100%;height:auto;display:block"></div>
     <span class="eyebrow">Choose client</span>
-    <h2 style="font-size:30px;line-height:1.15">Who are you caring for?</h2>
+    <h2 style="font-size:30px;line-height:1.15">${session && session.role === "family" ? "Who would you like to see?" : "Who are you caring for?"}</h2>
     <div class="card"><div class="list" id="clList"><div class="empty">Loading clients…</div></div></div>
     <button class="btn secondary block" id="clNew">Add a new client</button>
     <form id="clForm" hidden style="display:grid;gap:14px">
@@ -2710,6 +2797,7 @@ async function showClients(manual) {
     : '<div class="empty">No clients yet. Add the first one below.</div>';
   if (offline) listEl.insertAdjacentHTML("afterbegin", '<div class="warn small">No connection. Showing clients already on this phone.</div>');
   listEl.querySelectorAll("[data-client]").forEach((b) => (b.onclick = () => { handoverDraft = familySummary = null; chooseClient(clients.find((c) => c.id === b.dataset.client)); }));
+  if (session && session.role === "family") { $("#clNew").hidden = true; if (!clients.length) listEl.innerHTML = '<div class="empty">You are not linked to anyone yet. Ask the administrator who gave you your sign-in to link you.</div>'; return; }
   if (!clients.length) $("#clNew").click();
 }
 
