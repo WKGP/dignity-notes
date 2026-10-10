@@ -613,7 +613,7 @@ function detachClient() {
   const keptAudio = new Set(kept.notes.map((n) => n.audioId).filter(Boolean));
   audioDB.del(S.notes.map((n) => n.audioId).filter((a) => a && !keptAudio.has(a)));
   if (!Object.values(kept).some((a) => a.length)) { try { localStorage.removeItem(KEY); } catch {} return; }
-  Object.assign(S, kept, { detached: true, plan: null, messages: [] }); saveLocal();
+  Object.assign(S, kept, { detached: true, plan: null, messages: [], contacts: null }); saveLocal();
 }
 // Remove every document copy kept on this phone for the open client (sign-out, reset, client removed).
 function clearDocCache() { if (S && S.docCache && S.docCache.length) { audioDB.del(S.docCache.map((id) => "doc_" + id)); S.docCache = []; } }
@@ -774,6 +774,83 @@ async function makeCatchUp(ho, since, key) {
   else syncState.redraw = true; // shown when nothing is open (see the idle loop)
 }
 
+
+/* ---------- contacts ----------
+ * Each client's important numbers (GP, pharmacy, family, attorney...), kept in the cloud and shared by
+ * every carer on the client. Anyone on the client can add or change them; every change is kept with
+ * who made it. The last list seen is kept on the phone, so it opens without signal.
+ */
+const CONTACT_GROUPS = [["emergency", "Emergency"], ["health", "Health (GP, pharmacy, nurses)"], ["family", "Family and attorney"], ["services", "Services and agency"], ["other", "Other"]];
+const telHref = (n) => "tel:" + String(n).replace(/[^0-9+]/g, "");
+async function refreshContacts() {
+  if (!cloudOn() || !navigator.onLine) return false;
+  const out = await syncJSON("/plan/contacts/list", { client: session.client.id });
+  S.contacts = { list: out.contacts || [], at: Date.now() }; saveLocal();
+  return true;
+}
+function openContacts() {
+  const s = sheet(`${sheetHead("Contacts for " + esc(S.client.name))}
+    <p class="small muted" style="margin:0">Important numbers for ${esc(S.client.name)}. Everyone who cares for ${esc(S.client.name)} sees the same list and can add or change it. Pilot: made-up details only.</p>
+    <div id="ctList"></div><div class="small" id="ctMsg" role="status"></div>
+    <button class="btn primary block" id="ctAdd">Add a contact</button>`);
+  const draw = () => {
+    const list = (S.contacts && S.contacts.list) || [];
+    $("#ctList", s.root).innerHTML = list.length ? CONTACT_GROUPS.map(([g, label]) => {
+      const inG = list.filter((c) => (c.group || "other") === g);
+      return inG.length ? `<h4 class="small muted" style="margin:14px 0 6px">${esc(label)}</h4>` + inG.map((c) => `<div class="card" style="display:grid;gap:4px;padding:12px 14px">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:start"><div><strong>${esc(c.name)}</strong>${c.role ? ` <span class="muted small">· ${esc(c.role)}</span>` : ""}</div>
+          <button class="link" data-edit="${esc(c.id)}">Change</button></div>
+        ${c.phone ? `<a class="btn secondary" style="justify-self:start" href="${esc(telHref(c.phone))}">Call ${esc(c.phone)}</a>` : ""}
+        ${c.phone2 ? `<a class="btn ghost" style="justify-self:start" href="${esc(telHref(c.phone2))}">Call ${esc(c.phone2)}</a>` : ""}
+        ${c.email ? `<a class="small" href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : ""}
+        ${c.address ? `<div class="small" style="white-space:pre-line">${esc(c.address)}</div>` : ""}
+        ${c.notes ? `<div class="small muted">${esc(c.notes)}</div>` : ""}
+        <div class="tiny muted">Last changed by ${esc(c.updatedBy || "")} · ${esc(dayLabel(c.updatedAt))} ${esc(fmtTime(c.updatedAt))}</div></div>`).join("") : "";
+    }).join("") : '<div class="empty">No contacts yet. Add the GP, pharmacy, family and anyone else carers may need to call.</div>';
+    s.root.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => editContact(list.find((c) => c.id === b.dataset.edit), openContacts)));
+    const offline = !cloudOn() || !navigator.onLine;
+    $("#ctAdd", s.root).disabled = offline;
+    if (offline) $("#ctMsg", s.root).textContent = S.contacts && S.contacts.at ? `No signal: this is the list from ${dayLabel(S.contacts.at)} ${fmtTime(S.contacts.at)}. Changes need signal.` : "No signal. Contacts need signal the first time.";
+  };
+  const reload = async () => { try { if (await refreshContacts()) { $("#ctMsg", s.root).textContent = ""; } } catch (e) { $("#ctMsg", s.root).textContent = "Couldn't update the list: " + e.message; } if ($("#ctList", s.root)) draw(); };
+  $("#ctAdd", s.root).onclick = () => editContact(null, openContacts);
+  draw(); reload();
+}
+function editContact(c, done) {
+  const v = c || { group: "health" };
+  const s = sheet(`${sheetHead(c ? "Change contact" : "Add a contact")}
+    <label class="f">Name<input type="text" id="ceName" maxlength="80" value="${esc(v.name || "")}" placeholder="e.g. Dr Patel, Oak Street Surgery" autocomplete="off"></label>
+    <label class="f">Who they are<input type="text" id="ceRole" maxlength="60" value="${esc(v.role || "")}" placeholder="e.g. GP, daughter, pharmacy" autocomplete="off"></label>
+    <label class="f">Group<select id="ceGroup">${CONTACT_GROUPS.map(([g, l]) => `<option value="${g}" ${v.group === g ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+    <label class="f">Phone<input type="tel" id="cePhone" maxlength="40" value="${esc(v.phone || "")}" autocomplete="off"></label>
+    <label class="f">Other phone (optional)<input type="tel" id="cePhone2" maxlength="40" value="${esc(v.phone2 || "")}" autocomplete="off"></label>
+    <label class="f">Email (optional)<input type="email" id="ceEmail" maxlength="254" value="${esc(v.email || "")}" autocomplete="off"></label>
+    <label class="f">Address (optional)<textarea id="ceAddress" class="grow" maxlength="200" rows="2">${esc(v.address || "")}</textarea></label>
+    <label class="f">Notes (optional)<input type="text" id="ceNotes" maxlength="300" value="${esc(v.notes || "")}" placeholder="e.g. Out of hours: call 111" autocomplete="off"></label>
+    <div class="small" id="ceMsg" role="status"></div>
+    <button class="btn primary block" id="ceSave">Save</button>
+    ${c ? '<button class="btn ghost block" id="ceRemove">Remove this contact</button>' : ""}`,
+    // Saving, removing or closing goes back to the list (which reloads it).
+    { guard: () => !saved && !!($("#ceName") && $("#ceName").value.trim()) && ($("#ceName").value.trim() !== (v.name || "")), onClose: () => setTimeout(() => done && done(), 0) });
+  let saved = false;
+  autoGrow($("#ceAddress", s.root));
+  const msg = $("#ceMsg", s.root), bad = (t) => { msg.style.color = "var(--incident)"; msg.textContent = t; };
+  const send = async (path, extra) => {
+    try { await syncJSON(path, { client: session.client.id, ...(c ? { id: c.id, baseUpdatedAt: c.updatedAt } : {}), ...extra }); saved = true; s.close(); toast(path.endsWith("remove") ? "Contact removed" : "Contact saved"); }
+    catch (e) { bad(e.message); $("#ceSave", s.root).disabled = false; }
+  };
+  $("#ceSave", s.root).onclick = () => {
+    const contact = { name: $("#ceName", s.root).value.trim(), role: $("#ceRole", s.root).value.trim(), group: $("#ceGroup", s.root).value,
+      phone: $("#cePhone", s.root).value.trim(), phone2: $("#cePhone2", s.root).value.trim(), email: $("#ceEmail", s.root).value.trim(),
+      address: $("#ceAddress", s.root).value.trim(), notes: $("#ceNotes", s.root).value.trim() };
+    if (!contact.name) return bad("Add a name.");
+    if (!(contact.phone || contact.phone2 || contact.email || contact.address)) return bad("Add a phone number, email or address.");
+    if (contact.email && !/^[^\s@]+@[^\s@]+$/.test(contact.email)) return bad("That email address doesn't look right.");
+    $("#ceSave", s.root).disabled = true; send("/plan/contacts/save", { contact });
+  };
+  if (c) $("#ceRemove", s.root).onclick = (e) => confirmInline(e.currentTarget, () => send("/plan/contacts/remove", {}), "Tap again to remove");
+}
+
 function renderToday() {
   const v = $("#view-today"); const now = new Date(); const h = now.getHours();
   const greet = h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
@@ -786,6 +863,7 @@ function renderToday() {
   v.innerHTML = `
     <div class="hello"><h2>${greet}, ${esc(onDuty().name)}</h2><p>${fmtDay(Date.now())}${onDuty().shift ? " · " + esc(onDuty().shift) : ""}</p></div>
     ${storageBanner()}
+    <div class="row" style="gap:8px;margin:-4px 0 12px"><button class="btn secondary" id="qContacts" style="flex:1">Contacts</button><button class="btn secondary" id="qPlan" style="flex:1">Care plan</button></div>
     <button class="cta" id="ctaRec"><span class="mic">${ICON.mic}</span><span><strong>Record care note</strong><span>Speak as things happen. You check it before it's saved.</span></span></button>
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="muted small">${flags.length || "None"} open</span></div>
       <div class="flags">${flags.length ? flags.map((f) => flagHTML(f)).join("") : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div></div>
@@ -799,6 +877,8 @@ function renderToday() {
       ${activeTransfer() ? `<button class="btn secondary block" id="ctaBack">${ICON.out} Back in my care</button>` : `<button class="btn secondary block" id="ctaOut">${ICON.out} Hand over to someone else</button>`}</div>
     ${latest ? `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId, latest.carerName).name)} · ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p></div>` : ""}`;
   $("#ctaRec").onclick = () => openRecorder();
+  $("#qContacts").onclick = () => openContacts();
+  $("#qPlan").onclick = () => openPlan();
   if ($("#openPlan", v)) $("#openPlan", v).onclick = () => openPlan();
   bindStorageBanner(v);
   $("#addEvent").onclick = () => openEventSheet();
@@ -1598,9 +1678,9 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-09.7";
+const PRIVACY_VERSION = "2026-10-10.8";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 7 · 9 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 8 · 10 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -1615,6 +1695,7 @@ const PRIVACY_HTML = `
 <li><strong>Feedback:</strong> if you report a problem or suggest an idea, your messages and the helper's replies, any screenshot you add, your name, username and role, which screen and page you were on, and the summary and analysis the AI writes for the developer. A screenshot shows whatever was on your screen, so avoid screens that show care notes.</li>
 </ul>
 <h3>Care notes and recordings</h3>
+<p>Each client's <strong>contacts</strong> (names, roles, phone numbers, email and postal addresses of people and services involved in their care, such as the GP, pharmacy and family) are kept in our cloud storage in the European Union, shared with the client's carers and the pilot administrators, and can be added or changed by any of them; every change is kept with who made it. The last list seen is kept on the carer's device so it can be read without signal, and is removed if the carer is taken off the client.</p>
 <p>Each client's <strong>care plan and documents</strong> (such as an emergency care plan or risk assessments) are kept in our cloud storage, added by pilot administrators, and shown to the client's carers. A copy of the care plan, and of any document a carer opens, is kept on their device so it can be read without signal; document copies are removed when the document is taken out of the care plan, when the carer signs out, or when the client is removed.</p>
 <p>Care notes (with the words you spoke), voice recordings, flags, handovers and outings are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Family messages and your settings stay on your device only.</p>
 <h3>AI note writing</h3>
