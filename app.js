@@ -13,6 +13,11 @@ const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateStrin
 const isToday = (ts) => sameDay(ts, Date.now());
 const dayLabel = (ts) => isToday(ts) ? "Today" : sameDay(ts, Date.now() - 864e5) ? "Yesterday" : sameDay(ts, Date.now() + 864e5) ? "Tomorrow" : fmtDay(ts);
 const ICON = {
+  search: '<svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  people: '<svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9.5" r="2.5"/><path d="M16 14.2c3 .2 5 2.6 5 5.8"/></svg>',
+  plan: '<svg class="i" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h4"/></svg>',
+  alert: '<svg class="i" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4"/><circle cx="12" cy="17" r=".6" style="fill:currentColor"/></svg>',
+  chev: '<svg class="i chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>',
   mic: '<svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
   stop: '<svg class="i" viewBox="0 0 24 24" style="fill:currentColor;stroke:none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   out: '<svg class="i" viewBox="0 0 24 24"><path d="M10 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>',
@@ -600,6 +605,7 @@ document.querySelectorAll(".tab[data-tab]").forEach((b) => b.addEventListener("c
 $("#recTab").addEventListener("click", () => openRecorder());
 $("#dutyBtn").addEventListener("click", () => openCarerSheet());
 $("#settingsBtn").addEventListener("click", () => (isFamily() ? openFamilySettings() : openSettings()));
+$("#brandBtn").addEventListener("click", () => { if (session && !appBusy()) showClients(true); });
 $("#helpBtn").addEventListener("click", () => openHelp());
 $("#returnBtn").addEventListener("click", () => openReturnSheet());
 
@@ -663,9 +669,9 @@ const WHO_TO_TELL = `<details class="small" style="margin-top:6px"><summary>Who 
 const whoToTell = () => { const w = clientCountry() === "AU" ? WHO_TO_TELL_AU : WHO_TO_TELL; return respectDoc() ? w.replace("<ul", `<button class="btn secondary" data-opendoc="${esc(respectDoc().id)}" style="margin-top:6px;min-height:38px;padding:6px 12px;font-size:14px">Open the emergency care plan</button><ul`) : w; };
 function flagHTML(f, actions = true) {
   return `<div class="flag ${f.kind === "incident" ? "incident" : ""}">
-    <div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}${f.raisedBy && roster().some((c) => c.id === f.raisedBy) ? " · " + esc(carer(f.raisedBy).name) : ""}</span>
+    <div class="body"><span class="tiny muted" style="font-weight:600">${f.kind === "incident" ? "Incident" : "To note"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}${f.raisedBy && roster().some((c) => c.id === f.raisedBy) ? " · " + esc(carer(f.raisedBy).name) : ""}</span>
     <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span>${f.kind === "incident" ? whoToTell() : ""}</div>
-    ${actions ? `<button class="link" data-resolve="${esc(f.id)}">Resolved</button>` : ""}</div>`;
+    ${actions ? `<button class="link small" data-resolve="${esc(f.id)}">Mark resolved</button>` : ""}</div>`;
 }
 function bindResolve(root) {
   root.querySelectorAll("[data-resolve]").forEach((b) => b.addEventListener("click", () => {
@@ -785,6 +791,10 @@ async function openDoc(id) {
     : `<div style="display:grid;gap:10px"><p class="small muted" style="margin:0">${esc(DOC_KIND_LABEL[d.kind] || "Document")} · PDF</p><a class="btn primary block" href="${url}" target="_blank" rel="noopener">Open the PDF</a><p class="tiny muted" style="margin:0">It opens in your phone's PDF viewer. Come back to Dignity Notes when you've finished.</p></div>`;
 }
 // Buttons anywhere with data-opendoc="<id>" open that document.
+// A flag row (Today, Family) opens the whole flag.
+document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-flag]"); if (b) openFlag(b.dataset.flag); });
+// Long texts on Today show a few lines; "Read all" opens them in place.
+document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-unclamp]"); if (!b) return; const t = b.previousElementSibling; if (t) t.classList.toggle("clamp"); b.textContent = t && t.classList.contains("clamp") ? "Read all" : "Show less"; });
 document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-opendoc]"); if (b) { e.preventDefault(); openDoc(b.dataset.opendoc); } });
 /* ---------- tasks for each shift ----------
  * Set in the care plan by an administrator (what, when in the day, which days). Carers tick each one
@@ -902,9 +912,9 @@ function planCardHTML() {
   const p = plan(), docs = planDocs(), r = respectDoc();
   if (!p.sections.length && !docs.length && !isAdminHere()) return "";
   const order = { urgent: 0, important: 1, non_urgent: 2 };
-  const top = [...p.sections].sort((a, b) => order[a.urgency] - order[b.urgency]).slice(0, 4);
-  return `<div class="card"><div class="card-h"><h3>Care plan</h3><span class="muted small">${p.sections.length} sections · ${docs.length} documents</span></div>
-    ${r ? `<button class="btn secondary block" data-opendoc="${esc(r.id)}" style="margin-bottom:10px">Emergency information</button>` : ""}
+  const top = [...p.sections].filter((s) => s.urgency !== "non_urgent").sort((a, b) => order[a.urgency] - order[b.urgency]).slice(0, 4);
+  if (p.sections.length && !top.length) return "";
+  return `<div class="card"><div class="card-h"><h3>${p.sections.length ? "Care plan: key points" : "Care plan"}</h3><span class="muted small">${p.sections.length} sections · ${docs.length} documents</span></div>
     ${p.sections.length ? `<div class="list">${top.map((s) => `<div class="item"><div class="body"><div><strong>${esc(s.title)}</strong> ${urgencyPill(s.urgency)}</div><div class="muted small">${esc((s.text || "").slice(0, 90))}${(s.text || "").length > 90 ? "…" : ""}</div></div></div>`).join("")}</div>`
       : `<div class="empty">No care plan yet.${isAdminHere() ? " Set one up so carers can see what each area of care involves." : ""}</div>`}
     <div style="margin-top:10px"><button class="link" id="openPlan">${p.sections.length || docs.length ? "Open the care plan" : "Set up the care plan"}</button></div></div>`;
@@ -1004,14 +1014,14 @@ function handoverCardHTML(ho) {
   const since = notesSinceHandover(ho);
   const hoHead = ho ? `${esc(carer(ho.fromId, ho.fromName).name)} · ${dayLabel(ho.ts)} ${fmtTime(ho.ts)}` : "";
   if (!since.length) return `<div class="card"><div class="card-h"><h3>Previous handover</h3>${ho ? `<span class="muted small">${hoHead}</span>` : ""}</div>
-      ${ho ? `<p class="note-text" style="white-space:pre-line">${esc(ho.text)}</p>` : '<div class="empty">No handover yet.</div>'}</div>`;
+      ${ho ? `<p class="note-text clamp" style="white-space:pre-line">${esc(ho.text)}</p><button class="link small" data-unclamp>Read all</button>` : '<div class="empty">No handover yet.</div>'}</div>`;
   const key = since.map((n) => n.id).join(",") + "|" + (ho ? ho.id : "");
   const c = S.catchUp && S.catchUp.key === key ? S.catchUp : null;
   if (!catchUpFresh(key)) setTimeout(() => makeCatchUp(ho, since, key), 0);
   const who = [...new Set(since.map((n) => carer(n.carerId, n.carerName).name))].join(", ");
   return `<div class="card"><div class="card-h"><h3>Since the last handover</h3><span class="muted small">${since.length} note${since.length > 1 ? "s" : ""} · ${esc(who)}</span></div>
       <div class="warn small" style="margin-bottom:10px">No handover was done after these notes. This is a summary of them${c && c.source === "ai" ? ", written by AI" : ""}, not a carer's handover. Check the Record log for the full notes.</div>
-      ${c ? `<p class="note-text" style="white-space:pre-line">${esc(c.text)}</p>` : '<p class="muted small">Summarising the notes…</p>'}
+      ${c ? `<p class="note-text clamp" style="white-space:pre-line">${esc(c.text)}</p><button class="link small" data-unclamp>Read all</button>` : '<p class="muted small">Summarising the notes…</p>'}
       ${ho ? `<details style="margin-top:10px"><summary class="small">Last handover: ${hoHead}</summary><p class="note-text" style="white-space:pre-line">${esc(ho.text)}</p></details>` : ""}</div>`;
 }
 // An AI summary is kept until new notes arrive; an offline one is retried at most every 10 minutes.
@@ -1138,19 +1148,24 @@ function renderToday() {
   v.innerHTML = `
     <div class="hello"><h2>${greet}, ${esc(onDuty().name)}</h2><p>${fmtDay(Date.now())}${onDuty().shift ? " · " + esc(onDuty().shift) : ""}</p></div>
     ${storageBanner()}
-    <div class="row" style="gap:8px;margin:-4px 0 12px"><button class="btn secondary" id="qFind" style="flex:1">Find</button><button class="btn secondary" id="qContacts" style="flex:1">Contacts</button><button class="btn secondary" id="qPlan" style="flex:1">Care plan</button></div>
-    <button class="cta" id="ctaRec"><span class="mic">${ICON.mic}</span><span><strong>Record care note</strong><span>Speak as things happen. It's saved when you stop; add to it any time.</span></span></button>
-    <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="muted small">${flags.length || "None"} open</span></div>
-      <div class="flags">${flags.length ? flags.map((f) => flagHTML(f)).join("") : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div></div>
+    <button class="cta" id="ctaRec">${ICON.mic}Record a note</button>
+    <div class="tiles">
+      <button class="tile" id="qFind">${ICON.search}Find</button>
+      <button class="tile" id="qContacts">${ICON.people}Contacts</button>
+      <button class="tile" id="qPlan">${ICON.plan}Care plan</button>
+      ${activeTransfer() ? `<button class="tile on" id="ctaBack">${ICON.out}Back in care</button>` : `<button class="tile" id="ctaOut">${ICON.out}Going out</button>`}
+    </div>
+    ${respectDoc() ? `<button class="emerg" data-opendoc="${esc(respectDoc().id)}">${ICON.alert}Emergency care plan</button>` : ""}
+    <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="count ${flags.length ? "" : "calm"}">${flags.length}</span></div>
+      ${flags.length ? `<div class="attn">${(attnAll ? flags : flags.slice(0, 3)).map(attnRowHTML).join("")}</div>
+        ${flags.length > 3 ? `<button class="link small" id="attnMore" style="margin-top:6px">${attnAll ? "Show fewer" : `See all ${flags.length}`}</button>` : ""}`
+        : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div>
     ${tasksCardHTML()}
-    ${planCardHTML()}
     ${handoverCardHTML(ho)}
-    <div class="card"><div class="card-h"><h3>Today &amp; coming up</h3></div>
+    <div class="card"><div class="card-h"><h3>Coming up</h3></div>
       <div class="list">${sched.length ? sched.map((s) => `<div class="item ${s.when < Date.now() ? "past" : ""}"><div class="when">${fmtTime(s.when)}</div><div class="body"><div><strong>${esc(s.label)}</strong></div><div class="muted small">${dayLabel(s.when)}${s.detail ? " · " + esc(s.detail) : ""}</div></div></div>`).join("") : '<div class="empty">Nothing scheduled.</div>'}</div>
       <div style="margin-top:10px"><button class="link" id="addEvent">+ Add appointment or plan</button></div></div>
-    <div class="card"><div class="card-h"><h3>Going out with someone else?</h3></div>
-      <p class="small muted" style="margin:0 0 12px">Record when an authorised person takes ${esc(S.client.name)} out, so it's clear they were not in your care.</p>
-      ${activeTransfer() ? `<button class="btn secondary block" id="ctaBack">${ICON.out} Back in my care</button>` : `<button class="btn secondary block" id="ctaOut">${ICON.out} Hand over to someone else</button>`}</div>
+    ${planCardHTML()}
     ${recentNotesHTML(latest)}`;
   $("#ctaRec").onclick = () => openRecorder();
   $("#qContacts").onclick = () => openContacts();
@@ -1164,6 +1179,20 @@ function renderToday() {
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
   if ($("#ctaBack")) $("#ctaBack").onclick = () => openReturnSheet();
   bindResolve(v);
+  if ($("#attnMore")) $("#attnMore").onclick = () => { attnAll = !attnAll; render(); };
+}
+// Needs attention on Today: a short row per flag; tap for the whole flag, Who to tell and Resolved.
+let attnAll = false;
+const attnRowHTML = (f) => `<button class="attn-row" data-flag="${esc(f.id)}"><span class="sdot ${f.kind === "incident" ? "incident" : ""}"></span>
+  <span class="body"><strong>${esc(f.title)}</strong><span class="tiny muted">${f.kind === "incident" ? "Incident" : "To note"} · ${esc(dayLabel(f.ts))} ${fmtTime(f.ts)}</span></span>${ICON.chev}</button>`;
+function openFlag(id) {
+  const f = S.flags.find((x) => x.id === id); if (!f) return;
+  const s = sheet(`${sheetHead(f.kind === "incident" ? "Incident" : "To note")}${flagHTML(f, false)}
+    ${f.status === "open" ? '<button class="btn primary block" id="flResolve">Mark as resolved</button>' : ""}`);
+  if ($("#flResolve", s.root)) $("#flResolve", s.root).onclick = () => {
+    f.status = "resolved"; f.resolvedTs = Date.now(); f.resolvedBy = stampId(); touch(f);
+    save(); s.close(); render(); toast("Marked as resolved");
+  };
 }
 
 let logFilter = "all";
@@ -1257,11 +1286,13 @@ function renderLog() {
     return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip accent">Handover</span><span class="muted">${esc(carer(it.h.fromId, it.h.fromName).name)} → ${esc(it.h.toId ? carer(it.h.toId).name : "next carer")}</span></div><details ${logOpen ? "open" : ""}><summary>Read handover</summary><p class="small" style="white-space:pre-line;margin:0">${esc(it.h.text)}</p></details></div>`;
   }).join("");
   v.innerHTML = `<div class="hello"><h2>Record log</h2><p>Every saved note, outing and handover, newest first.</p></div>
+    <button class="searchbar" id="logFind">${ICON.search}<span>Search notes, care plan, contacts…</span></button>
     <div class="seg" role="group" aria-label="Filter">${[["all", "Everything"], ["incident", "Incidents"], ["follow", "To note"]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${logFilter === k}">${l}</button>`).join("")}</div>
     ${rows ? `<button class="link small" id="logOpen" style="justify-self:start">${logOpen ? "Hide words and recordings" : "Show all words and recordings"}</button>` : ""}
     ${rows || '<div class="empty">Nothing here yet.</div>'}`;
   v.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { logFilter = b.dataset.f; renderLog(); }));
   v.querySelectorAll("[data-addto]").forEach((b) => (b.onclick = () => openRecorder({ amends: b.dataset.addto })));
+  $("#logFind", v).onclick = () => { openFind(); setTimeout(() => { const q = $("#fdQ"); if (q) q.focus(); }, 50); };
   if ($("#logOpen", v)) $("#logOpen", v).onclick = () => { logOpen = !logOpen; try { localStorage.setItem("dignitynotes.logopen", logOpen ? "1" : "0"); } catch {} renderLog(); };
   if (logOpen) v.querySelectorAll("audio[data-audio]").forEach((a) => loadAudio(a, false));
   v.querySelectorAll("details").forEach((d) => d.addEventListener("toggle", () => { if (d.open && !logOpen) loadAudio(d.querySelector("audio[data-audio]"), true); }));
@@ -1314,7 +1345,7 @@ function renderFamily() {
         ${live ? `<button class="btn primary block" id="famShare" style="margin-top:10px">Share with family</button><p class="tiny muted" style="margin:6px 0 0">Read and change it first if needed: family see exactly this, and it can't be taken back.</p>` : ""}`
       : `<p class="small muted" style="margin:0 0 12px">A short, plain-English update written from today's notes.</p><button class="btn primary block" id="famGen">Write today's update</button>`}
       ${shared.length ? `<details style="margin-top:10px"><summary class="small">Shared with family (${shared.length})</summary>${shared.slice(0, 7).map((x) => `<div class="small" style="border-top:1px solid var(--line);padding-top:6px;margin-top:6px"><span class="tiny muted">${esc(dayLabel(x.ts))} ${fmtTime(x.ts)}${x.byName ? " · " + esc(x.byName) : ""}</span><div style="white-space:pre-line">${esc(x.text)}</div></div>`).join("")}</details>` : ""}</div>
-    <div class="card"><div class="card-h"><h3>Incidents today</h3><span class="muted small">${famInc ? "Family can see these" : "For you; not shown to family"}</span></div><div class="flags">${inc.length ? inc.map((f) => flagHTML(f, false)).join("") : '<div class="empty">No incidents today.</div>'}</div></div>
+    <div class="card"><div class="card-h"><h3>Incidents today</h3><span class="muted small">${famInc ? "Family can see these" : "For you; not shown to family"}</span></div>${inc.length ? `<div class="attn">${inc.map(attnRowHTML).join("")}</div>` : '<div class="empty">No incidents today.</div>'}</div>
     <div class="card"><div class="card-h"><h3>Messages</h3><span class="muted small">${live ? "With the family" : "Reaches whoever is on duty"}</span></div>
       <div class="thread" id="thread">${msgs.map((m) => `<div class="msg ${m.from === "carer" ? "carer" : ""}"><span class="who">${esc(m.name || (m.from === "carer" ? "Carer" : "Family"))} · ${dayLabel(m.ts)} ${fmtTime(m.ts)}</span>${esc(m.text)}</div>`).join("") || '<div class="empty">No messages yet.</div>'}</div>
       ${live ? "" : `<div class="seg" style="margin-top:12px" role="group" aria-label="Send as"><button data-as="family" aria-pressed="${sendAs === "family"}">Send as family</button><button data-as="carer" aria-pressed="${sendAs === "carer"}">Send as ${esc(onDuty().name)}</button></div>`}
@@ -1448,6 +1479,18 @@ async function showVersions(root) {
   if (app && relayV && app !== relayV) set("#abMatch", "The app and server versions differ. Close and reopen the app; if it persists, tell your administrator.");
 }
 
+// Long menus on a phone: every section after the first becomes a row that opens in place.
+function foldSections(root, skip = 1) {
+  const cards = [...root.querySelectorAll(".card")].filter((c) => c.firstElementChild && c.firstElementChild.tagName === "H3" && !c.parentElement.closest(".card"));
+  cards.slice(skip).forEach((c) => {
+    const d = document.createElement("details"); d.className = "card fold";
+    const sm = document.createElement("summary"); sm.innerHTML = `<span>${esc(c.firstElementChild.textContent)}</span>${ICON.chev}`;
+    c.firstElementChild.remove();
+    const b = document.createElement("div"); b.className = "fold-b " + c.className.replace(/card/, "").trim();
+    while (c.firstChild) b.appendChild(c.firstChild);
+    d.append(sm, b); c.replaceWith(d);
+  });
+}
 function openSettings() {
   const c = S.consent;
   const s = sheet(`${sheetHead("Settings")}
@@ -1489,6 +1532,7 @@ function openSettings() {
       <div class="muted" id="abMatch"></div>
       <a class="link" href="CHANGELOG.md" target="_blank" rel="noopener" style="justify-self:start">What's new</a>
       <p class="tiny muted" style="margin:4px 0 0">Dignity Notes pilot · fictional test use only<br>${COPYRIGHT}</p></div>`);
+  foldSections(s.root);
   showVersions(s.root);
   $("#stPrivacy").onclick = () => { s.close(); viewPrivacy(); };
   const drawDict = () => {
