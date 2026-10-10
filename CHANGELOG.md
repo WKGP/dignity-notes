@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.2.0 - 2026-10-10
+
+
 ## 1.1.0 - 2026-10-06
 
 Cloud copy. Notes, flags, handovers, outings and recordings are copied to secure cloud storage (EU) and shared between the client's carers' phones; nothing is lost if a phone's data is cleared. Settings > About shows the cloud copy status. Privacy notice version 4. Also: "Latest note" and "Previous handover" on Today show real entries before the example ones; fix for the iPhone tab bar drifting up the screen after typing; smaller recordings.

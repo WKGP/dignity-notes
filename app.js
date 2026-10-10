@@ -90,6 +90,7 @@ function loadUser() {
   // Kept with the notes too, so the client list can be shown from this phone when offline.
   S.client = { name: session.client.name, carers: session.client.carers || [] }; S.consent = session.client.consent;
   // The person signed in on this phone is on duty whenever the app opens, so notes carry the right name.
+  S.tasks = S.tasks || []; // task ticks (done / not done) for this client
   S.onDuty = myId(); S.detached = false; // back on this client: anything kept unsent goes now
   Object.assign(syncState, { error: "", pending: 0, audioPending: 0, failed: 0, last: null, again: false });
   save();
@@ -138,7 +139,7 @@ const audioDB = (() => {
  * Sync runs in the background, so it never signs anyone out or opens a screen in the middle of
  * something: if the sign-in has ended it pauses, and asks once nothing is open.
  */
-const SYNC_KINDS = { note: "notes", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule" };
+const SYNC_KINDS = { note: "notes", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule", task: "tasks" };
 const DEMO_IDS = new Set(["n0", "f0", "h0", "s1", "s2", "s3", "m0"]);
 const SYNC_RECORD_MAX = 58000, SYNC_BATCH_MAX = 400000; // the relay allows 60,000 a record, 1,000,000 a request
 // When a record last changed (older records have no mt, so use their latest time).
@@ -155,6 +156,7 @@ const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SYNC_SHAPES = {
   note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", heardBy: "str:10", amends: "id", auto: "num", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
   flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", raisedBy: "id", resolvedNote: "str:200", resolvedTs: "num", resolvedBy: "id" } },
+  task: { req: ["ts", "taskId", "day", "status"], f: { ts: "num", taskId: "str:40", title: "str:120", day: "str:10", period: ["morning", "afternoon", "evening", "night", "any"], status: ["done", "not_done"], reason: "str:300", by: "id", noteId: "id" } },
   handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", fromName: "str:60", toId: "id", text: "str:10000", source: "str:20" } },
   event: { req: ["ts", "when", "label"], f: { ts: "num", when: "num", label: "str:120", detail: "str:300", by: "id" } },
   transfer: { req: ["outTs", "withWhom"], f: { outTs: "num", withWhom: "str:100", relationship: "str:100", purpose: "str:200", carerId: "id", backTs: "num", backNote: "str:2000", backCarerId: "id" } },
@@ -396,9 +398,9 @@ function basicTidy(transcript) {
 const validTidy = (o) => o && typeof o.note === "string" && o.note.trim() && Array.isArray(o.categories) && Array.isArray(o.flags);
 async function tidy(transcript) {
   try {
-    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary(), planSections: plan().sections.map((x) => x.title) });
+    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary(), tasks: tasksNow().due.filter((x) => !x.tick).map((x) => x.t.title), planSections: plan().sections.map((x) => x.title) });
     if (!validTidy(out)) throw new Error("Unexpected reply from the relay");
-    return { unclear: [], record_gaps: [], plan_sections: [], ...out, source: "ai" };
+    return { unclear: [], record_gaps: [], plan_sections: [], tasks_done: [], ...out, source: "ai" };
   } catch (e) {
     return { ...basicTidy(transcript), source: "basic", reason: e.message };
   }
@@ -420,6 +422,7 @@ function summaryPayload(mode, toId) {
     flags: openFlags().filter((f) => !isExample(f)).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
     transfers: S.transfers.filter((t) => t.outTs >= shiftStart() || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
     planGaps: mode === "handover" ? planGaps() : [],
+    tasksMissed: mode === "handover" ? tasksMissedForHandover() : [],
     schedule: S.schedule.filter((s) => s.when > Date.now() && !isExample(s)).sort((a, b) => a.when - b.when).slice(0, 4).map((s) => `${dayLabel(s.when)} ${fmtTime(s.when)}: ${s.label}${s.detail ? " - " + s.detail : ""}`),
   };
 }
@@ -595,7 +598,7 @@ async function loadPlan() {
     const out = await syncJSON("/plan/get", { client: session.client.id });
     if (KEY !== key) return false;
     const before = JSON.stringify(S.plan || null);
-    S.plan = { sections: (out.plan && out.plan.sections) || [], updatedAt: (out.plan && out.plan.updatedAt) || 0, updatedBy: out.plan && out.plan.updatedBy, docs: out.docs || [] };
+    S.plan = { sections: (out.plan && out.plan.sections) || [], tasks: (out.plan && out.plan.tasks) || [], updatedAt: (out.plan && out.plan.updatedAt) || 0, updatedBy: out.plan && out.plan.updatedBy, docs: out.docs || [] };
     // Documents taken out of the care plan are removed from this phone too.
     const keep = new Set(S.plan.docs.map((d) => d.id)), gone = (S.docCache || []).filter((id) => !keep.has(id));
     if (gone.length) { audioDB.del(gone.map((id) => "doc_" + id)); S.docCache = (S.docCache || []).filter((id) => keep.has(id)); }
@@ -639,6 +642,97 @@ async function openDoc(id) {
 }
 // Buttons anywhere with data-opendoc="<id>" open that document.
 document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-opendoc]"); if (b) { e.preventDefault(); openDoc(b.dataset.opendoc); } });
+/* ---------- tasks for each shift ----------
+ * Set in the care plan by an administrator (what, when in the day, which days). Carers tick each one
+ * Done or Not done (with a reason); a tick is kept like a note and never changed. A task whose part of
+ * the day has passed without a tick shows as not ticked, and goes into the handover.
+ */
+const PERIODS = [["morning", "Morning", 6, 12], ["afternoon", "Afternoon", 12, 18], ["evening", "Evening", 18, 22], ["night", "Night", 22, 30]];
+const periodLabel = (p) => (PERIODS.find((x) => x[0] === p) || [, "Any time"])[1];
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+// The care day and part of the day for a moment: a night (22:00 to 06:00) belongs to the day it started.
+function careSlot(ts = Date.now()) {
+  const d = new Date(ts), h = d.getHours();
+  if (h < 6) { const y = new Date(d); y.setDate(y.getDate() - 1); return { day: dayKey(y), dow: y.getDay(), period: "night" }; }
+  return { day: dayKey(d), dow: d.getDay(), period: PERIODS.find(([, , a, b]) => h >= a && h < b)[0] };
+}
+const planTasks = () => (Array.isArray(plan().tasks) ? plan().tasks : []);
+const taskTick = (taskId, day) => (S.tasks || []).filter((t) => t.taskId === taskId && t.day === day).sort((a, b) => b.ts - a.ts)[0];
+// Tasks for the current care day: due now, and earlier parts of the day not ticked.
+function tasksNow() {
+  const slot = careSlot(), order = PERIODS.map((p) => p[0]), cur = order.indexOf(slot.period);
+  const todays = planTasks().filter((t) => !t.days.length || t.days.includes(slot.dow));
+  const due = todays.filter((t) => t.period === slot.period || t.period === "any").map((t) => ({ t, tick: taskTick(t.id, slot.day) }));
+  const missed = todays.filter((t) => t.period !== "any" && order.indexOf(t.period) < cur && !taskTick(t.id, slot.day)).map((t) => ({ t }));
+  return { slot, due, missed };
+}
+function tickTask(t, status, extra = {}) {
+  const slot = careSlot();
+  S.tasks.push({ id: uid(), ts: Date.now(), taskId: t.id, title: t.title, day: slot.day, period: t.period, status, by: stampId(), ...extra });
+  save(); render();
+  toast(status === "done" ? `Done: ${t.title}` : `Not done: ${t.title}`);
+}
+function notDoneSheet(t) {
+  const s = sheet(`${sheetHead("Not done")}<p class="small" style="margin:0"><strong>${esc(t.title)}</strong></p>
+    <label class="f">Why not?<input type="text" id="ndWhy" maxlength="300" placeholder="e.g. Refused, asleep, out with family" autocomplete="off"></label>
+    <button class="btn primary block" id="ndSave">Save</button>`);
+  $("#ndSave", s.root).onclick = () => { const why = $("#ndWhy", s.root).value.trim(); if (!why) return toast("Say why it wasn't done"); s.close(); tickTask(t, "not_done", { reason: why }); };
+  setTimeout(() => $("#ndWhy", s.root)?.focus(), 50);
+}
+function tasksCardHTML() {
+  if (!planTasks().length) return "";
+  const { slot, due, missed } = tasksNow();
+  const row = (t, tick) => `<div class="item"><div class="body"><div><strong>${esc(t.title)}</strong>${t.period !== slot.period && t.period !== "any" ? ` <span class="muted small">· ${esc(periodLabel(t.period))}</span>` : ""}</div>
+    ${tick ? `<div class="small ${tick.status === "done" ? "" : "muted"}">${tick.status === "done" ? "Done" : "Not done: " + esc(tick.reason || "")} · ${esc(carer(tick.by).name)} ${fmtTime(tick.ts)}</div>`
+      : `<div class="row" style="gap:6px;margin-top:6px"><button class="btn secondary" data-tdone="${esc(t.id)}">Done</button><button class="btn ghost" data-tnot="${esc(t.id)}">Not done</button></div>`}</div></div>`;
+  const open = due.filter((x) => !x.tick).length + missed.length;
+  return `<div class="card"><div class="card-h"><h3>Tasks this shift</h3><span class="muted small">${esc(periodLabel(slot.period))}${open ? ` · ${open} to tick` : " · all ticked"}</span></div>
+    <div class="list">${due.length ? due.map((x) => row(x.t, x.tick)).join("") : '<div class="empty">No tasks for this part of the day.</div>'}</div>
+    ${missed.length ? `<div class="warn small" style="margin-top:10px">Not ticked from earlier today:</div><div class="list">${missed.map((x) => row(x.t)).join("")}</div>` : ""}</div>`;
+}
+function bindTasks(root) {
+  const find = (id) => planTasks().find((t) => t.id === id);
+  root.querySelectorAll("[data-tdone]").forEach((b) => (b.onclick = () => { const t = find(b.dataset.tdone); if (t) tickTask(t, "done"); }));
+  root.querySelectorAll("[data-tnot]").forEach((b) => (b.onclick = () => { const t = find(b.dataset.tnot); if (t) notDoneSheet(t); }));
+}
+// For the handover: tasks of this care day (and last night) whose time has passed without a tick.
+function tasksMissedForHandover() {
+  const out = [], { slot, missed } = tasksNow();
+  missed.forEach(({ t }) => out.push(`${t.title} (${periodLabel(t.period)})`));
+  tasksNow().due.filter((x) => !x.tick && x.t.period !== "any").forEach(({ t }) => out.push(`${t.title} (${periodLabel(t.period)}, not ticked yet)`));
+  (S.tasks || []).filter((x) => x.day === slot.day && x.status === "not_done").forEach((x) => out.push(`${x.title}: not done (${x.reason || "no reason given"})`));
+  return [...new Set(out)];
+}
+// Admin: the shift tasks (part of the care plan, saved with it).
+async function openTasksEdit() {
+  if (!navigator.onLine || !(await loadPlan())) return toast("Connect to the internet to edit the tasks, so you start from the latest version");
+  const base = plan().updatedAt || 0;
+  let rows = planTasks().map((t) => ({ ...t, days: [...t.days] }));
+  const s = sheet(`${sheetHead("Shift tasks")}<p class="small muted" style="margin:0">What carers should do, and when in the day. Leave all days unticked for every day. Carers tick each task Done or Not done. Pilot: made-up details only.</p>
+    <div id="tkRows" style="display:grid;gap:12px"></div>
+    <button class="link" id="tkAdd" style="justify-self:start">+ Add a task</button>
+    <button class="btn primary block" id="tkSave">Save tasks</button>`, { guard: () => true });
+  const box = $("#tkRows", s.root);
+  const read = () => { rows = [...box.querySelectorAll("[data-row]")].map((el, i) => ({ id: rows[i] && rows[i].id, title: $(".tkT", el).value.trim(), period: $(".tkP", el).value, days: [...el.querySelectorAll("[data-day]")].filter((c) => c.checked).map((c) => +c.dataset.day), section: rows[i] ? rows[i].section : "" })); };
+  const draw = () => {
+    box.innerHTML = rows.map((r, i) => `<div class="card" data-row="${i}" style="box-shadow:none;display:grid;gap:8px">
+      <input class="tkT" type="text" value="${esc(r.title)}" maxlength="120" placeholder="e.g. Morning medication" aria-label="Task">
+      <select class="tkP" aria-label="When">${[...PERIODS.map(([k, l, a, b]) => [k, `${l} (${String(a).padStart(2, "0")}:00 to ${String(b % 24).padStart(2, "0")}:00)`]), ["any", "Any time of day"]].map(([k, l]) => `<option value="${k}" ${r.period === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+      <div class="row" style="gap:6px;flex-wrap:wrap">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<label class="small" style="display:flex;gap:4px;align-items:center"><input type="checkbox" data-day="${d}" ${r.days.includes(d) ? "checked" : ""}>${DAY_NAMES[d]}</label>`).join("")}</div>
+      <button class="link small" data-rm="${i}" style="justify-self:start;color:var(--incident)">Remove task</button></div>`).join("") || '<div class="empty">No tasks yet.</div>';
+    box.querySelectorAll("[data-rm]").forEach((b) => (b.onclick = () => { read(); rows.splice(+b.dataset.rm, 1); draw(); }));
+  };
+  draw();
+  $("#tkAdd", s.root).onclick = () => { read(); rows.push({ title: "", period: careSlot().period, days: [] }); draw(); box.lastElementChild.querySelector(".tkT").focus(); };
+  $("#tkSave", s.root).onclick = async (e) => {
+    read(); const tasks = rows.filter((r) => r.title);
+    e.currentTarget.disabled = true;
+    try { const out = await syncJSON("/plan/save", { client: session.client.id, sections: plan().sections, tasks, baseUpdatedAt: base }); S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal(); s.close(); render(); toast("Tasks saved"); }
+    catch (err) { toast(err.message || "Couldn't save the tasks"); $("#tkSave", s.root).disabled = false; }
+  };
+}
+
 function planCardHTML() {
   const p = plan(), docs = planDocs(), r = respectDoc();
   if (!p.sections.length && !docs.length && !isAdminHere()) return "";
@@ -657,12 +751,16 @@ function openPlan() {
     ${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency information</button>` : ""}
     ${p.sections.length ? p.sections.map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}</summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "No details written yet.")}</p></details>`).join("")
       : '<div class="empty">No sections yet.</div>'}
+    <div class="card" style="box-shadow:none;display:grid;gap:6px"><h3 style="font-size:17px;margin:0">Shift tasks</h3>
+      ${planTasks().length ? planTasks().map((t) => `<div class="small"><strong>${esc(t.title)}</strong> <span class="muted">· ${esc(periodLabel(t.period))}${t.days.length ? " · " + t.days.map((d) => DAY_NAMES[d]).join(", ") : ""}</span></div>`).join("") : '<div class="small muted">No tasks yet.</div>'}
+      ${isAdminHere() ? '<button class="link small" id="tkEdit" style="justify-self:start">Edit shift tasks</button>' : ""}</div>
     <div class="card" style="box-shadow:none;display:grid;gap:8px"><h3 style="font-size:17px;margin:0">Documents</h3>
       ${docs.length ? docs.map((d) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><button class="link" data-opendoc="${esc(d.id)}" style="text-align:left">${esc(d.name)}</button><span class="tiny muted">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</span>${isAdminHere() ? `<button class="link small" data-deldoc="${esc(d.id)}" style="color:var(--incident)">Remove</button>` : ""}</div>`).join("") : '<p class="small muted" style="margin:0">No documents yet.</p>'}
     </div>
     ${p.updatedAt ? `<p class="tiny muted" style="margin:0">Last changed ${fmtDay(p.updatedAt)} ${fmtTime(p.updatedAt)}${p.updatedBy ? " by " + esc(p.updatedBy) : ""}.</p>` : ""}
     ${isAdminHere() ? `<div class="row"><button class="btn secondary" id="plEdit">${p.sections.length ? "Edit care plan" : "Set up the care plan"}</button><button class="btn secondary" id="plUpload">Add a document</button></div>` : `<p class="tiny muted" style="margin:0">An administrator keeps the care plan up to date.</p>`}`);
   if ($("#plEdit", s.root)) $("#plEdit", s.root).onclick = () => { s.close(); openPlanEdit(); };
+  if ($("#tkEdit", s.root)) $("#tkEdit", s.root).onclick = () => { s.close(); openTasksEdit(); };
   if ($("#plUpload", s.root)) $("#plUpload", s.root).onclick = () => { s.close(); openDocUpload(); };
   s.root.querySelectorAll("[data-deldoc]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
     try { await syncJSON("/plan/doc/delete", { client: session.client.id, id: b.dataset.deldoc }); audioDB.del(["doc_" + b.dataset.deldoc]); S.plan.docs = planDocs().filter((d) => d.id !== b.dataset.deldoc); saveLocal(); s.close(); openPlan(); toast("Document removed"); }
@@ -695,7 +793,7 @@ async function openPlanEdit() {
     if (untitled >= 0) { box.querySelectorAll(".plT")[untitled].focus(); return toast("Give this section a name, or remove it"); }
     const sections = rows.filter((r) => r.title);
     e.currentTarget.disabled = true;
-    try { const out = await syncJSON("/plan/save", { client: session.client.id, sections, baseUpdatedAt: base }); S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal(); s.close(); render(); toast("Care plan saved"); }
+    try { const out = await syncJSON("/plan/save", { client: session.client.id, sections, tasks: planTasks(), baseUpdatedAt: base }); S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal(); s.close(); render(); toast("Care plan saved"); }
     catch (err) { toast(err.message || "Couldn't save the care plan"); $("#plSave", s.root).disabled = false; }
   };
 }
@@ -879,6 +977,7 @@ function renderToday() {
     <button class="cta" id="ctaRec"><span class="mic">${ICON.mic}</span><span><strong>Record care note</strong><span>Speak as things happen. It's saved when you stop; add to it any time.</span></span></button>
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="muted small">${flags.length || "None"} open</span></div>
       <div class="flags">${flags.length ? flags.map((f) => flagHTML(f)).join("") : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div></div>
+    ${tasksCardHTML()}
     ${planCardHTML()}
     ${handoverCardHTML(ho)}
     <div class="card"><div class="card-h"><h3>Today &amp; coming up</h3></div>
@@ -890,6 +989,7 @@ function renderToday() {
     ${recentNotesHTML(latest)}`;
   $("#ctaRec").onclick = () => openRecorder();
   $("#qContacts").onclick = () => openContacts();
+  bindTasks($("#view-today"));
   if ($("#recentLog")) $("#recentLog").onclick = () => go("log");
   $("#qPlan").onclick = () => openPlan();
   if ($("#openPlan", v)) $("#openPlan", v).onclick = () => openPlan();
@@ -1749,7 +1849,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       }
       dropPending(pending);
       s.close(); render();
-      if (autoSave) openSavedNote(id, { unclear: draft.unclear || [], gaps: draft.record_gaps || [], lostAt, lockedAt });
+      if (autoSave) openSavedNote(id, { unclear: draft.unclear || [], gaps: draft.record_gaps || [], lostAt, lockedAt, tasksDone: draft.tasks_done || [] });
       const inc = draft.flags.filter((f) => f.kind === "incident").length;
       // The carer's first note of this shift: remind them to hand over at the end of it.
       const firstOfShift = shiftNotes().filter((n) => n.carerId === stampId()).length === 1;
@@ -1761,7 +1861,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
 }
 
 // The note just saved, with anything to check, and a way to add to it (never to change it).
-function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0 } = {}) {
+function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, tasksDone = [] } = {}) {
   const n = S.notes.find((x) => x.id === id); if (!n) return;
   const original = n.amends ? S.notes.find((x) => x.id === n.amends) : null;
   const fl = S.flags.filter((f) => f.noteId === id);
@@ -1770,6 +1870,8 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0 }
     <div class="source"><span class="dot"></span>Saved to the record at ${fmtTime(n.approvedTs || n.ts)}${original ? ` · added to the ${fmtTime(original.ts)} note` : ""}</div>
     <p class="note-text" style="white-space:pre-line">${esc(n.note)}</p>
     ${fl.length ? `<div style="display:grid;gap:6px"><div class="eyebrow">Flags raised</div>${fl.map((f) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><strong>${esc(f.title)}</strong>${f.status === "resolved" ? ' <span class="muted small">(marked not needed)</span>' : ` <button class="link small" data-notneeded="${esc(f.id)}">Not needed</button>`}</div></div>`).join("")}</div>` : ""}
+    ${(() => { const slot = careSlot(); const ts = tasksDone.map((title) => planTasks().find((t) => t.title === title)).filter((t) => t && !taskTick(t.id, slot.day));
+      return ts.length ? `<div class="card" style="box-shadow:none;display:grid;gap:6px"><strong class="small">This note says these tasks were done. Tick them?</strong>${ts.map((t) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><span class="small">${esc(t.title)}</span><button class="btn secondary" data-svtask="${esc(t.id)}">Done</button></div>`).join("")}</div>` : ""; })()}
     ${lostAt || lockedAt ? `<div class="warn small">${lockedAt ? "The recording stopped early because the screen locked or you left the app." : "Only part of the recording was turned into words."} Play it back; tap <strong>Add to this note</strong> for anything missing.</div>` : ""}
     ${unclear.length ? `<div class="warn small">These words may have been misheard: <strong>${unclear.map(esc).join(", ")}</strong>. Play the recording; if something's wrong, tap <strong>Add to this note</strong> and say the correct version.</div>` : ""}
     ${gaps.length ? `<div class="warn small">For a full incident record, you haven't said ${gaps.map((g) => gapNames[g] || g).map(esc).join(", ")}. Tap <strong>Add to this note</strong> to add it.</div>` : ""}
@@ -1784,6 +1886,7 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0 }
     Object.assign(f, { status: "resolved", resolvedTs: Date.now(), resolvedBy: stampId(), resolvedNote: "Raised automatically; the carer marked it not needed" }); touch(f); save();
     s.close(); openSavedNote(id, { unclear, gaps, lostAt, lockedAt }); render();
   }, "Tap again: not needed")));
+  s.root.querySelectorAll("[data-svtask]").forEach((b) => (b.onclick = () => { const t = planTasks().find((x) => x.id === b.dataset.svtask); if (t) { tickTask(t, "done", { noteId: id }); b.replaceWith(Object.assign(document.createElement("span"), { className: "small muted", textContent: "Ticked" })); } }));
   const target = n.amends || n.id; // additions always hang off the original note
   $("#svAdd", s.root).onclick = () => openRecorder({ amends: target });
   $("#svType", s.root).onclick = () => openReview({ transcript: "", typed: true, amends: target });
