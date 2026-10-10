@@ -153,8 +153,8 @@ const cloudOn = () => !!(session && session.token && !session.local && session.c
 // records from other phones are displayed here.
 const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SYNC_SHAPES = {
-  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", heardBy: "str:10", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
-  flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", raisedBy: "id", resolvedTs: "num", resolvedBy: "id" } },
+  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", heardBy: "str:10", amends: "id", auto: "num", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
+  flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", raisedBy: "id", resolvedNote: "str:200", resolvedTs: "num", resolvedBy: "id" } },
   handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", fromName: "str:60", toId: "id", text: "str:10000", source: "str:20" } },
   event: { req: ["ts", "when", "label"], f: { ts: "num", when: "num", label: "str:120", detail: "str:300", by: "id" } },
   transfer: { req: ["outTs", "withWhom"], f: { outTs: "num", withWhom: "str:100", relationship: "str:100", purpose: "str:200", carerId: "id", backTs: "num", backNote: "str:2000", backCarerId: "id" } },
@@ -411,12 +411,12 @@ function shiftStart() {
 }
 function shiftNotes() {
   const since = shiftStart();
-  return S.notes.filter((n) => n.ts >= since && !isExample(n)).sort((a, b) => a.ts - b.ts);
+  return S.notes.filter((n) => Math.max(n.ts, n.approvedTs || 0) >= since && !isExample(n)).sort((a, b) => a.ts - b.ts);
 }
 function summaryPayload(mode, toId) {
   return {
     mode, client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
-    notes: shiftNotes().map((n) => ({ time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name, note: n.note })),
+    notes: shiftNotes().map((n) => { const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name, note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
     flags: openFlags().filter((f) => !isExample(f)).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
     transfers: S.transfers.filter((t) => t.outTs >= shiftStart() || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
     planGaps: mode === "handover" ? planGaps() : [],
@@ -611,7 +611,7 @@ function detachClient() {
   const si = syncInfo(), pend = new Set(unsynced().map(({ kind, r }) => kind + ":" + r.id)), kept = {};
   for (const [kind, arr] of Object.entries(SYNC_KINDS)) kept[arr] = (S[arr] || []).filter((r) => pend.has(kind + ":" + r.id) || (kind === "note" && r.audioId && si.sent["note:" + r.id] && !si.audio[r.audioId]));
   const keptAudio = new Set(kept.notes.map((n) => n.audioId).filter(Boolean));
-  audioDB.del(S.notes.map((n) => n.audioId).filter((a) => a && !keptAudio.has(a)));
+  audioDB.del([...S.notes.map((n) => n.audioId), ...(S.pending || []).map((p) => p.audioId)].filter((a) => a && !keptAudio.has(a)));
   if (!Object.values(kept).some((a) => a.length)) { try { localStorage.removeItem(KEY); } catch {} return; }
   Object.assign(S, kept, { detached: true, plan: null, messages: [], contacts: null }); saveLocal();
 }
@@ -734,7 +734,7 @@ function planGaps() {
  * after it (the outgoing carer didn't hand over), the old handover is folded away and a summary of
  * those notes is shown instead, clearly marked as written by AI and not a carer's handover.
  */
-const notesSinceHandover = (ho) => S.notes.filter((n) => !isExample(n) && n.ts > (ho ? ho.ts : 0) && n.ts <= Date.now() && n.carerId !== stampId())
+const notesSinceHandover = (ho) => S.notes.filter((n) => !isExample(n) && Math.max(n.ts, n.approvedTs || 0) > (ho ? ho.ts : 0) && n.ts <= Date.now() && n.carerId !== stampId())
   .sort((a, b) => a.ts - b.ts).slice(-60);
 let catchUpBusy = false;
 function handoverCardHTML(ho) {
@@ -864,7 +864,7 @@ function renderToday() {
     <div class="hello"><h2>${greet}, ${esc(onDuty().name)}</h2><p>${fmtDay(Date.now())}${onDuty().shift ? " · " + esc(onDuty().shift) : ""}</p></div>
     ${storageBanner()}
     <div class="row" style="gap:8px;margin:-4px 0 12px"><button class="btn secondary" id="qContacts" style="flex:1">Contacts</button><button class="btn secondary" id="qPlan" style="flex:1">Care plan</button></div>
-    <button class="cta" id="ctaRec"><span class="mic">${ICON.mic}</span><span><strong>Record care note</strong><span>Speak as things happen. You check it before it's saved.</span></span></button>
+    <button class="cta" id="ctaRec"><span class="mic">${ICON.mic}</span><span><strong>Record care note</strong><span>Speak as things happen. It's saved when you stop; add to it any time.</span></span></button>
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="muted small">${flags.length || "None"} open</span></div>
       <div class="flags">${flags.length ? flags.map((f) => flagHTML(f)).join("") : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div></div>
     ${planCardHTML()}
@@ -932,16 +932,19 @@ async function loadAudio(a, fromCloud) {
   else msg("Couldn't download the recording.", "Try again");
 }
 
+// An addition is shown under its note when that note is on this phone and is itself an original.
+const isNested = (n) => !!n.amends && n.amends !== n.id && S.notes.some((o) => o.id === n.amends && !o.amends);
 function renderLog() {
   const v = $("#view-log");
   const items = [
-    ...S.notes.map((n) => ({ type: "note", ts: n.ts, n })),
+    ...S.notes.filter((n) => !isNested(n)).map((n) => ({ type: "note", ts: n.ts, n })),
     ...S.transfers.flatMap((t) => [{ type: "out", ts: t.outTs, t }, ...(t.backTs ? [{ type: "back", ts: t.backTs, t }] : [])]),
     ...S.handovers.map((h) => ({ type: "handover", ts: h.ts, h })),
   ].filter((it) => {
     if (logFilter === "all") return true;
     if (it.type !== "note") return false;
-    const fl = S.flags.filter((f) => f.noteId === it.n.id);
+    const ids = new Set([it.n.id, ...S.notes.filter((x) => x.amends === it.n.id).map((x) => x.id)]);
+    const fl = S.flags.filter((f) => ids.has(f.noteId));
     return logFilter === "incident" ? fl.some((f) => f.kind === "incident") : fl.some((f) => f.kind === "follow_up");
   }).sort((a, b) => b.ts - a.ts);
   let lastDay = "";
@@ -950,15 +953,21 @@ function renderLog() {
     if (it.type === "note") {
       const n = it.n; const fl = S.flags.filter((f) => f.noteId === n.id);
       return head + `<article class="card entry">
-        <div class="entry-top"><span class="t">${fmtTime(n.ts)}</span><span class="muted">${esc(carer(n.carerId, n.carerName).name)}</span>${n.serverAt && n.serverAt - (n.approvedTs || n.ts) > 30 * 60 * 1000 ? `<span class="chip">Added later: ${dayLabel(n.serverAt)} ${fmtTime(n.serverAt)}</span>` : ""}${n.source === "example" ? '<span class="chip">Example</span>' : ""}</div>
+        <div class="entry-top"><span class="t">${fmtTime(n.ts)}</span><span class="muted">${esc(carer(n.carerId, n.carerName).name)}</span>${n.approvedTs && n.approvedTs - n.ts > 30 * 60 * 1000 ? `<span class="chip" title="Recorded ${esc(fmtTime(n.ts))}, saved ${esc(fmtTime(n.approvedTs))}">Saved later</span>` : ""}${n.serverAt && n.serverAt - (n.approvedTs || n.ts) > 30 * 60 * 1000 ? `<span class="chip">Added later: ${dayLabel(n.serverAt)} ${fmtTime(n.serverAt)}</span>` : ""}${n.source === "example" ? '<span class="chip">Example</span>' : ""}</div>
         ${fl.length ? `<div class="chips">${fl.map((f) => `<span class="chip ${f.kind === "incident" ? "incident" : "follow"}">${esc(f.title)}</span>`).join("")}</div>` : ""}
         <p class="note-text">${esc(n.note)}</p>
         <div class="chips">${n.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>
         <details ${logOpen ? "open" : ""}><summary>${n.audioId ? "Recording and words" : "Words"}</summary>
           ${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}"></audio>` : ""}
           ${n.heard ? `<p class="small muted" style="margin:8px 0 0"><strong>${n.heardBy === "relay" ? "Speech-to-text heard" : "The phone heard"}:</strong> ${esc(n.heard)}</p>
-          <p class="small muted" style="margin:6px 0 0"><strong>Checked by the carer:</strong> ${esc(n.transcript)}</p>` : `<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p>`}
-          <p class="tiny muted" style="margin:6px 0 0">Approved by ${esc(carer(n.carerId, n.carerName).name)} at ${fmtTime(n.approvedTs || n.ts)}</p></details>
+          <p class="small muted" style="margin:6px 0 0"><strong>${n.auto ? "After remembered word fixes" : "Checked by the carer"}:</strong> ${esc(n.transcript)}</p>` : `<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p>`}
+           <p class="tiny muted" style="margin:6px 0 0">${n.auto ? `Saved automatically at ${fmtTime(n.approvedTs || n.ts)} from ${esc(carer(n.carerId, n.carerName).name)}'s recording. The note was written by the app and not checked before saving; the words and recording above are what was said.` : `Approved by ${esc(carer(n.carerId, n.carerName).name)} at ${fmtTime(n.approvedTs || n.ts)}`}</p></details>
+         ${n.amends ? "" : S.notes.filter((x) => x.amends === n.id && x.id !== n.id).sort((x, y) => x.ts - y.ts).map((x) => `<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:8px">
+           <div class="tiny muted"><strong>Added</strong> ${esc(dayLabel(x.ts))} ${fmtTime(x.ts)} · ${esc(carer(x.carerId, x.carerName).name)}</div>
+           ${S.flags.filter((f) => f.noteId === x.id).map((f) => `<span class="chip ${f.kind === "incident" ? "incident" : "follow"}">${esc(f.title)}</span>`).join(" ")}
+           <p class="note-text" style="margin:4px 0 0">${esc(x.note)}</p>
+           <details><summary class="small">${x.audioId ? "Recording and words" : "Words"}</summary>${x.audioId ? `<audio controls preload="none" data-audio="${esc(x.audioId)}"></audio>` : ""}<p class="small muted" style="margin:8px 0 0">${esc(x.transcript)}</p></details></div>`).join("")}
+         <button class="link small" data-addto="${esc(n.amends || n.id)}" style="justify-self:start;margin-top:6px">Add to this note</button>
       </article>`;
     }
     if (it.type === "out") return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip follow">Out of carer's care</span></div><div class="small">${esc(S.client.name)} went out with <strong>${esc(it.t.withWhom)}</strong>${it.t.relationship ? " (" + esc(it.t.relationship) + ")" : ""}${it.t.purpose ? " for " + esc(it.t.purpose) : ""}. Logged by ${esc(carer(it.t.carerId).name)}.</div></div>`;
@@ -970,6 +979,7 @@ function renderLog() {
     ${rows ? `<button class="link small" id="logOpen" style="justify-self:start">${logOpen ? "Hide words and recordings" : "Show all words and recordings"}</button>` : ""}
     ${rows || '<div class="empty">Nothing here yet.</div>'}`;
   v.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { logFilter = b.dataset.f; renderLog(); }));
+  v.querySelectorAll("[data-addto]").forEach((b) => (b.onclick = () => openRecorder({ amends: b.dataset.addto })));
   if ($("#logOpen", v)) $("#logOpen", v).onclick = () => { logOpen = !logOpen; try { localStorage.setItem("dignitynotes.logopen", logOpen ? "1" : "0"); } catch {} renderLog(); };
   if (logOpen) v.querySelectorAll("audio[data-audio]").forEach((a) => loadAudio(a, false));
   v.querySelectorAll("details").forEach((d) => d.addEventListener("toggle", () => { if (d.open && !logOpen) loadAudio(d.querySelector("audio[data-audio]"), true); }));
@@ -1215,6 +1225,7 @@ function openSettings() {
   };
   $("#stReset").onclick = () => { $("#stResetYes").hidden = false; };
   $("#stResetYes").onclick = async () => {
+    if ((S.pending || []).length) return toast("A recording is still being saved. Wait a moment, then try again.");
     if (cloudOn() && (unsynced().length || unsentAudio().length || countFailed())) return toast("Some notes or recordings aren't in the cloud yet (see Settings > About). Connect to the internet, wait a moment, then try again.");
     const keep = S.settings, si = syncInfo(); clearDocCache();
     // Only recordings this phone has uploaded itself (another person on this phone may share the store).
@@ -1393,12 +1404,13 @@ function speechLang() {
   return nav ? ACCENTS.find(([c]) => c.toLowerCase() === nav.toLowerCase())[0] : "en-GB";
 }
 
-function openRecorder() {
+function openRecorder(opts = {}) {
+  rec.amends = opts.amends || null; // an addition to an earlier note (see openSavedNote)
   if (activeTransfer()) toast(`Note: ${S.client.name} is out with ${activeTransfer().withWhom}`);
   rec.final = rec.interim = ""; rec.blob = null; rec.speechOK = !!SR; rec.cancelled = false; rec.speechLostAt = 0; rec.stoppedAt = 0;
   if (rec.abort) rec.abort.abort(); rec.finishing = false; // an earlier recording still being turned into words is dropped
   rec.gen = (rec.gen || 0) + 1; rec.skipServer = false; // each recording has its own number, so a late answer can't land on a newer one
-  const s = sheet(`${sheetHead("Record care note")}
+  const s = sheet(`${sheetHead(rec.amends ? "Add to the note" : "Record care note")}
     <div class="recorder">
       <button class="big-mic" id="micBtn" aria-label="Start recording">${ICON.mic}</button>
       <div class="timer" id="recTimer">0:00</div>
@@ -1412,7 +1424,7 @@ function openRecorder() {
   $("#typeBtn").onclick = (e) => {
     // While the recording is being turned into words: skip that and type, keeping the recording.
     if (rec.finishing) { rec.skipServer = true; rec.abort && rec.abort.abort(); return; }
-    const go = () => { stopRecording(true); openReview({ transcript: "", typed: true }); };
+    const go = () => { stopRecording(true); openReview({ transcript: "", typed: true, amends: rec.amends }); };
     if (rec.on) confirmInline(e.currentTarget, go, "Tap again: discards this recording"); else go();
   };
 }
@@ -1494,6 +1506,38 @@ async function serverWords(blob, signal) {
   return String((await r.json()).text || "").trim();
 }
 
+// A recording is kept on the phone the moment it stops (S.pending + the audio store), before the note
+// is written, so closing the app or losing signal can't lose it. It's saved as a note as soon as the
+// note is written, and any left over (app closed meanwhile) are finished the next time the app opens.
+async function keepPending({ blob, transcript, recordedAt, amends, lostAt, lockedAt }) {
+  const id = uid();
+  const p = { id, audioId: blob ? "a_" + id : null, transcript, recordedAt, amends: amends || null, by: stampId(), lostAt: lostAt || 0, lockedAt: lockedAt || 0 };
+  S.pending = [...(S.pending || []), p]; saveLocal(); // the entry first, so the words survive even if the audio can't be stored
+  if (blob && !(await audioDB.put(p.audioId, blob))) { p.audioId = null; saveLocal(); } // keep the words; save re-tries the audio
+  return p;
+}
+function dropPending(p) { if (!p) return; S.pending = (S.pending || []).filter((x) => x.id !== p.id); saveLocal(); }
+let resumingPending = false;
+async function resumePending() {
+  if (resumingPending || appBusy() || !S.pending || !S.pending.length || !session || !S.client) return;
+  const p = S.pending[0];
+  if (S.notes.some((n) => n.id === p.id)) { dropPending(p); return; } // already saved
+  resumingPending = true;
+  try {
+    let blob = null;
+    if (p.audioId) { try { blob = await audioDB.getStrict(p.audioId); } catch { return; } } // storage not readable just now: try again later
+    if (!blob && !p.transcript) { dropPending(p); return; }
+    let words = p.transcript || "", byRelay = p.byRelay;
+    if (blob && (!words || p.lostAt) && !p.triedServer) {
+      p.triedServer = true; saveLocal(); // once: never a paid call every few seconds
+      try { const t = await serverWords(blob); if (t) { words = t; byRelay = true; p.lostAt = 0; } } catch {}
+    }
+    if (appBusy() || !(S.pending || []).some((x) => x.id === p.id)) return; // something opened meanwhile: try later
+    toast("Finishing a recording that wasn't saved");
+    openReview({ transcript: words, blob, pending: p, byRelay, amends: p.amends, lostAt: p.lostAt, lockedAt: p.lockedAt });
+  } finally { resumingPending = false; }
+}
+
 function stopRecording(cancel) {
   if (cancel) rec.cancelled = true;
   if (!rec.on) return;
@@ -1509,6 +1553,10 @@ function stopRecording(cancel) {
     // A clip under ~2 KB is silence or a failed capture: don't claim it was kept.
     if (blob && blob.size < 2000) blob = null;
     rec.blob = blob;
+    const pending = await keepPending({ blob, transcript: (rec.final + " " + rec.interim).trim(), recordedAt: rec.started, amends: rec.amends, lostAt: rec.speechLostAt, lockedAt: rec.stoppedAt });
+    // Closed (discarded) or a new recording started while the recording was being stored.
+    if (rec.cancelled && gen === rec.gen) { dropPending(pending); if (pending && pending.audioId) audioDB.del([pending.audioId]); rec.finishing = false; return; }
+    if (gen !== rec.gen) return; // kept, and finished later
     let transcript = (rec.final + " " + rec.interim).trim(), lostAt = rec.speechLostAt && rec.final ? rec.speechLostAt : 0, byRelay = false, serverError = "";
     // The phone heard nothing, or stopped listening part-way (common on iPhone Home Screen apps and some
     // Android phones): turn the whole recording into words with the relay's speech-to-text instead.
@@ -1519,10 +1567,15 @@ function stopRecording(cancel) {
       try { const t = await serverWords(blob, rec.abort.signal); if (t) { transcript = t; lostAt = 0; byRelay = true; } }
       catch (e) { if (!rec.skipServer && !rec.cancelled) serverError = e.message || ""; }
       rec.abort = null;
-      if (rec.cancelled || gen !== rec.gen) { if (gen === rec.gen) rec.finishing = false; return; } // closed, or a new recording started
+      if (rec.cancelled || gen !== rec.gen) { // closed (discarded), or a new recording started (kept: finished later)
+        if (gen === rec.gen) rec.finishing = false;
+        if (rec.cancelled && gen === rec.gen && pending) { dropPending(pending); if (pending.audioId) audioDB.del([pending.audioId]); }
+        return;
+      }
     }
     rec.finishing = false;
-    openReview({ transcript, blob, lostAt, lockedAt: rec.stoppedAt, byRelay, serverError });
+    if (pending) { pending.transcript = transcript; pending.byRelay = byRelay; pending.lostAt = lostAt; pending.triedServer = true; saveLocal(); }
+    openReview({ transcript, blob, lostAt, lockedAt: rec.stoppedAt, byRelay, serverError, pending, amends: rec.amends });
   };
   const mic = $("#micBtn"); if (mic && !cancel) { mic.disabled = true; $("#recHint").textContent = "Finishing…"; }
   if (rec.media && rec.media.state !== "inactive") {
@@ -1532,7 +1585,10 @@ function stopRecording(cancel) {
   } else setTimeout(finish, 300);
 }
 
-async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, serverError }) {
+async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, serverError, pending, amends }) {
+  // Notes are saved as soon as they're written (Sam's request): what was said is recorded as it was,
+  // and anything to correct or add is added to it afterwards, so every change leaves a trace.
+  const autoSave = true;
   const spoken = !typed && !!transcript; // words came from the phone's speech recognition
   const rawHeard = transcript; // exactly what the phone heard, kept with the note
   let baseline = transcript, reps = []; // baseline = heard words after remembered fixes
@@ -1541,7 +1597,10 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
   let draft = null, needsRewrite = false, offered = null; const blobUrl = blob ? URL.createObjectURL(blob) : null;
   let saving = false;
   const s = sheet(`${sheetHead(typed ? "Type a care note" : "Check before saving")}<div id="rv" style="display:grid;gap:14px"></div>`,
-    { guard: () => !saving && (!!blob || !!draft || !!(document.querySelector("#rvTx") || {}).value), onClose: () => blobUrl && setTimeout(() => URL.revokeObjectURL(blobUrl), 1000) });
+    { guard: () => !saving && (!!blob || !!draft || !!(document.querySelector("#rvTx") || {}).value), onClose: () => {
+        blobUrl && setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+        if (pending && !S.notes.some((n) => n.id === pending.id)) { dropPending(pending); if (pending.audioId) audioDB.del([pending.audioId]); }
+      } });
   const rv = $("#rv", s.root);
   const showInput = (msg) => {
     rv.innerHTML = `${msg ? `<div class="warn">${msg}</div>` : ""}
@@ -1553,7 +1612,10 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
   };
   const run = async () => {
     rv.innerHTML = `<div class="recorder"><div class="spinner"></div><p class="muted" style="margin:0">Writing your care note…</p></div>`;
-    draft = await tidy(transcript); draft.from = transcript; needsRewrite = false; offered = null; showDraft();
+    draft = await tidy(transcript);
+    if (!rv.isConnected) return; // closed meanwhile
+    draft.from = transcript; needsRewrite = false; offered = null; showDraft();
+    if (autoSave && $("#rvSave", rv)) { offered = []; $("#rvSave", rv).click(); }
   };
   // Remembered fixes still in the words, one chip per fix.
   const chips = () => { const seen = new Map(); reps.forEach((r) => { if (!seen.has(r.key)) seen.set(r.key, r); }); return [...seen.values()]; };
@@ -1619,11 +1681,12 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
     }));
     if ($("#rvAccent", rv)) $("#rvAccent", rv).onchange = (e) => { setSpeechLang(e.target.value); toast("Accent saved for your next recording"); };
     rv.querySelectorAll("[data-rmflag]").forEach((b) => (b.onclick = () => { draft.flags.splice(+b.dataset.rmflag, 1); draft.note = $("#rvNote").value; transcript = said.value; showDraft(); }));
-    $("#rvAgain").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); openRecorder(); });
-    $("#rvDiscard").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); toast("Discarded. Nothing was saved."); }, "Tap again to discard");
+    $("#rvAgain").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); openRecorder({ amends }); });
+    $("#rvDiscard").onclick = (e) => confirmInline(e.currentTarget, () => { if (pending) { dropPending(pending); if (pending.audioId) audioDB.del([pending.audioId]); } s.close(); toast("Discarded. Nothing was saved."); }, "Tap again to discard");
     $("#rvSave").onclick = async (e) => {
       if (saving) return;
-      const note = $("#rvNote").value.trim(); if (!note) return toast("The note is empty");
+      if (!rv.isConnected) return;
+      const note = $("#rvNote", rv).value.trim(); if (!note) return toast("The note is empty");
       const finalSaid = (said.value || "").trim() || transcript;
       if (spoken && offered === null) {
         // First tap: offer to remember any misheard-word fixes (the carer confirms each one).
@@ -1642,8 +1705,9 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       const keep = (offered || []).filter((o, i) => { const c = rv.querySelector(`[data-learn="${i}"]`); return c && c.checked; });
       rememberFixes(keep);
       noteFixesUsed([...new Set(reps.map((r) => r.key))].filter((k) => finalSaid.toLowerCase().includes(String(reps.find((r) => r.key === k).to).toLowerCase())));
-      const id = uid(); let audioId = null;
-      if (blob) {
+      const id = pending ? pending.id : uid(); let audioId = pending && pending.audioId ? pending.audioId : null;
+      if (blob && audioId && !(await audioDB.put(audioId, blob))) audioId = null; // make sure it's stored (same key, safe to repeat)
+      if (blob && !audioId) {
         audioId = "a_" + id;
         if (!(await audioDB.put(audioId, blob))) {
           // Keep the screen open so nothing is lost: try again, or save the note without the recording.
@@ -1656,17 +1720,19 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
           audioId = null;
         }
       }
-      const ts = Date.now();
-      S.notes.push({ id, ts, approvedTs: ts, carerId: stampId(), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard, ...(byRelay ? { heardBy: "relay" } : {}) } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
+      const ts = (pending && pending.recordedAt) || Date.now();
+      S.notes.push({ id, ts, approvedTs: Date.now(), carerId: (pending && pending.by) || stampId(), ...(amends ? { amends } : {}), ...(autoSave ? { auto: 1 } : {}), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard, ...(byRelay ? { heardBy: "relay" } : {}) } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
       draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
       if (!save()) {
         // Not saved on this phone: take it back out so it isn't sent to the cloud half-saved.
         S.notes = S.notes.filter((n) => n.id !== id); S.flags = S.flags.filter((f) => f.noteId !== id);
-        if (audioId) audioDB.del([audioId]);
+        if (audioId && !(pending && pending.audioId === audioId)) audioDB.del([audioId]); // the kept recording stays for the next try
         saving = false; const b = $("#rvSave"); if (b) { b.disabled = false; b.textContent = "Save to record"; }
         return;
       }
+      dropPending(pending);
       s.close(); render();
+      if (autoSave) openSavedNote(id, { unclear: draft.unclear || [], gaps: draft.record_gaps || [], lostAt, lockedAt });
       const inc = draft.flags.filter((f) => f.kind === "incident").length;
       // The carer's first note of this shift: remind them to hand over at the end of it.
       const firstOfShift = shiftNotes().filter((n) => n.carerId === stampId()).length === 1;
@@ -1675,6 +1741,36 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
   };
   if (typed || !transcript) showInput(!typed ? (blob ? (serverError && !/took too long|abort/i.test(serverError) ? serverError : "We couldn't turn your speech into words. Play it back and type a short version below.") : rec.firstUse ? "Nothing was picked up, because the phone was asking for permission to use the microphone. Close this and tap Record again: it works from now on." : "Nothing was picked up. Check the microphone, try again, or type the note.") : "");
   else run();
+}
+
+// The note just saved, with anything to check, and a way to add to it (never to change it).
+function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0 } = {}) {
+  const n = S.notes.find((x) => x.id === id); if (!n) return;
+  const original = n.amends ? S.notes.find((x) => x.id === n.amends) : null;
+  const fl = S.flags.filter((f) => f.noteId === id);
+  const gapNames = { when: "when it happened", seen: "what you saw", done: "what you did", told: "who you told" };
+  const s = sheet(`${sheetHead(n.amends ? "Addition saved" : "Saved")}
+    <div class="source"><span class="dot"></span>Saved to the record at ${fmtTime(n.approvedTs || n.ts)}${original ? ` · added to the ${fmtTime(original.ts)} note` : ""}</div>
+    <p class="note-text" style="white-space:pre-line">${esc(n.note)}</p>
+    ${fl.length ? `<div style="display:grid;gap:6px"><div class="eyebrow">Flags raised</div>${fl.map((f) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><strong>${esc(f.title)}</strong>${f.status === "resolved" ? ' <span class="muted small">(marked not needed)</span>' : ` <button class="link small" data-notneeded="${esc(f.id)}">Not needed</button>`}</div></div>`).join("")}</div>` : ""}
+    ${lostAt || lockedAt ? `<div class="warn small">${lockedAt ? "The recording stopped early because the screen locked or you left the app." : "Only part of the recording was turned into words."} Play it back; tap <strong>Add to this note</strong> for anything missing.</div>` : ""}
+    ${unclear.length ? `<div class="warn small">These words may have been misheard: <strong>${unclear.map(esc).join(", ")}</strong>. Play the recording; if something's wrong, tap <strong>Add to this note</strong> and say the correct version.</div>` : ""}
+    ${gaps.length ? `<div class="warn small">For a full incident record, you haven't said ${gaps.map((g) => gapNames[g] || g).map(esc).join(", ")}. Tap <strong>Add to this note</strong> to add it.</div>` : ""}
+    <details><summary class="small">Recording and words</summary>${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}"></audio>` : ""}<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p></details>
+    <div class="row"><button class="btn secondary" id="svAdd">Add to this note</button><button class="btn ghost" id="svType">Type an addition</button></div>
+    <button class="btn primary block" id="svDone">Done</button>
+    <p class="tiny muted" style="margin:0;text-align:center">Saved notes aren't changed. Corrections and extra details are added underneath, with who added them and when.</p>`);
+  const a = s.root.querySelector("audio[data-audio]"); if (a) s.root.querySelector("details").addEventListener("toggle", () => loadAudio(a, true), { once: true });
+  s.root.querySelectorAll("[data-notneeded]").forEach((b) => (b.onclick = () => confirmInline(b, () => {
+    // Raised automatically but not needed: resolved with a reason (flags are never deleted).
+    const f = S.flags.find((x) => x.id === b.dataset.notneeded); if (!f || f.status !== "open") return;
+    Object.assign(f, { status: "resolved", resolvedTs: Date.now(), resolvedBy: stampId(), resolvedNote: "Raised automatically; the carer marked it not needed" }); touch(f); save();
+    s.close(); openSavedNote(id, { unclear, gaps, lostAt, lockedAt }); render();
+  }, "Tap again: not needed")));
+  const target = n.amends || n.id; // additions always hang off the original note
+  $("#svAdd", s.root).onclick = () => openRecorder({ amends: target });
+  $("#svType", s.root).onclick = () => openReview({ transcript: "", typed: true, amends: target });
+  $("#svDone", s.root).onclick = () => s.close();
 }
 
 /* ---------- privacy notice ---------- */
@@ -2371,6 +2467,7 @@ setInterval(() => {
   if (pendingReload) { location.reload(); return; }
   if (syncState.blocked) { handleSyncBlocked(); return; }
   if (syncState.redraw && !userIsReading()) { syncState.redraw = false; render(); }
+  if (S.pending && S.pending.length && !rec.on && !rec.finishing) resumePending();
 }, 3000);
 const userIsReading = () => { const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || [...document.querySelectorAll("audio")].some((x) => !x.paused); };
 
