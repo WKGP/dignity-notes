@@ -52,7 +52,7 @@ h1,h2,h3{font-family:var(--f-display);margin:0;text-wrap:balance;letter-spacing:
 .top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--ground) 88%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line);padding-top:env(safe-area-inset-top,0px)}
 .top .wrap{display:flex;align-items:center;gap:6px;padding-block:10px}
 .brand{flex:1;min-width:0;border:0;background:none;padding:4px 6px 4px 0;text-align:left;display:grid;border-radius:10px}
-.brand p{margin:0;color:var(--ink-2);font-size:12px;font-weight:600;letter-spacing:.02em}
+.brand .logo{height:38px;width:auto;max-width:100%;object-fit:contain;object-position:left;display:block;margin-bottom:2px;border-radius:6px}
 .brand h1{font-size:20px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:4px}
 .brand h1 .chev{flex:none;width:16px;height:16px;color:var(--ink-2)}
 #clientName{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -234,7 +234,7 @@ textarea.note-edit{font-family:var(--f-note);font-size:16.5px;min-height:170px}
 
 <header class="top">
   <div class="wrap">
-    <button class="brand" id="brandBtn" aria-label="Switch client"><p>Dignity Notes</p><h1><span id="clientName">Nana</span><svg class="i chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></h1></button>
+    <button class="brand" id="brandBtn" aria-label="Switch client"><img class="logo" src="logo-wordmark.png" alt="Dignity Notes" width="720" height="195"><h1><span id="clientName">Nana</span><svg class="i chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></h1></button>
     <button class="duty" id="dutyBtn" aria-label="Change carer on duty"><span class="avatar" id="dutyAvatar">A</span><span id="dutyName">Ann</span></button>
     <button class="icon-btn" id="helpBtn" aria-label="Help and feedback"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8"/><circle cx="12" cy="17" r=".6" style="fill:currentColor"/></svg></button>
     <button class="icon-btn" id="settingsBtn" aria-label="Settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
