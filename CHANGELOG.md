@@ -2,6 +2,13 @@
 
 ## 1.2.0 - 2026-10-10
 
+- 1.2.6: Fresh look for phones: the Dignity Notes logo at the top of every screen, tap the client's name to switch client; Today has a big Record a note button, four shortcuts (Find, Contacts, Care plan, Going out), an Emergency care plan button, and Needs attention as short lines you tap to open (Mark as resolved); long handovers show a few lines with Read all; Log has a search bar; Settings sections open with a tap; warmer colours.
+- 1.2.4: Find: one place for the emergency care plan, care plan, contacts, documents, record log and handover, plus search across this client's notes, care plan, contacts, flags, appointments and handovers (works without signal).
+- 1.2.3: Family accounts: an authorised family member signs in to their own simple page with the daily updates carers share, coming appointments, messages with the carers, and incidents only if an administrator switches that on. Carers can edit an update before sharing. Privacy notice version 10.
+- 1.2.0 to 1.2.2: Australian clients: choose where the care is (UK or Australia) for the right emergency numbers, who can agree, and spelling. Shift tasks in the care plan, ticked as Done or Not done, with anything not done in the handover. Phone notifications for handovers waiting, family messages and (administrators) incidents.
+- 1.1.17 to 1.1.23: Notes save as soon as you stop recording, then you can add to them; additions to a note later; client contacts shared between carers with Call buttons and change history; your accent is saved on your account; catch-up summary when a carer didn't hand over; feedback marked Open or Done.
+- 1.1.11 to 1.1.16: Speech-to-text on the Dignity Notes server when the phone's own fails (for example on some iPhones or with background noise); voice commands while dictating ("delete that", "new line"); change your own password in Settings; speak your feedback; the time of a note can be changed; the first recording on a new phone explains the permission question.
+
 
 ## 1.1.0 - 2026-10-06
 

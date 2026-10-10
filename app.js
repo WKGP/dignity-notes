@@ -611,7 +611,7 @@ $("#returnBtn").addEventListener("click", () => openReturnSheet());
 
 /* ---------- render ---------- */
 function render() {
-  $("#clientName").textContent = S.client.name;
+  $("#clientName").textContent = S.client.name; $("#brandBtn").setAttribute("aria-label", `${S.client.name}. Switch client`);
   document.body.classList.toggle("family-mode", isFamily());
   if (isFamily()) { if (tab !== "today") { tab = "today"; ["today", "log", "handover", "family"].forEach((x) => ($("#view-" + x).hidden = x !== "today")); } return renderFamilyHome(); }
   $("#dutyName").textContent = onDuty().name;
@@ -670,7 +670,7 @@ const whoToTell = () => { const w = clientCountry() === "AU" ? WHO_TO_TELL_AU : 
 function flagHTML(f, actions = true) {
   return `<div class="flag ${f.kind === "incident" ? "incident" : ""}">
     <div class="body"><span class="tiny muted" style="font-weight:600">${f.kind === "incident" ? "Incident" : "To note"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}${f.raisedBy && roster().some((c) => c.id === f.raisedBy) ? " · " + esc(carer(f.raisedBy).name) : ""}</span>
-    <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span>${f.kind === "incident" ? whoToTell() : ""}</div>
+    <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span>${f.status === "resolved" ? `<span class="tiny muted">Resolved${f.resolvedBy ? " by " + esc(carer(f.resolvedBy).name) : ""}${f.resolvedTs ? " · " + esc(dayLabel(f.resolvedTs)) + " " + fmtTime(f.resolvedTs) : ""}${f.resolvedNote ? " · " + esc(f.resolvedNote) : ""}</span>` : ""}${f.kind === "incident" ? whoToTell() : ""}</div>
     ${actions ? `<button class="link small" data-resolve="${esc(f.id)}">Mark resolved</button>` : ""}</div>`;
 }
 function bindResolve(root) {
@@ -794,7 +794,7 @@ async function openDoc(id) {
 // A flag row (Today, Family) opens the whole flag.
 document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-flag]"); if (b) openFlag(b.dataset.flag); });
 // Long texts on Today show a few lines; "Read all" opens them in place.
-document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-unclamp]"); if (!b) return; const t = b.previousElementSibling; if (t) t.classList.toggle("clamp"); b.textContent = t && t.classList.contains("clamp") ? "Read all" : "Show less"; });
+document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-unclamp]"); if (!b) return; const t = b.previousElementSibling; if (t) t.classList.toggle("clamp"); const shut = t && t.classList.contains("clamp"); b.textContent = shut ? "Read all" : "Show less"; b.setAttribute("aria-expanded", String(!shut)); });
 document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-opendoc]"); if (b) { e.preventDefault(); openDoc(b.dataset.opendoc); } });
 /* ---------- tasks for each shift ----------
  * Set in the care plan by an administrator (what, when in the day, which days). Carers tick each one
@@ -914,7 +914,7 @@ function planCardHTML() {
   const order = { urgent: 0, important: 1, non_urgent: 2 };
   const top = [...p.sections].filter((s) => s.urgency !== "non_urgent").sort((a, b) => order[a.urgency] - order[b.urgency]).slice(0, 4);
   if (p.sections.length && !top.length) return "";
-  return `<div class="card"><div class="card-h"><h3>${p.sections.length ? "Care plan: key points" : "Care plan"}</h3><span class="muted small">${p.sections.length} sections · ${docs.length} documents</span></div>
+  return `<div class="card"><div class="card-h"><h3>${p.sections.length ? "Care plan: key points" : "Care plan"}</h3><span class="muted small">${p.sections.length} section${p.sections.length === 1 ? "" : "s"} · ${docs.length} document${docs.length === 1 ? "" : "s"}</span></div>
     ${p.sections.length ? `<div class="list">${top.map((s) => `<div class="item"><div class="body"><div><strong>${esc(s.title)}</strong> ${urgencyPill(s.urgency)}</div><div class="muted small">${esc((s.text || "").slice(0, 90))}${(s.text || "").length > 90 ? "…" : ""}</div></div></div>`).join("")}</div>`
       : `<div class="empty">No care plan yet.${isAdminHere() ? " Set one up so carers can see what each area of care involves." : ""}</div>`}
     <div style="margin-top:10px"><button class="link" id="openPlan">${p.sections.length || docs.length ? "Open the care plan" : "Set up the care plan"}</button></div></div>`;
@@ -923,7 +923,7 @@ function openPlan() {
   loadPlan();
   const p = plan(), docs = planDocs(), r = respectDoc();
   const s = sheet(`${sheetHead(`Care plan · ${esc(S.client.name)}`)}
-    ${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency information</button>` : ""}
+    ${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency care plan</button>` : ""}
     ${p.sections.length ? p.sections.map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}</summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "No details written yet.")}</p></details>`).join("")
       : '<div class="empty">No sections yet.</div>'}
     <div class="card" style="box-shadow:none;display:grid;gap:6px"><h3 style="font-size:17px;margin:0">Shift tasks</h3>
@@ -1014,14 +1014,14 @@ function handoverCardHTML(ho) {
   const since = notesSinceHandover(ho);
   const hoHead = ho ? `${esc(carer(ho.fromId, ho.fromName).name)} · ${dayLabel(ho.ts)} ${fmtTime(ho.ts)}` : "";
   if (!since.length) return `<div class="card"><div class="card-h"><h3>Previous handover</h3>${ho ? `<span class="muted small">${hoHead}</span>` : ""}</div>
-      ${ho ? `<p class="note-text clamp" style="white-space:pre-line">${esc(ho.text)}</p><button class="link small" data-unclamp>Read all</button>` : '<div class="empty">No handover yet.</div>'}</div>`;
+      ${ho ? `<p class="note-text clamp" style="white-space:pre-line">${esc(ho.text)}</p><button class="link small" data-unclamp aria-expanded="false" style="min-height:44px">Read all</button>` : '<div class="empty">No handover yet.</div>'}</div>`;
   const key = since.map((n) => n.id).join(",") + "|" + (ho ? ho.id : "");
   const c = S.catchUp && S.catchUp.key === key ? S.catchUp : null;
   if (!catchUpFresh(key)) setTimeout(() => makeCatchUp(ho, since, key), 0);
   const who = [...new Set(since.map((n) => carer(n.carerId, n.carerName).name))].join(", ");
   return `<div class="card"><div class="card-h"><h3>Since the last handover</h3><span class="muted small">${since.length} note${since.length > 1 ? "s" : ""} · ${esc(who)}</span></div>
       <div class="warn small" style="margin-bottom:10px">No handover was done after these notes. This is a summary of them${c && c.source === "ai" ? ", written by AI" : ""}, not a carer's handover. Check the Record log for the full notes.</div>
-      ${c ? `<p class="note-text clamp" style="white-space:pre-line">${esc(c.text)}</p><button class="link small" data-unclamp>Read all</button>` : '<p class="muted small">Summarising the notes…</p>'}
+      ${c ? `<p class="note-text clamp" style="white-space:pre-line">${esc(c.text)}</p><button class="link small" data-unclamp aria-expanded="false" style="min-height:44px">Read all</button>` : '<p class="muted small">Summarising the notes…</p>'}
       ${ho ? `<details style="margin-top:10px"><summary class="small">Last handover: ${hoHead}</summary><p class="note-text" style="white-space:pre-line">${esc(ho.text)}</p></details>` : ""}</div>`;
 }
 // An AI summary is kept until new notes arrive; an offline one is retried at most every 10 minutes.
@@ -1153,12 +1153,12 @@ function renderToday() {
       <button class="tile" id="qFind">${ICON.search}Find</button>
       <button class="tile" id="qContacts">${ICON.people}Contacts</button>
       <button class="tile" id="qPlan">${ICON.plan}Care plan</button>
-      ${activeTransfer() ? `<button class="tile on" id="ctaBack">${ICON.out}Back in care</button>` : `<button class="tile" id="ctaOut">${ICON.out}Going out</button>`}
+      ${activeTransfer() ? `<button class="tile on" id="ctaBack">${ICON.out}Back in care</button>` : `<button class="tile" id="ctaOut">${ICON.out}Out with someone</button>`}
     </div>
     ${respectDoc() ? `<button class="emerg" data-opendoc="${esc(respectDoc().id)}">${ICON.alert}Emergency care plan</button>` : ""}
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="count ${flags.length ? "" : "calm"}">${flags.length}</span></div>
       ${flags.length ? `<div class="attn">${(attnAll ? flags : flags.slice(0, 3)).map(attnRowHTML).join("")}</div>
-        ${flags.length > 3 ? `<button class="link small" id="attnMore" style="margin-top:6px">${attnAll ? "Show fewer" : `See all ${flags.length}`}</button>` : ""}`
+        ${flags.length > 3 ? `<button class="link small" id="attnMore" style="margin-top:2px;min-height:44px">${attnAll ? "Show fewer" : `See all ${flags.length}`}</button>` : ""}`
         : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div>
     ${tasksCardHTML()}
     ${handoverCardHTML(ho)}
@@ -1179,19 +1179,23 @@ function renderToday() {
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
   if ($("#ctaBack")) $("#ctaBack").onclick = () => openReturnSheet();
   bindResolve(v);
+  v.querySelectorAll("[data-unclamp]").forEach((b) => { const t = b.previousElementSibling; if (t && t.scrollHeight <= t.clientHeight + 2) { t.classList.remove("clamp"); b.hidden = true; } });
   if ($("#attnMore")) $("#attnMore").onclick = () => { attnAll = !attnAll; render(); };
 }
 // Needs attention on Today: a short row per flag; tap for the whole flag, Who to tell and Resolved.
 let attnAll = false;
-const attnRowHTML = (f) => `<button class="attn-row" data-flag="${esc(f.id)}"><span class="sdot ${f.kind === "incident" ? "incident" : ""}"></span>
-  <span class="body"><strong>${esc(f.title)}</strong><span class="tiny muted">${f.kind === "incident" ? "Incident" : "To note"} · ${esc(dayLabel(f.ts))} ${fmtTime(f.ts)}</span></span>${ICON.chev}</button>`;
+const attnRowHTML = (f) => `<button class="attn-row" data-flag="${esc(f.id)}"><span class="sdot ${f.status === "resolved" ? "done" : f.kind === "incident" ? "incident" : ""}"></span>
+  <span class="body"><strong>${esc(f.title)}</strong><span class="tiny muted">${f.kind === "incident" ? "Incident" : "To note"} · ${esc(dayLabel(f.ts))} ${fmtTime(f.ts)}${f.status === "resolved" ? " · resolved" : ""}</span></span>${ICON.chev}</button>`;
 function openFlag(id) {
   const f = S.flags.find((x) => x.id === id); if (!f) return;
   const s = sheet(`${sheetHead(f.kind === "incident" ? "Incident" : "To note")}${flagHTML(f, false)}
     ${f.status === "open" ? '<button class="btn primary block" id="flResolve">Mark as resolved</button>' : ""}`);
   if ($("#flResolve", s.root)) $("#flResolve", s.root).onclick = () => {
-    f.status = "resolved"; f.resolvedTs = Date.now(); f.resolvedBy = stampId(); touch(f);
-    save(); s.close(); render(); toast("Marked as resolved");
+    const cur = S.flags.find((x) => x.id === id); s.close();
+    if (!cur) return toast("This flag is no longer on this phone");
+    if (cur.status !== "open") { render(); return toast("Already resolved"); }
+    cur.status = "resolved"; cur.resolvedTs = Date.now(); cur.resolvedBy = stampId(); touch(cur);
+    save(); render(); toast("Marked as resolved");
   };
 }
 
@@ -1292,7 +1296,7 @@ function renderLog() {
     ${rows || '<div class="empty">Nothing here yet.</div>'}`;
   v.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { logFilter = b.dataset.f; renderLog(); }));
   v.querySelectorAll("[data-addto]").forEach((b) => (b.onclick = () => openRecorder({ amends: b.dataset.addto })));
-  $("#logFind", v).onclick = () => { openFind(); setTimeout(() => { const q = $("#fdQ"); if (q) q.focus(); }, 50); };
+  $("#logFind", v).onclick = () => { openFind(); const q = $("#fdQ"); if (q) q.focus(); };
   if ($("#logOpen", v)) $("#logOpen", v).onclick = () => { logOpen = !logOpen; try { localStorage.setItem("dignitynotes.logopen", logOpen ? "1" : "0"); } catch {} renderLog(); };
   if (logOpen) v.querySelectorAll("audio[data-audio]").forEach((a) => loadAudio(a, false));
   v.querySelectorAll("details").forEach((d) => d.addEventListener("toggle", () => { if (d.open && !logOpen) loadAudio(d.querySelector("audio[data-audio]"), true); }));
@@ -1486,7 +1490,7 @@ function foldSections(root, skip = 1) {
     const d = document.createElement("details"); d.className = "card fold";
     const sm = document.createElement("summary"); sm.innerHTML = `<span>${esc(c.firstElementChild.textContent)}</span>${ICON.chev}`;
     c.firstElementChild.remove();
-    const b = document.createElement("div"); b.className = "fold-b " + c.className.replace(/card/, "").trim();
+    const b = document.createElement("div"); c.classList.remove("card"); b.className = ("fold-b " + c.className).trim();
     while (c.firstChild) b.appendChild(c.firstChild);
     d.append(sm, b); c.replaceWith(d);
   });
@@ -1511,7 +1515,7 @@ function openSettings() {
       ${roster().some((x) => !x.notOnRoster) ? '<button class="btn secondary" id="stPeople">Save shifts</button>' : ""}
       ${session.role === "admin" ? `<button class="link" id="stWho" style="justify-self:start">Change who cares for ${esc(S.client.name)}</button>` : `<p class="tiny muted" style="margin:0">An administrator decides who cares for ${esc(S.client.name)}.</p>`}</div>
     <div class="card small"><h3 style="font-size:17px;margin-bottom:6px">Consent</h3>
-      ${c ? `Agreed by <strong>${esc(c.name)}</strong> (${esc(c.role)}) on ${fmtDay(c.ts)} at ${fmtTime(c.ts)}.` : "Not recorded."}
+      <p style="margin:0">${c ? `Agreed by <strong>${esc(c.name)}</strong> (${esc(c.role)}) on ${fmtDay(c.ts)} at ${fmtTime(c.ts)}.` : "Not recorded."}</p>
       <p class="muted" style="margin:8px 0 0">Notes and recordings are saved on this phone and copied to the cloud (in the EU) for this client's carers and the pilot administrators. Only the words of a note (never the recording) are sent to the AI to tidy. If the phone can't turn speech into words, the recording is sent through the relay to Cloudflare's speech-to-text service to work out the words.</p></div>
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Demo data</h3>
       <p class="small muted" style="margin:0">Start again with the example day on this phone. Notes already copied to the cloud come back from there.</p>
@@ -1521,7 +1525,7 @@ function openSettings() {
       <div class="list" id="stDict"></div></div>
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Your accent</h3>
       <label class="f">The phone turns your speech into words more accurately when it knows your accent<select id="stAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
-      <p class="tiny muted" style="margin:0">Saved on this phone only.</p></div>
+      <p class="tiny muted" style="margin:0">${session.local ? "Saved on this phone only." : "Saved on your account, so it follows you to any phone you sign in on."}</p></div>
     <button class="btn ghost" id="stPrivacy">Read the privacy notice</button>
     <div class="card small" style="display:grid;gap:6px"><h3 style="font-size:17px">About</h3>
       <div>App version <strong id="abApp">checking…</strong></div>

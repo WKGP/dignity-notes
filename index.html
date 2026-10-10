@@ -49,14 +49,16 @@ h1,h2,h3{font-family:var(--f-display);margin:0;text-wrap:balance;letter-spacing:
 .wrap{max-width:560px;margin:0 auto;padding-inline:16px}
 
 /* Header */
-.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--ground) 88%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line);padding-top:env(safe-area-inset-top,0px)}
+.top{position:sticky;top:0;z-index:20;background:var(--ground);background:color-mix(in srgb,var(--ground) 88%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line);padding-top:env(safe-area-inset-top,0px)}
 .top .wrap{display:flex;align-items:center;gap:6px;padding-block:10px}
-.brand{flex:1;min-width:0;border:0;background:none;padding:4px 6px 4px 0;text-align:left;display:grid;border-radius:10px}
+.brand{flex:1;min-width:0;display:grid}
+.client-btn{border:0;background:none;padding:2px 6px 2px 0;font:inherit;color:inherit;display:flex;align-items:center;gap:4px;max-width:100%;min-height:36px;border-radius:10px;text-align:left}
 .brand .logo{height:38px;width:auto;max-width:100%;object-fit:contain;object-position:left;display:block;margin-bottom:2px;border-radius:6px}
-.brand h1{font-size:20px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:4px}
+.brand h1{font-size:20px;line-height:1.2;min-width:0}
+@media (max-width:359px){.brand .logo{display:none}}
 .brand h1 .chev{flex:none;width:16px;height:16px;color:var(--ink-2)}
 #clientName{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.duty{display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 10px 4px 4px;font-size:14px;font-weight:600;max-width:42%;min-width:0}
+.duty{display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 10px 6px 6px;font-size:14px;font-weight:600;max-width:34%;min-width:0;flex:none}
 .duty #dutyName{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .avatar{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:13px;flex:none}
 .icon-btn{border:0;background:transparent;width:40px;height:40px;flex:none;border-radius:12px;display:grid;place-items:center;color:var(--ink-2)}
@@ -109,6 +111,8 @@ details.fold[open]>summary{margin:0}
 /* Record call-to-action on Today */
 .cta{display:flex;align-items:center;justify-content:center;gap:10px;background:var(--record);color:#fff;border:0;border-radius:999px;padding:16px 20px;width:100%;min-height:60px;box-shadow:0 8px 22px color-mix(in srgb,var(--record) 30%,transparent);font-family:var(--f-display);font-size:19px;font-weight:700}
 .cta svg{width:24px;height:24px}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .cta{color:#1A1325}}
+:root[data-theme="dark"] .cta{color:#1A1325}
 .cta:active{transform:scale(.99)}
 /* Shortcut tiles on Today */
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
@@ -122,6 +126,7 @@ details.fold[open]>summary{margin:0}
 .attn-row:first-child{border-top:0;padding-top:2px}
 .attn-row .sdot{width:10px;height:10px;border-radius:50%;background:var(--follow);flex:none}
 .attn-row .sdot.incident{background:var(--incident)}
+.attn-row .sdot.done{background:var(--line)}
 .attn-row .body{flex:1;min-width:0}
 .attn-row .body strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:15.5px}
 .attn-row .chev{width:18px;height:18px;color:var(--ink-2);flex:none}
@@ -181,7 +186,7 @@ textarea.note-edit{font-family:var(--f-note);font-size:16.5px;min-height:170px}
 .composer input{flex:1;min-width:0}
 
 /* Tab bar */
-.tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+.tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--surface);background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
 .tabs .wrap{display:grid;grid-template-columns:repeat(5,1fr);align-items:end;padding-inline:8px}
 .tab{border:0;background:none;display:grid;justify-items:center;gap:3px;padding:10px 2px 10px;font-size:12px;font-weight:600;color:var(--ink-2);position:relative}
 .tab[aria-current="page"]{color:var(--accent)}
@@ -234,7 +239,7 @@ textarea.note-edit{font-family:var(--f-note);font-size:16.5px;min-height:170px}
 
 <header class="top">
   <div class="wrap">
-    <button class="brand" id="brandBtn" aria-label="Switch client"><img class="logo" src="logo-wordmark.png" alt="Dignity Notes" width="720" height="195"><h1><span id="clientName">Nana</span><svg class="i chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></h1></button>
+    <div class="brand"><img class="logo" src="logo-wordmark.png" alt="Dignity Notes" width="720" height="195"><h1><button id="brandBtn" class="client-btn"><span id="clientName">Nana</span><svg class="i chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button></h1></div>
     <button class="duty" id="dutyBtn" aria-label="Change carer on duty"><span class="avatar" id="dutyAvatar">A</span><span id="dutyName">Ann</span></button>
     <button class="icon-btn" id="helpBtn" aria-label="Help and feedback"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8"/><circle cx="12" cy="17" r=".6" style="fill:currentColor"/></svg></button>
     <button class="icon-btn" id="settingsBtn" aria-label="Settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
