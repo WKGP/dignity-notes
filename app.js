@@ -1172,7 +1172,7 @@ function openSettings() {
       <p class="small" style="margin:0">Signed in as <strong>${esc(session.name)}</strong> <span class="muted">(${esc(session.username)} · ${session.role === "admin" ? "Administrator" : "Tester"})</span></p>
       ${session.role === "admin" ? '<button class="btn primary" id="stTesters">Manage people</button>' : ""}
       <button class="btn secondary" id="stTest">Check AI connection</button><div class="small" id="stMsg"></div>
-      ${session.local ? "" : '<button class="btn secondary" id="stPw">Change my password</button>'}
+      ${session.local ? "" : '<button class="btn secondary" id="stPw">Change my password</button><div id="stPush"></div>'}
       <button class="btn ghost" id="stOut">Sign out</button></div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Client</h3>
       <p class="small" style="margin:0">Notes are for <strong>${esc(S.client.name)}</strong>.</p>
@@ -1221,6 +1221,7 @@ function openSettings() {
   };
   if ($("#stTesters")) $("#stTesters").onclick = () => { s.close(); openTesters(); };
   if ($("#stPw")) $("#stPw").onclick = openChangePassword;
+  if ($("#stPush")) drawPushSetting($("#stPush"));
   $("#stOut").onclick = async (e) => confirmInline(e.currentTarget, async () => {
     if (!session.local) relay("/logout", {}).catch(() => {});
     s.close(); signedOut("You've signed out.");
@@ -1790,9 +1791,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0 }
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-10.8";
+const PRIVACY_VERSION = "2026-10-11.9";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 8 · 10 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 9 · 11 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -1821,6 +1822,7 @@ const PRIVACY_HTML = `
 <li><strong>GitHub (Microsoft):</strong> hosts the app's web pages.</li>
 <li><strong>Anthropic:</strong> AI note writing, as described above.</li>
 <li><strong>Apple or Google:</strong> your phone's own speech recognition, as described above.</li>
+<li><strong>Notifications:</strong> if you turn on notifications, your phone's notification service (Apple, Google, Mozilla or Microsoft) delivers them. We keep the address that service gives your phone, and send only an encrypted note of the kind of thing that's waiting (a handover or an incident): never a name or care details. Turn them off in Settings at any time.</li>
 </ul>
 <p>These providers may process data outside the UK and Australia, including in the United States, under their own data protection safeguards.</p>
 <h3>Why we use it</h3>
@@ -1873,7 +1875,7 @@ function viewPrivacy() {
 function afterSignIn(privacyAccepted) {
   if (!session) return;
   if (privacyAccepted && session.privacyAccepted !== PRIVACY_VERSION) { session.privacyAccepted = PRIVACY_VERSION; saveSession(); }
-  const go2 = () => { if (session.client) { $("#fullRoot").innerHTML = ""; loadUser(); go("today"); checkClient(); } else showClients(false); };
+  const go2 = () => { if (session.client) { $("#fullRoot").innerHTML = ""; loadUser(); go("today"); openFromHash(); checkClient(); } else showClients(false); };
   if (session.local || privacyAccepted || session.privacyAccepted === PRIVACY_VERSION) go2(); else showPrivacy(go2);
 }
 
@@ -2103,6 +2105,45 @@ function downscaleImage(file) {
 
 // Change your own password. The relay checks the current one, signs out every other phone, and
 // keeps this one signed in.
+/* ---------- notifications on this phone ----------
+ * Handover waiting (for the carer it's handed to) and incident recorded (for administrators).
+ * iPhone: only in the Home Screen app (iOS 16.4 or later). The text never names the client.
+ */
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const pushKeyBytes = (b64) => Uint8Array.from(atob(b64.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(b64.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
+async function drawPushSetting(box) {
+  const say = (html) => { box.innerHTML = `<div class="card" style="display:grid;gap:8px;box-shadow:none"><strong class="small">Notifications on this phone</strong>${html}</div>`; };
+  if (isIOS() && !isStandalone()) return say('<p class="small muted" style="margin:0">On an iPhone, notifications only work in the Home Screen app: open Dignity Notes from its Home Screen icon, then come back here.</p>');
+  if (!pushSupported()) return say('<p class="small muted" style="margin:0">This browser can\'t show notifications. On Android use Chrome; on iPhone use the Home Screen app.</p>');
+  if (Notification.permission === "denied") return say('<p class="small muted" style="margin:0">Notifications are blocked for Dignity Notes in this phone\'s settings. Allow them there, then come back here.</p>');
+  let sub = null; try { sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription(); } catch {}
+  say(`<p class="small muted" style="margin:0">${session.role === "admin" ? "Tells you when a handover is waiting for you, and when an incident is recorded." : "Tells you when a handover is waiting for you."} They never show the client's name or any care details.</p>
+    <button class="btn ${sub ? "ghost" : "secondary"}" id="pushBtn">${sub ? "Turn off notifications" : "Turn on notifications"}</button><div class="small" id="pushMsg" role="status"></div>`);
+  $("#pushBtn", box).onclick = async () => {
+    const m = $("#pushMsg", box), b = $("#pushBtn", box); b.disabled = true; m.textContent = "";
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (sub) { await relay("/push/unsubscribe", { endpoint: sub.endpoint }); await sub.unsubscribe(); toast("Notifications off on this phone"); }
+      else {
+        if ((await Notification.requestPermission()) !== "granted") throw new Error("Notifications weren't allowed.");
+        const { key } = await relay("/push/key", {});
+        const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushKeyBytes(key) });
+        await relay("/push/subscribe", { subscription: s.toJSON() });
+        toast("Notifications on for this phone");
+      }
+      drawPushSetting(box);
+    } catch (e) { b.disabled = false; m.style.color = "var(--incident)"; m.textContent = e.message; }
+  };
+}
+// A tapped notification opens the app on the right tab (#handover).
+function openFromHash() {
+  const h = location.hash.slice(1);
+  if (["handover", "today", "log"].includes(h) && session && session.client) { history.replaceState(null, "", location.pathname); go(h); }
+}
+window.addEventListener("hashchange", openFromHash);
+
 function openChangePassword() {
   const s = sheet(`${sheetHead("Change my password")}
     <p class="small muted" style="margin:0">At least 12 characters. A few unrelated words with a number is easy to remember and hard to guess. Your other phones will be signed out.</p>
@@ -2501,6 +2542,7 @@ setInterval(() => {
 const userIsReading = () => { const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || [...document.querySelectorAll("audio")].some((x) => !x.paused); };
 
 /* ---------- boot ---------- */
+setTimeout(() => { try { openFromHash(); } catch {} }, 300); // opened from a notification
 checkStorage().then(() => { if (session && session.client && tab === "today") render(); });
 if (session && (session.token || session.local)) {
   if (session.client) { loadUser(); render(); } else render();
