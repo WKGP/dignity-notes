@@ -729,6 +729,51 @@ function planGaps() {
   return titles.filter((t) => !covered.has(t));
 }
 
+/* ---------- Today: the handover that's current ----------
+ * The last handover is "current" only if nobody has recorded anything since. When notes were recorded
+ * after it (the outgoing carer didn't hand over), the old handover is folded away and a summary of
+ * those notes is shown instead, clearly marked as written by AI and not a carer's handover.
+ */
+const notesSinceHandover = (ho) => S.notes.filter((n) => !isExample(n) && n.ts > (ho ? ho.ts : 0) && n.ts <= Date.now() && n.carerId !== stampId())
+  .sort((a, b) => a.ts - b.ts).slice(-60);
+let catchUpBusy = false;
+function handoverCardHTML(ho) {
+  const since = notesSinceHandover(ho);
+  const hoHead = ho ? `${esc(carer(ho.fromId, ho.fromName).name)} · ${dayLabel(ho.ts)} ${fmtTime(ho.ts)}` : "";
+  if (!since.length) return `<div class="card"><div class="card-h"><h3>Previous handover</h3>${ho ? `<span class="muted small">${hoHead}</span>` : ""}</div>
+      ${ho ? `<p class="note-text" style="white-space:pre-line">${esc(ho.text)}</p>` : '<div class="empty">No handover yet.</div>'}</div>`;
+  const key = since.map((n) => n.id).join(",") + "|" + (ho ? ho.id : "");
+  const c = S.catchUp && S.catchUp.key === key ? S.catchUp : null;
+  if (!catchUpFresh(key)) setTimeout(() => makeCatchUp(ho, since, key), 0);
+  const who = [...new Set(since.map((n) => carer(n.carerId, n.carerName).name))].join(", ");
+  return `<div class="card"><div class="card-h"><h3>Since the last handover</h3><span class="muted small">${since.length} note${since.length > 1 ? "s" : ""} · ${esc(who)}</span></div>
+      <div class="warn small" style="margin-bottom:10px">No handover was done after these notes. This is a summary of them${c && c.source === "ai" ? ", written by AI" : ""}, not a carer's handover. Check the Record log for the full notes.</div>
+      ${c ? `<p class="note-text" style="white-space:pre-line">${esc(c.text)}</p>` : '<p class="muted small">Summarising the notes…</p>'}
+      ${ho ? `<details style="margin-top:10px"><summary class="small">Last handover: ${hoHead}</summary><p class="note-text" style="white-space:pre-line">${esc(ho.text)}</p></details>` : ""}</div>`;
+}
+// An AI summary is kept until new notes arrive; an offline one is retried at most every 10 minutes.
+const catchUpFresh = (key) => !!(S.catchUp && S.catchUp.key === key && (S.catchUp.source === "ai" || Date.now() - (S.catchUp.at || 0) < 10 * 60000));
+async function makeCatchUp(ho, since, key) {
+  if (catchUpBusy || catchUpFresh(key)) return;
+  catchUpBusy = true;
+  const p = summaryPayload("handover", "");
+  p.fromCarer = [...new Set(since.map((n) => carer(n.carerId, n.carerName).name))].join(", ");
+  p.toCarer = onDuty().name; p.planGaps = [];
+  p.notes = since.map((n) => ({ time: `${dayLabel(n.ts)} ${fmtTime(n.ts)}`, carer: carer(n.carerId, n.carerName).name, note: n.note }));
+  let out;
+  try {
+    if (session && session.local) throw new Error("offline");
+    const r = await relay("/summarise", p);
+    if (!r || typeof r.text !== "string" || !r.text.trim()) throw new Error("Unexpected reply");
+    out = { text: r.text, source: "ai" };
+  } catch { out = { text: basicSummary(p), source: "basic" }; }
+  catchUpBusy = false;
+  S.catchUp = { key, text: out.text, source: out.source, at: Date.now() };
+  saveLocal();
+  if (tab === "today" && !appBusy() && !userIsReading()) render();
+  else syncState.redraw = true; // shown when nothing is open (see the idle loop)
+}
+
 function renderToday() {
   const v = $("#view-today"); const now = new Date(); const h = now.getHours();
   const greet = h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
@@ -745,8 +790,7 @@ function renderToday() {
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="muted small">${flags.length || "None"} open</span></div>
       <div class="flags">${flags.length ? flags.map((f) => flagHTML(f)).join("") : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div></div>
     ${planCardHTML()}
-    <div class="card"><div class="card-h"><h3>Previous handover</h3>${ho ? `<span class="muted small">${esc(carer(ho.fromId, ho.fromName).name)} · ${dayLabel(ho.ts)} ${fmtTime(ho.ts)}</span>` : ""}</div>
-      ${ho ? `<p class="note-text" style="white-space:pre-line">${esc(ho.text)}</p>` : '<div class="empty">No handover yet.</div>'}</div>
+    ${handoverCardHTML(ho)}
     <div class="card"><div class="card-h"><h3>Today &amp; coming up</h3></div>
       <div class="list">${sched.length ? sched.map((s) => `<div class="item ${s.when < Date.now() ? "past" : ""}"><div class="when">${fmtTime(s.when)}</div><div class="body"><div><strong>${esc(s.label)}</strong></div><div class="muted small">${dayLabel(s.when)}${s.detail ? " · " + esc(s.detail) : ""}</div></div></div>`).join("") : '<div class="empty">Nothing scheduled.</div>'}</div>
       <div style="margin-top:10px"><button class="link" id="addEvent">+ Add appointment or plan</button></div></div>
@@ -1520,7 +1564,9 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       }
       s.close(); render();
       const inc = draft.flags.filter((f) => f.kind === "incident").length;
-      toast((inc ? "Saved. Incident report added to Needs attention." : "Saved to the record.") + (keep.length ? ` Remembered ${keep.length} word fix${keep.length > 1 ? "es" : ""}.` : ""));
+      // The carer's first note of this shift: remind them to hand over at the end of it.
+      const firstOfShift = shiftNotes().filter((n) => n.carerId === stampId()).length === 1;
+      toast((inc ? "Saved. Incident report added to Needs attention." : "Saved to the record.") + (firstOfShift ? " Don't forget to do a handover at the end of your shift." : "") + (keep.length ? ` Remembered ${keep.length} word fix${keep.length > 1 ? "es" : ""}.` : ""));
     };
   };
   if (typed || !transcript) showInput(!typed ? (blob ? (serverError && !/took too long|abort/i.test(serverError) ? serverError : "We couldn't turn your speech into words. Play it back and type a short version below.") : rec.firstUse ? "Nothing was picked up, because the phone was asking for permission to use the microphone. Close this and tap Record again: it works from now on." : "Nothing was picked up. Check the microphone, try again, or type the note.") : "");
