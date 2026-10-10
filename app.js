@@ -2290,20 +2290,32 @@ function openFeedback(kind) {
 
 const FB_STATUSES = ["new", "in progress", "done", "won't fix"];
 const sevChip = (sev, failed) => sev ? `<span class="chip ${sev === "critical" || sev === "high" ? "incident" : sev === "normal" ? "follow" : ""}">${esc(sev)}</span>` : failed ? '<span class="chip incident">Brief failed</span>' : '<span class="chip">Writing brief…</span>';
+// Open reports first; finished ones (done / won't fix) are one tap away, so the list is a to-do list.
+let fbFilter = "open";
 async function openFeedbackAdmin() {
   const s = sheet(`${sheetHead("Feedback reports")}
-    <p class="small muted" style="margin:0">Reports from carers and administrators. Each one gets a developer brief you can copy into a coding agent.</p>
+    <p class="small muted" style="margin:0">Reports from carers and administrators. Each one gets a developer brief you can copy into a coding agent. When a fix goes live, its report is marked done with what was done.</p>
+    <div class="seg" role="group" aria-label="Show" id="faSeg"></div>
     <div class="card"><div class="list" id="faList"><div class="empty">Loading reports…</div></div></div>`);
   const listEl = $("#faList", s.root);
-  try {
-    const { reports } = await relay("/admin/feedback", {});
-    listEl.innerHTML = reports.length ? reports.map((r) => `<button class="item" data-fb="${esc(r.id)}" style="width:100%;text-align:left;background:none;border-left:0;border-right:0;border-bottom:0;cursor:pointer">
-      <div class="body"><div><span class="chip ${r.kind === "bug" ? "incident" : "accent"}">${r.kind === "bug" ? "Problem" : "Idea"}</span> ${sevChip(r.sev, r.failed)} <span class="chip">${esc(r.status)}</span>${r.shot ? ' <span class="chip">Screenshot</span>' : ""}</div>
+  let reports;
+  try { ({ reports } = await relay("/admin/feedback", {})); }
+  catch (e) { listEl.innerHTML = `<div class="empty">Couldn't load reports: ${esc(e.message)}</div>`; return; }
+  const isOpen = (r) => r.status === "new" || r.status === "in progress";
+  const draw = () => {
+    const counts = { open: reports.filter(isOpen).length, closed: reports.filter((r) => !isOpen(r)).length, all: reports.length };
+    $("#faSeg", s.root).innerHTML = [["open", "Open"], ["closed", "Done"], ["all", "All"]].map(([k, l]) => `<button data-ff="${k}" aria-pressed="${fbFilter === k}">${l} (${counts[k]})</button>`).join("");
+    s.root.querySelectorAll("[data-ff]").forEach((b) => (b.onclick = () => { fbFilter = b.dataset.ff; draw(); }));
+    const shown = reports.filter((r) => fbFilter === "all" || (fbFilter === "open" ? isOpen(r) : !isOpen(r)))
+      .sort((a, b) => (fbFilter === "open" ? (a.status === "new" ? 0 : 1) - (b.status === "new" ? 0 : 1) : 0) || b.t - a.t);
+    listEl.innerHTML = shown.length ? shown.map((r) => `<button class="item" data-fb="${esc(r.id)}" style="width:100%;text-align:left;background:none;border-left:0;border-right:0;border-bottom:0;cursor:pointer${isOpen(r) ? "" : ";opacity:.7"}">
+      <div class="body"><div><span class="chip ${r.kind === "bug" ? "incident" : "accent"}">${r.kind === "bug" ? "Problem" : "Idea"}</span> ${sevChip(r.sev, r.failed)} <span class="chip ${r.status === "done" ? "accent" : ""}">${esc(r.status)}</span>${r.shot ? ' <span class="chip">screenshot</span>' : ""}</div>
         <strong style="display:block;margin-top:4px">${esc(r.summary || "(no summary)")}</strong>
         <div class="tiny muted">${esc(r.by)} · ${esc(new Date(r.t).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}</div></div></button>`).join("")
-      : '<div class="empty">No reports yet.</div>';
+      : `<div class="empty">${fbFilter === "open" ? "Nothing open. Every report is done or in the Done list." : "No reports here."}</div>`;
     listEl.querySelectorAll("[data-fb]").forEach((b) => (b.onclick = () => { s.close(); openFeedbackReport(b.dataset.fb); }));
-  } catch (e) { listEl.innerHTML = `<div class="empty">Couldn't load reports: ${esc(e.message)}</div>`; }
+  };
+  draw();
 }
 
 async function openFeedbackReport(id) {
