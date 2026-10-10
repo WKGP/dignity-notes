@@ -1107,7 +1107,7 @@ function openSettings() {
     $("#stDict", s.root).querySelectorAll("[data-forget]").forEach((b) => (b.onclick = () => { forgetWord(b.dataset.forget); drawDict(); toast("Removed"); }));
   };
   drawDict();
-  $("#stAccent").onchange = (e) => { try { localStorage.setItem("dignitynotes.speechlang", e.target.value); toast("Accent saved"); } catch { toast("Couldn't save on this phone"); } };
+  $("#stAccent").onchange = (e) => { setSpeechLang(e.target.value); toast("Accent saved. It follows you to any phone you sign in on."); };
   $("#stTest").onclick = async () => {
     const m = $("#stMsg"); m.textContent = "Checking…"; m.style.color = "";
     try { const me = await relay("/me", {}); if (!me.username) throw new Error("that address isn't the Dignity Notes relay"); m.textContent = "Connected. Notes will be written by AI."; m.style.color = "var(--accent)"; }
@@ -1284,8 +1284,31 @@ const dictVocabulary = () => { const d = loadDict(); return [...new Set(Object.v
  * Chosen per phone in Settings; defaults to the phone's own English variant, else UK.
  */
 const ACCENTS = [["en-GB", "UK"], ["en-AU", "Australia"], ["en-ZA", "South Africa"], ["en-IE", "Ireland"], ["en-NZ", "New Zealand"], ["en-US", "United States"], ["en-IN", "India"]];
+// Kept per person (on this phone, and on their account so it follows them to a new phone).
+const ACCENT_KEY = () => "dignitynotes.speechlang" + (session && session.username ? "." + session.username : "");
+function setSpeechLang(code, { fromServer = false } = {}) {
+  if (!ACCENTS.some(([c]) => c === code)) return false;
+  try { localStorage.setItem(ACCENT_KEY(), code); } catch {}
+  if (!fromServer && session && session.token && !session.local) {
+    relay("/me/accent", { accent: code }).then(() => { try { localStorage.removeItem(ACCENT_KEY() + ".unsent"); } catch {} })
+      .catch(() => { try { localStorage.setItem(ACCENT_KEY() + ".unsent", "1"); } catch {} });
+  }
+  return true;
+}
+// The account's accent arrives with sign-in and the client list: use it, unless a change made on this
+// phone hasn't reached the server yet (then send that instead).
+function accentFromServer(code) {
+  let unsent = false; try { unsent = !!localStorage.getItem(ACCENT_KEY() + ".unsent"); } catch {}
+  if (unsent) { setSpeechLang(speechLang()); return; }
+  if (code) { setSpeechLang(code, { fromServer: true }); return; }
+  // Nothing on the account yet: send the choice made on this phone before accents were kept on accounts.
+  let saved = null; try { saved = localStorage.getItem(ACCENT_KEY()) || localStorage.getItem("dignitynotes.speechlang"); } catch {}
+  if (saved) setSpeechLang(saved);
+}
 function speechLang() {
-  try { const v = localStorage.getItem("dignitynotes.speechlang"); if (ACCENTS.some(([c]) => c === v)) return v; } catch {}
+  try {
+    for (const k of [ACCENT_KEY(), "dignitynotes.speechlang"]) { const v = localStorage.getItem(k); if (ACCENTS.some(([c]) => c === v)) return v; }
+  } catch {}
   const nav = (navigator.languages || [navigator.language || ""]).find((l) => ACCENTS.some(([c]) => c.toLowerCase() === String(l).toLowerCase()));
   return nav ? ACCENTS.find(([c]) => c.toLowerCase() === nav.toLowerCase())[0] : "en-GB";
 }
@@ -1513,7 +1536,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       forgetWord(key); needsRewrite = true; draft.note = $("#rvNote").value; showDraft();
       toast(unedited ? `Forgot: ${fix.from} → ${fix.to}` : `Forgot: ${fix.from} → ${fix.to}. You'd edited the words, so change them in the box too.`);
     }));
-    if ($("#rvAccent", rv)) $("#rvAccent", rv).onchange = (e) => { try { localStorage.setItem("dignitynotes.speechlang", e.target.value); toast("Accent saved for your next recording"); } catch { toast("Couldn't save on this phone"); } };
+    if ($("#rvAccent", rv)) $("#rvAccent", rv).onchange = (e) => { setSpeechLang(e.target.value); toast("Accent saved for your next recording"); };
     rv.querySelectorAll("[data-rmflag]").forEach((b) => (b.onclick = () => { draft.flags.splice(+b.dataset.rmflag, 1); draft.note = $("#rvNote").value; transcript = said.value; showDraft(); }));
     $("#rvAgain").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); openRecorder(); });
     $("#rvDiscard").onclick = (e) => confirmInline(e.currentTarget, () => { s.close(); toast("Discarded. Nothing was saved."); }, "Tap again to discard");
@@ -1712,7 +1735,7 @@ function showLogin(msg) {
       if (!out.token) throw new Error("That address isn't the Dignity Notes relay.");
       if (out.privacyVersion && out.privacyVersion !== PRIVACY_VERSION) throw new Error("A newer version of the app is available. Close and reopen it, then sign in again.");
       session = { token: out.token, username: out.username, role: out.role, name: out.name, relayUrl };
-      saveSession(); afterSignIn(out.privacyAccepted);
+      saveSession(); accentFromServer(out.accent); afterSignIn(out.privacyAccepted);
     } catch (err) {
       session = null; btn.disabled = false; btn.textContent = "Sign in";
       m.textContent = /fetch|network|load failed/i.test(err.message) ? "Couldn't reach the server. Check your internet connection and the relay address." : err.message;
@@ -1747,6 +1770,7 @@ function openTesters() {
       <label class="f">Username<input type="text" id="tUser" placeholder="mary.smith" autocapitalize="none" spellcheck="false" autocomplete="off"></label>
       <label class="f">Password<span class="row"><input type="text" id="tPass" style="flex:1 1 170px" autocomplete="off" spellcheck="false"><button class="btn ghost" type="button" id="tGen" style="flex:0 0 auto">Suggest</button></span></label>
       ${session.client ? `<label class="check"><input type="checkbox" id="tCares" checked><span>Cares for ${esc(session.client.name)}</span></label>` : ""}
+      <label class="f">Their accent (for speech-to-text)<select id="tAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
       <label class="check"><input type="checkbox" id="tAdmin"><span>Administrator: can add and remove people too</span></label>
       <button class="btn primary">Add person</button><div class="small" id="tMsg"></div></form>`);
   const listEl = $("#tList", s.root);
@@ -1825,7 +1849,7 @@ function openTesters() {
     if (!name || !username) { m.textContent = "Enter a name and a username."; return; }
     try {
       const role = $("#tAdmin").checked ? "admin" : "tester";
-      await relay("/admin/add", { name, username, password, role });
+      await relay("/admin/add", { name, username, password, role, accent: $("#tAccent") ? $("#tAccent").value : undefined });
       // Put them straight onto the client open on this phone, so they can be handed over to at once.
       const cares = $("#tCares") && $("#tCares").checked && session.client;
       if (cares) { try { await relay("/admin/assign", { username, clientIds: [session.client.id] }); await checkClient(); } catch (err) { toast("Added, but couldn't put them on " + session.client.name + ": " + err.message); } }
@@ -2137,6 +2161,7 @@ const clientsApi = {
     if (session.local) return localClients();
     const out = await relay("/clients", {});
     if (session && out.meId) { session.meId = out.meId; session.meName = out.meName; saveSession(); }
+    if (session) accentFromServer(out.accent);
     return out.clients;
   },
   add: async (name, consent) => {
