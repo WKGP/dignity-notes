@@ -398,7 +398,7 @@ function basicTidy(transcript) {
 const validTidy = (o) => o && typeof o.note === "string" && o.note.trim() && Array.isArray(o.categories) && Array.isArray(o.flags);
 async function tidy(transcript) {
   try {
-    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary(), tasks: tasksNow().due.filter((x) => !x.tick).map((x) => x.t.title), planSections: plan().sections.map((x) => x.title) });
+    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary(), country: clientCountry(), tasks: tasksNow().due.filter((x) => !x.tick).map((x) => x.t.title), planSections: plan().sections.map((x) => x.title) });
     if (!validTidy(out)) throw new Error("Unexpected reply from the relay");
     return { unclear: [], record_gaps: [], plan_sections: [], tasks_done: [], ...out, source: "ai" };
   } catch (e) {
@@ -417,7 +417,7 @@ function shiftNotes() {
 }
 function summaryPayload(mode, toId) {
   return {
-    mode, client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
+    mode, country: clientCountry(), client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
     notes: shiftNotes().map((n) => { const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name, note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
     flags: openFlags().filter((f) => !isExample(f)).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
     transfers: S.transfers.filter((t) => t.outTs >= shiftStart() || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
@@ -507,7 +507,17 @@ function gapsHTML(draft) {
     <button class="btn secondary" id="rvGapAdd" style="justify-self:start;min-height:40px;padding:8px 14px;font-size:14px">Add details</button>
     <span class="tiny muted">Type or use the keyboard's microphone, then tap Rewrite. You can also save it as it is.</span></div>`;
 }
-// Who to tell about an incident (UK). Shown with every incident flag; information, not a decision.
+// Who to tell about an incident, for the client's country. Shown with every incident flag; information, not a decision.
+const clientCountry = () => (session && session.client && session.client.country) || "UK";
+const WHO_TO_TELL_AU = `<details class="small" style="margin-top:6px"><summary>Who to tell</summary>
+  <ul style="margin:6px 0 0;padding-left:18px">
+    <li><strong>Emergency</strong> (serious bleeding, can't breathe, unconscious, a serious fall): call <strong>000</strong>.</li>
+    <li><strong>Urgent but not an emergency</strong>: call their GP, or <strong>healthdirect on 1800 022 222</strong> (a registered nurse, any time).</li>
+    <li><strong>Suspected abuse or neglect</strong>: tell your agency, and call <strong>1800ELDERHelp (1800 353 374)</strong>, which connects to your state's elder abuse line. Concerns about an aged care service: <strong>OPAN on 1800 700 600</strong>. If someone is in danger, call 000.</li>
+    <li>If the client gets government-funded aged care (for example Support at Home), tell the provider at once: they may have to report it as a serious incident.</li>
+    <li>Tell the family member or guardian, and your agency, as agreed for this client.</li>
+    <li>Then add who you told to the note, so the record is complete.</li>
+  </ul></details>`;
 const WHO_TO_TELL = `<details class="small" style="margin-top:6px"><summary>Who to tell</summary>
   <ul style="margin:6px 0 0;padding-left:18px">
     <li><strong>Emergency</strong> (serious bleeding, can't breathe, unconscious, a serious fall): call <strong>999</strong>.</li>
@@ -516,7 +526,7 @@ const WHO_TO_TELL = `<details class="small" style="margin-top:6px"><summary>Who 
     <li>Tell the family member or attorney, and your agency, as agreed for this client.</li>
     <li>Then add who you told to the note, so the record is complete.</li>
   </ul></details>`;
-const whoToTell = () => respectDoc() ? WHO_TO_TELL.replace("<ul", `<button class="btn secondary" data-opendoc="${esc(respectDoc().id)}" style="margin-top:6px;min-height:38px;padding:6px 12px;font-size:14px">Open the emergency care plan</button><ul`) : WHO_TO_TELL;
+const whoToTell = () => { const w = clientCountry() === "AU" ? WHO_TO_TELL_AU : WHO_TO_TELL; return respectDoc() ? w.replace("<ul", `<button class="btn secondary" data-opendoc="${esc(respectDoc().id)}" style="margin-top:6px;min-height:38px;padding:6px 12px;font-size:14px">Open the emergency care plan</button><ul`) : w; };
 function flagHTML(f, actions = true) {
   return `<div class="flag ${f.kind === "incident" ? "incident" : ""}">
     <div class="body"><span class="eyebrow">${f.kind === "incident" ? "Incident" : "To note"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}${f.raisedBy && roster().some((c) => c.id === f.raisedBy) ? " · " + esc(carer(f.raisedBy).name) : ""}</span>
@@ -1276,6 +1286,8 @@ function openSettings() {
       <button class="btn ghost" id="stOut">Sign out</button></div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Client</h3>
       <p class="small" style="margin:0">Notes are for <strong>${esc(S.client.name)}</strong>.</p>
+      <label class="f">Where the care is<select id="stCountry" ${session.role === "admin" && !session.local ? "" : "disabled"}><option value="UK" ${clientCountry() === "UK" ? "selected" : ""}>United Kingdom</option><option value="AU" ${clientCountry() === "AU" ? "selected" : ""}>Australia</option></select></label>
+      <p class="tiny muted" style="margin:-6px 0 0">Sets the emergency numbers and contacts under Who to tell, the agreement wording, and the spelling the AI uses.${session.role === "admin" ? "" : " An administrator can change it."}</p>
       <button class="btn secondary" id="stSwitch">Switch or add client</button></div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Carers for ${esc(S.client.name)}</h3>
       ${roster().filter((x) => !x.notOnRoster).map((x) => `<label class="f">${esc(x.name)}<input type="text" data-cs="${esc(x.id)}" data-was="${esc(x.shift)}" value="${esc(x.shift)}" placeholder="Shift, e.g. Day · 08:00–20:00" maxlength="40" autocomplete="off"></label>`).join("") || `<p class="small muted" style="margin:0">No carers are on ${esc(S.client.name)} yet.</p>`}
@@ -1322,6 +1334,11 @@ function openSettings() {
   if ($("#stTesters")) $("#stTesters").onclick = () => { s.close(); openTesters(); };
   if ($("#stPw")) $("#stPw").onclick = openChangePassword;
   if ($("#stPush")) drawPushSetting($("#stPush"));
+  if ($("#stCountry") && !$("#stCountry").disabled) $("#stCountry").onchange = async (e) => {
+    const was = clientCountry(), want = e.target.value;
+    try { const out = await relay("/clients/country", { id: session.client.id, country: want }); session.client.country = out.client.country; saveSession(); render(); toast(want === "AU" ? "Care is in Australia" : "Care is in the United Kingdom"); }
+    catch (err) { e.target.value = was; toast(err.message); }
+  };
   $("#stOut").onclick = async (e) => confirmInline(e.currentTarget, async () => {
     if (!session.local) relay("/logout", {}).catch(() => {});
     s.close(); signedOut("You've signed out.");
@@ -2515,9 +2532,9 @@ const clientsApi = {
     if (session) accentFromServer(out.accent);
     return out.clients;
   },
-  add: async (name, consent) => {
-    if (!session.local) { const out = await relay("/clients/add", { name, consent }); if (out.meId) session.meId = out.meId; return out.client; }
-    const client = { id: uid(), name, consent: { name: consent.name, role: consent.role, ts: Date.now(), by: session.username }, createdAt: Date.now(), createdBy: session.username };
+  add: async (name, consent, country = "UK") => {
+    if (!session.local) { const out = await relay("/clients/add", { name, consent, country }); if (out.meId) session.meId = out.meId; return out.client; }
+    const client = { id: uid(), name, country, consent: { name: consent.name, role: consent.role, ts: Date.now(), by: session.username }, createdAt: Date.now(), createdBy: session.username };
     localStorage.setItem(LOCAL_CLIENTS, JSON.stringify([...localClients(), client]));
     return client;
   },
@@ -2547,14 +2564,14 @@ async function checkClient() {
     toast(`You're no longer a carer for ${session.client.name}, or it was removed`);
     detachClient();
     session.client = null; saveSession(); KEY = null; S = seed(); showClients(false);
-  } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name) {
+  } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name || (fresh.country || "UK") !== clientCountry()) {
     // Carers or shifts changed elsewhere (e.g. an administrator assigned someone): pick that up.
-    session.client = { id: fresh.id, name: fresh.name, consent: fresh.consent, carers: fresh.carers || [] };
+    session.client = { id: fresh.id, name: fresh.name, country: fresh.country || "UK", consent: fresh.consent, carers: fresh.carers || [] };
     saveSession(); loadUser(); render();
   }
 }
 function chooseClient(client) {
-  session.client = { id: client.id, name: client.name, consent: client.consent, carers: client.carers || [] };
+  session.client = { id: client.id, name: client.name, country: client.country || "UK", consent: client.consent, carers: client.carers || [] };
   saveSession(); loadUser(); $("#fullRoot").innerHTML = ""; go("today");
 }
 // manual = opened from Settings; otherwise a single client is picked automatically.
@@ -2570,15 +2587,16 @@ async function showClients(manual) {
     <form id="clForm" hidden style="display:grid;gap:14px">
       <h3 style="font-size:20px;margin:6px 0 0">New client</h3>
       <label class="f">Client's name<input type="text" id="clName" placeholder="e.g. Nana" autocomplete="off"></label>
+      <label class="f">Where is the care?<select id="clCountry"><option value="UK">United Kingdom</option><option value="AU">Australia</option></select></label>
       <p class="muted" style="margin:0">Carers record short voice notes about the client's day. The app keeps the original recording, writes a tidy note and builds the handover for the next carer.</p>
       <div class="card small" style="display:grid;gap:8px">
         <div><strong>What is recorded:</strong> the carer's voice. Other voices nearby may be picked up.</div>
         <div><strong>Who can see it:</strong> the client's carers and the pilot administrators (kept securely in the cloud, in the EU), the authorised family member, and health staff in an emergency. Service providers handle it for us: Anthropic (AI note writing), Cloudflare (storage and speech-to-text) and the carer's phone maker, Apple or Google (speech-to-text).</div>
         <div><strong>Why:</strong> to keep an accurate record that protects the client and the carer.</div>
       </div>
-      <p class="small" style="margin:0">The client, or the person holding Lasting Power of Attorney for health and welfare, must agree before this is used. This is asked once, when the client is added.</p>
+      <p class="small" style="margin:0" id="cnWho">The client, or the person holding Lasting Power of Attorney for health and welfare, must agree before this is used. This is asked once, when the client is added.</p>
       <label class="f">Name of the person agreeing<input type="text" id="cnName" autocomplete="off"></label>
-      <label class="f">They are<select id="cnRole"><option>The client</option><option>Lasting Power of Attorney (health and welfare)</option><option>Other authorised family member</option></select></label>
+      <label class="f">They are<select id="cnRole"></select></label>
       <label class="check"><input type="checkbox" id="cnOk"><span>I agree to Dignity Notes being used to keep care notes and voice recordings for this client.</span></label>
       <button class="btn primary block" id="cnGo" disabled>Add client and start</button>
       <div class="small" id="clMsg" role="alert" style="color:var(--incident)"></div>
@@ -2588,6 +2606,14 @@ async function showClients(manual) {
     <p class="tiny muted" style="margin:0;text-align:center">Prototype for testing with fictional information only.</p>
   </div></div>`;
   const listEl = $("#clList");
+  // Who can agree depends on the country the care is in.
+  const CONSENT_ROLES = { UK: ["The client", "Lasting Power of Attorney (health and welfare)", "Other authorised family member"], AU: ["The client", "Enduring guardian", "Guardian appointed by a tribunal (e.g. SAT)", "Person responsible (family member)"] };
+  const fillRoles = () => {
+    const c = $("#clCountry").value;
+    $("#cnRole").innerHTML = CONSENT_ROLES[c].map((r) => `<option>${esc(r)}</option>`).join("");
+    $("#cnWho").textContent = c === "AU" ? "The client, or their enduring guardian, tribunal-appointed guardian or person responsible, must agree before this is used. This is asked once, when the client is added." : "The client, or the person holding Lasting Power of Attorney for health and welfare, must agree before this is used. This is asked once, when the client is added.";
+  };
+  fillRoles(); $("#clCountry").onchange = fillRoles;
   $("#clNew").onclick = () => { $("#clForm").hidden = false; $("#clNew").hidden = true; $("#clName").focus(); };
   if ($("#clBack")) $("#clBack").onclick = () => { root.innerHTML = ""; };
   $("#clOut").onclick = () => { if (!session.local) relay("/logout", {}).catch(() => {}); signedOut("You've signed out."); };
@@ -2597,7 +2623,7 @@ async function showClients(manual) {
     e.preventDefault();
     const b = $("#cnGo"); b.disabled = true; b.textContent = "Saving…"; $("#clMsg").textContent = "";
     try {
-      chooseClient(await clientsApi.add($("#clName").value.trim(), { name: $("#cnName").value.trim(), role: $("#cnRole").value, agreed: true }));
+      chooseClient(await clientsApi.add($("#clName").value.trim(), { name: $("#cnName").value.trim(), role: $("#cnRole").value, agreed: true }, $("#clCountry").value));
       toast("Client added");
     } catch (err) { $("#clMsg").textContent = err.message; b.textContent = "Add client and start"; check(); }
   };

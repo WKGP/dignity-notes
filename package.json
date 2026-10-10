@@ -1,6 +1,6 @@
 {
   "name": "dignity-notes",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "Dignity Notes: spoken care notes. Version numbers follow the Workgroup convention (not semver): see tools/bump.mjs.",
   "scripts": {
