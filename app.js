@@ -851,6 +851,18 @@ function editContact(c, done) {
   if (c) $("#ceRemove", s.root).onclick = (e) => confirmInline(e.currentTarget, () => send("/plan/contacts/remove", {}), "Tap again to remove");
 }
 
+// Yesterday's and today's notes on the opening screen (Sam): the newest in full, the rest as a line each.
+function recentNotesHTML(latest) {
+  if (!latest) return "";
+  const since = new Date(); since.setHours(0, 0, 0, 0); since.setDate(since.getDate() - 1);
+  const recent = S.notes.filter((n) => !isExample(n) && n.ts >= since.getTime() && n.id !== latest.id && !isNested(n)).sort((a, b) => b.ts - a.ts);
+  const first = (t) => { const m = String(t || "").match(/^[^.!?]+[.!?]?/); return m ? m[0] : ""; };
+  return `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId, latest.carerName).name)} · ${esc(dayLabel(latest.ts))} ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p>
+    ${recent.length ? `<details style="margin-top:10px"><summary class="small"><strong>Yesterday and today: ${recent.length} more note${recent.length > 1 ? "s" : ""}</strong></summary>
+      ${recent.slice(0, 15).map((n) => `<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px"><div class="tiny muted">${esc(dayLabel(n.ts))} ${fmtTime(n.ts)} · ${esc(carer(n.carerId, n.carerName).name)}</div><p class="small" style="margin:4px 0 0">${esc(first(n.note))}</p></div>`).join("")}
+      <button class="link small" id="recentLog" style="margin-top:8px">Open the Record log for everything</button></details>` : ""}</div>`;
+}
+
 function renderToday() {
   const v = $("#view-today"); const now = new Date(); const h = now.getHours();
   const greet = h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
@@ -875,9 +887,10 @@ function renderToday() {
     <div class="card"><div class="card-h"><h3>Going out with someone else?</h3></div>
       <p class="small muted" style="margin:0 0 12px">Record when an authorised person takes ${esc(S.client.name)} out, so it's clear they were not in your care.</p>
       ${activeTransfer() ? `<button class="btn secondary block" id="ctaBack">${ICON.out} Back in my care</button>` : `<button class="btn secondary block" id="ctaOut">${ICON.out} Hand over to someone else</button>`}</div>
-    ${latest ? `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId, latest.carerName).name)} · ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p></div>` : ""}`;
+    ${recentNotesHTML(latest)}`;
   $("#ctaRec").onclick = () => openRecorder();
   $("#qContacts").onclick = () => openContacts();
+  if ($("#recentLog")) $("#recentLog").onclick = () => go("log");
   $("#qPlan").onclick = () => openPlan();
   if ($("#openPlan", v)) $("#openPlan", v).onclick = () => openPlan();
   bindStorageBanner(v);
@@ -896,8 +909,11 @@ const unclearWords = (w) => { const q = String(w).match(/["“]([^"”]+)["”]/
 // Text boxes that grow to show all their words, so nothing hides behind a scroll inside the box.
 function autoGrow(el) {
   if (!el) return;
+  // Measure once at the start; while typing, only ever grow. Shrinking to "auto" on each key made the
+  // box collapse for a moment and the iPhone scroll it out of view behind the keyboard.
   const fit = () => { el.style.height = "auto"; el.style.height = el.scrollHeight + 2 + "px"; };
-  fit(); if (!el.dataset.grows) { el.dataset.grows = "1"; el.addEventListener("input", fit); }
+  const grow = () => { if (el.scrollHeight > el.clientHeight) el.style.height = el.scrollHeight + 2 + "px"; };
+  fit(); if (!el.dataset.grows) { el.dataset.grows = "1"; el.addEventListener("input", grow); }
 }
 function wordInContext(text, word) {
   const t = String(text || ""), i = t.toLowerCase().indexOf(String(word).toLowerCase());
@@ -2302,6 +2318,7 @@ async function openFeedbackReport(id) {
       <h3 style="font-size:19px;margin-top:6px">${esc(r.summary)}</h3>
       <div class="tiny muted">${esc(r.byName)} (${esc(r.by)}, ${esc(r.role)}) · ${esc(new Date(r.createdAt).toLocaleString("en-GB"))}${r.screen ? " · on " + esc(r.screen) : ""}</div></div>
     <label class="f">Status<select id="frStatus">${FB_STATUSES.map((x) => `<option ${x === r.status ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+    ${r.resolution ? `<div class="card small" style="display:grid;gap:4px;box-shadow:none"><strong>What was done${r.resolvedVersion ? ` (version ${esc(r.resolvedVersion)})` : ""}</strong><div style="white-space:pre-line">${esc(r.resolution)}</div>${r.resolvedAt ? `<div class="tiny muted">${esc(new Date(r.resolvedAt).toLocaleString("en-GB"))}</div>` : ""}</div>` : ""}
     <div class="card"><h3 style="font-size:16px;margin-bottom:8px">Conversation</h3><div class="thread" style="max-height:none">${r.transcript.map((t) =>
       `<div class="msg ${t.role === "user" ? "carer" : ""}"><span class="who">${t.role === "user" ? "Reporter" : "Helper"}</span>${esc(t.content)}</div>`).join("")}</div></div>
     ${r.screenshot && /^data:image\/(jpeg|png|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(r.screenshot) ? `<div class="card"><h3 style="font-size:16px;margin-bottom:8px">Screenshot</h3><img src="${r.screenshot}" alt="Reporter's screenshot" style="width:100%;border-radius:8px"></div>` : ""}
