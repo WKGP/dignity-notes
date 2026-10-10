@@ -193,6 +193,10 @@ textarea.note-edit{font-family:var(--f-note);font-size:16.5px;min-height:170px}
 .policy ul{padding-left:20px;margin:4px 0}
 .toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--ground);padding:10px 16px;border-radius:12px;font-weight:600;font-size:14px;z-index:60;max-width:calc(100% - 32px);box-shadow:var(--shadow)}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+/* Find: quick links read as rows, not centred buttons. */
+.fd-link { display: block; text-align: left; height: auto; padding: 10px 14px; }
+.fd-link .body strong { display: block; }
+.fd-link .muted { font-weight: 400; }
 /* Family accounts see only their own screen (no recording, tabs or carer on duty). */
 .family-mode nav.tabs, .family-mode #dutyBtn, .family-mode #outBanner { display: none !important; }
 </style>

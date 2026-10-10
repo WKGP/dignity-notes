@@ -520,6 +520,71 @@ function openFamilySettings() {
   $("#stOut", s.root).onclick = (e) => confirmInline(e.currentTarget, async () => { relay("/logout", {}).catch(() => {}); s.close(); signedOut("You've signed out."); });
 }
 
+/* ---------- find ----------
+ * One place to get to things quickly (Sam): the emergency care plan, care plan, documents and
+ * contacts, plus a search across this client's notes, care plan, contacts, documents, flags,
+ * appointments and handovers. Searches what's on this phone, so it works without signal.
+ */
+function findItems(q) {
+  // Each word must start a word in the text ("tea" finds "tea" and "teatime", not "steady").
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean).map((w) => new RegExp("(^|[^\\p{L}\\p{N}])" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "u"));
+  const hit = (...parts) => { const t = parts.filter(Boolean).join(" ").toLowerCase(); return words.every((w) => w.test(t)); };
+  const p = plan(), contacts = (S.contacts && S.contacts.list) || [];
+  const byNew = (a, b) => b.ts - a.ts;
+  return {
+    contacts: contacts.filter((c) => hit(c.name, c.role, c.phone, c.phone2, c.email, c.address, c.notes)).slice(0, 10),
+    docs: planDocs().filter((d) => hit(d.name, DOC_KIND_LABEL[d.kind])).slice(0, 10),
+    plan: p.sections.filter((x) => hit(x.title, x.text)).slice(0, 10),
+    flags: S.flags.filter((f) => hit(f.title, f.detail, f.resolvedNote)).sort(byNew).slice(0, 10),
+    events: S.schedule.filter((e) => hit(e.label, e.detail)).sort((a, b) => b.when - a.when).slice(0, 10),
+    notes: S.notes.filter((n) => hit(n.note, n.transcript)).sort(byNew).slice(0, 30),
+    handovers: S.handovers.filter((h) => hit(h.text)).sort(byNew).slice(0, 10),
+  };
+}
+function openFind() {
+  loadPlan();
+  const r = respectDoc(), docs = planDocs();
+  const s = sheet(`${sheetHead("Find")}
+    <input type="search" id="fdQ" placeholder="Search notes, care plan, contacts…" aria-label="Search" autocomplete="off" enterkeyhint="search" style="width:100%">
+    <div id="fdOut" style="display:grid;gap:12px"></div>`);
+  const out = $("#fdOut", s.root);
+  const head = (t, n) => `<h4 class="small muted" style="margin:6px 0 0">${t}${n ? ` (${n})` : ""}</h4>`;
+  const when = (ts) => `${esc(dayLabel(ts))} ${fmtTime(ts)}`;
+  const links = () => {
+    out.innerHTML = `${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency care plan</button>` : ""}
+      <div class="list">
+        <button class="btn secondary block fd-link" data-go="plan"><div class="body"><strong>Care plan</strong><div class="muted small">Needs, routines, risks and shift tasks</div></div></button>
+        <button class="btn secondary block fd-link" data-go="contacts"><div class="body"><strong>Contacts</strong><div class="muted small">GP, pharmacy, family and others</div></div></button>
+        <button class="btn secondary block fd-link" data-go="log"><div class="body"><strong>Record log</strong><div class="muted small">Every note, flag and handover</div></div></button>
+        <button class="btn secondary block fd-link" data-go="handover"><div class="body"><strong>Handover</strong><div class="muted small">The latest handover</div></div></button>
+      </div>
+      ${docs.length ? head("Documents") + `<div class="list">${docs.map((d) => `<button class="btn secondary block fd-link" data-opendoc="${esc(d.id)}"><div class="body"><strong>${esc(d.name)}</strong><div class="muted small">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</div></div></button>`).join("")}</div>` : ""}
+      <p class="tiny muted" style="margin:0">The medicines chart will be here too once it's built.</p>`;
+  };
+  const results = (q) => {
+    const f = findItems(q), n = Object.values(f).reduce((a, x) => a + x.length, 0);
+    if (!n) { out.innerHTML = `<div class="empty">Nothing found for "${esc(q)}".</div>`; return; }
+    out.innerHTML = [
+      f.contacts.length && head("Contacts", f.contacts.length) + f.contacts.map((c) => `<div class="card" style="box-shadow:none;padding:10px 12px;display:grid;gap:4px"><div><strong>${esc(c.name)}</strong>${c.role ? ` <span class="muted small">· ${esc(c.role)}</span>` : ""}</div>${c.phone ? `<a class="btn secondary" style="justify-self:start;min-height:38px" href="${esc(telHref(c.phone))}">Call ${esc(c.phone)}</a>` : ""}${c.email ? `<a class="small" href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : ""}</div>`).join(""),
+      f.docs.length && head("Documents", f.docs.length) + `<div class="list">${f.docs.map((d) => `<button class="btn secondary block fd-link" data-opendoc="${esc(d.id)}"><div class="body"><strong>${esc(d.name)}</strong><div class="muted small">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</div></div></button>`).join("")}</div>`,
+      f.plan.length && head("Care plan", f.plan.length) + f.plan.map((x) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><strong>${esc(x.title)}</strong></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "")}</p></details>`).join(""),
+      f.flags.length && head("Flags", f.flags.length) + f.flags.map((x) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><strong>${esc(x.title)}</strong> <span class="tiny muted">${x.kind === "incident" ? "Incident" : "To note"} · ${when(x.ts)}${x.status === "resolved" ? " · resolved" : ""}</span></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.detail || "")}${x.resolvedNote ? "\n\nResolved: " + esc(x.resolvedNote) : ""}</p></details>`).join(""),
+      f.events.length && head("Appointments and plans", f.events.length) + f.events.map((e) => `<div class="small"><strong>${esc(e.label)}</strong> <span class="muted">· ${when(e.when)}${e.detail ? " · " + esc(e.detail) : ""}</span></div>`).join(""),
+      f.notes.length && head("Notes", f.notes.length) + f.notes.map((x) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><span class="tiny muted">${when(x.ts)} · ${esc(carer(x.carerId, x.carerName).name)}</span><div class="small">${esc(String(x.note || "").slice(0, 110))}${String(x.note || "").length > 110 ? "…" : ""}</div></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.note || "")}</p></details>`).join(""),
+      f.handovers.length && head("Handovers", f.handovers.length) + f.handovers.map((h) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><span class="tiny muted">${when(h.ts)}${h.fromName ? " · from " + esc(h.fromName) : ""}</span></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(h.text || "")}</p></details>`).join(""),
+    ].filter(Boolean).join("");
+  };
+  const q = $("#fdQ", s.root);
+  let t; q.oninput = () => { clearTimeout(t); t = setTimeout(() => (q.value.trim().length >= 2 ? results(q.value.trim()) : links()), 200); };
+  q.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); q.blur(); } };
+  out.onclick = (e) => {
+    const b = e.target.closest("[data-go]"); if (!b) return;
+    s.close();
+    ({ plan: openPlan, contacts: openContacts, log: () => go("log"), handover: () => go("handover") })[b.dataset.go]();
+  };
+  links();
+}
+
 /* ---------- navigation ---------- */
 let tab = "today";
 let rosterChecked = 0;
@@ -1073,7 +1138,7 @@ function renderToday() {
   v.innerHTML = `
     <div class="hello"><h2>${greet}, ${esc(onDuty().name)}</h2><p>${fmtDay(Date.now())}${onDuty().shift ? " · " + esc(onDuty().shift) : ""}</p></div>
     ${storageBanner()}
-    <div class="row" style="gap:8px;margin:-4px 0 12px"><button class="btn secondary" id="qContacts" style="flex:1">Contacts</button><button class="btn secondary" id="qPlan" style="flex:1">Care plan</button></div>
+    <div class="row" style="gap:8px;margin:-4px 0 12px"><button class="btn secondary" id="qFind" style="flex:1">Find</button><button class="btn secondary" id="qContacts" style="flex:1">Contacts</button><button class="btn secondary" id="qPlan" style="flex:1">Care plan</button></div>
     <button class="cta" id="ctaRec"><span class="mic">${ICON.mic}</span><span><strong>Record care note</strong><span>Speak as things happen. It's saved when you stop; add to it any time.</span></span></button>
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="muted small">${flags.length || "None"} open</span></div>
       <div class="flags">${flags.length ? flags.map((f) => flagHTML(f)).join("") : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div></div>
@@ -1089,6 +1154,7 @@ function renderToday() {
     ${recentNotesHTML(latest)}`;
   $("#ctaRec").onclick = () => openRecorder();
   $("#qContacts").onclick = () => openContacts();
+  $("#qFind").onclick = () => openFind();
   bindTasks($("#view-today"));
   if ($("#recentLog")) $("#recentLog").onclick = () => go("log");
   $("#qPlan").onclick = () => openPlan();
