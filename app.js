@@ -101,6 +101,7 @@ function loadUser() {
     for (const m of S.messages) si.sent["message:" + m.id] = mtOf(m);
   }
   if (!S.tasks) { S.tasks = []; if (S.sync) S.sync.seq = 0; }
+  if (!S.supplies) { S.supplies = []; if (S.sync) S.sync.seq = 0; } // medicine supplies received: pull them once
   if (!S.doses) { S.doses = []; if (S.sync) S.sync.seq = 0; } // medicines chart entries: pull them once
   else { const keep = Date.now() - 70 * 864e5; S.doses = S.doses.filter((d) => d.ts > keep); } // this and last month's chart; older entries stay in the cloud // ticks for this client; an older app skipped them, so pull everything once (duplicates are ignored)
   S.onDuty = myId(); S.detached = false; // back on this client: anything kept unsent goes now
@@ -151,7 +152,7 @@ const audioDB = (() => {
  * Sync runs in the background, so it never signs anyone out or opens a screen in the middle of
  * something: if the sign-in has ended it pauses, and asks once nothing is open.
  */
-const SYNC_KINDS = { note: "notes", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule", task: "tasks", message: "messages", summary: "summaries", dose: "doses" };
+const SYNC_KINDS = { note: "notes", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule", task: "tasks", message: "messages", summary: "summaries", dose: "doses", supply: "supplies" };
 const DEMO_IDS = new Set(["n0", "f0", "h0", "s1", "s2", "s3", "m0"]);
 const SYNC_RECORD_MAX = 58000, SYNC_BATCH_MAX = 400000; // the relay allows 60,000 a record, 1,000,000 a request
 // When a record last changed (older records have no mt, so use their latest time).
@@ -169,7 +170,8 @@ const SYNC_SHAPES = {
   note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", heardBy: "str:10", amends: "id", auto: "num", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
   flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", raisedBy: "id", resolvedNote: "str:200", resolvedTs: "num", resolvedBy: "id" } },
   task: { req: ["ts", "taskId", "day", "status"], f: { ts: "num", taskId: "str:40", title: "str:120", day: "str:10", period: ["morning", "afternoon", "evening", "night", "any"], status: ["done", "not_done"], reason: "str:300", by: "id", noteId: "id" } },
-  dose: { req: ["ts", "medId", "day", "slot", "code"], f: { ts: "num", medId: "id", med: "str:200", day: "str:10", slot: "str:8", code: ["T", "P", "R", "NT", "NR", "D", "C", "M", "E", "O", "V"], amount: "str:40", reason: "str:300", prnFor: "str:200", note: "str:500", corrects: "id", by: "id", byName: "str:60" } },
+  dose: { req: ["ts", "medId", "day", "slot", "code"], f: { ts: "num", medId: "id", med: "str:200", day: "str:10", slot: "str:8", code: ["T", "P", "R", "NT", "NR", "D", "C", "M", "E", "O", "V"], amount: "str:40", reason: "str:300", prnFor: "str:200", note: "str:500", corrects: "id", outcomeOf: "id", outcome: "str:200", by: "id", byName: "str:60" } },
+  supply: { req: ["ts", "medId", "matches"], f: { ts: "num", medId: "id", med: "str:200", qty: "str:60", from: "str:80", matches: ["yes", "no"], mismatch: "str:300", by: "id", byName: "str:60" } },
   message: { req: ["ts", "text", "from"], f: { ts: "num", text: "str:2000", from: ["family", "carer"], name: "str:60", by: "id" } },
   summary: { req: ["ts", "text"], f: { ts: "num", day: "str:10", text: "str:4000", by: "id", byName: "str:60" } },
   handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", fromName: "str:60", toId: "id", text: "str:10000", source: "str:20" } },
@@ -548,7 +550,15 @@ const MED_SOURCES = [["label", "Pharmacy label"], ["prescription", "Prescription
 const medSourceLabel = (k) => (MED_SOURCES.find((x) => x[0] === k) || [k, k])[1];
 const medsState = () => (S.meds = S.meds || { profile: null, list: [], at: 0 });
 const medName = (m) => [m.name, m.strength, m.form].filter(Boolean).join(" ");
-const doses = () => S.doses || [];
+const doses = () => (S.doses || []).filter((d) => !d.outcomeOf);
+// Did a when-required dose work (CQC: reason, amount, time and outcome)? Kept as its own entry.
+const outcomeFor = (id) => (S.doses || []).filter((d) => d.outcomeOf === id).sort((a, b) => b.ts - a.ts)[0];
+function openPrnOutcome(d, after) {
+  const s = sheet(`${sheetHead("Did it help?")}<p class="small" style="margin:0">${fmtTime(d.ts)} ${esc(d.med || "")}${d.prnFor ? " for " + esc(d.prnFor) : ""}</p>
+    <label class="f">What happened?<input type="text" id="poTxt" maxlength="200" placeholder="e.g. Pain eased within the hour" autocomplete="off"></label>
+    <button class="btn primary block" id="poSave">Save</button>`);
+  $("#poSave", s.root).onclick = () => { const t = $("#poTxt", s.root).value.trim(); if (!t) return toast("Say what happened"); pushDose({ medId: d.medId, med: d.med, day: d.day, slot: "prn", code: "O", outcomeOf: d.id, outcome: t }); s.close(); render(); if (after) after(); toast("Saved"); };
+}
 const doseBy = (d) => d.byName || carer(d.by).name;
 const initialsOf = (n) => String(n || "?").split(/\s+/).filter(Boolean).map((w) => w[0].toUpperCase()).join("").slice(0, 3);
 // "1 to 2 tablets", "1-2", "5 or 10 ml": the amount actually given must be written down.
@@ -567,8 +577,8 @@ async function loadMeds(force) {
   try {
     const out = await syncJSON("/plan/meds/get", { client: clientId });
     if (!out || out.error || KEY !== key || !session || !session.client || session.client.id !== clientId) return false;
-    const cur = medsState(), changed = JSON.stringify([out.profile, out.meds]) !== JSON.stringify([cur.profile, cur.list]);
-    S.meds = { profile: out.profile, list: out.meds || [], at: Date.now() }; saveLocal();
+    const cur = medsState(), changed = JSON.stringify([out.profile, out.meds, out.me]) !== JSON.stringify([cur.profile, cur.list, cur.me]);
+    S.meds = { profile: out.profile, list: out.meds || [], me: out.me || null, at: Date.now() }; saveLocal();
     return changed;
   } catch { return false; } finally { medsLoading = false; }
 }
@@ -615,7 +625,7 @@ const doseStatusHTML = (o) => {
   if (last) return `<span class="chip ${GIVEN.has(last.code) ? "accent" : "follow"}">${esc(doseLabel(last.code))}</span> <span class="tiny muted">${esc(doseBy(last))} ${fmtTime(last.ts)}${st.live.length > 1 ? " · offered again" : ""}</span>`;
   return o.ts < Date.now() - 60 * 60000 ? `<span class="chip incident">Not recorded${o.m.timeSensitive ? " (time-sensitive)" : ""}</span>` : o.ts <= Date.now() + 30 * 60000 ? '<span class="chip follow">Due</span>' : '<span class="chip">Later</span>';
 };
-const doseRowHTML = (o) => `<div class="item"><div class="when">${esc(o.slot)}</div><div class="body"><div><strong>${esc(medName(o.m))}</strong>${o.m.timeSensitive ? ' <span class="chip incident">On time</span>' : ""}${o.m.stoppedAt ? ' <span class="chip">Stopped</span>' : ""}</div><div class="muted small">${esc(o.m.dose)} · ${esc(o.m.route)}${o.day !== dayKey(new Date()) ? " · " + esc(dayLabel(o.ts)) : ""}</div><div style="margin-top:4px">${doseStatusHTML(o)}</div></div><button class="btn ${o.st.last ? "ghost" : "secondary"}" data-mdose="${esc(o.m.id)}|${esc(o.day)}|${esc(o.slot)}" style="min-height:44px;padding:8px 12px">${o.st.last ? "Open" : "Record"}</button></div>`;
+const doseRowHTML = (o) => `<div class="item"><div class="when">${esc(o.slot)}</div><div class="body"><div><strong>${esc(medName(o.m))}</strong>${o.m.timeSensitive ? ' <span class="chip incident">On time</span>' : ""}${o.m.stoppedAt ? ' <span class="chip">Stopped</span>' : ""}</div><div class="muted small">${esc(o.m.dose)} · ${esc(o.m.route)}${o.day !== dayKey(new Date()) ? " · " + esc(dayLabel(o.ts)) : ""}</div>${labelMismatch(o.m) ? '<div class="small" style="color:var(--incident);font-weight:600">Label didn&#39;t match the list: check before giving</div>' : ""}<div style="margin-top:4px">${doseStatusHTML(o)}</div></div><button class="btn ${o.st.last ? "ghost" : "secondary"}" data-mdose="${esc(o.m.id)}|${esc(o.day)}|${esc(o.slot)}" style="min-height:44px;padding:8px 12px">${o.st.last ? "Open" : "Record"}</button></div>`;
 // Today: this shift's doses, plus any dose from the last 24 hours still not recorded.
 function dosesForToday() {
   const now = Date.now(), from = shiftStart();
@@ -652,7 +662,7 @@ function pushDose(rec) {
 }
 // One scheduled dose: what to give, everything recorded already (NG67 1.7.6), then what happened.
 // With an entry already there: "Offered again" (after a refusal) adds one; "Correct" replaces one.
-function openDoseSheet(medId, day, slot, after) {
+function openDoseSheet(medId, day, slot, after, preset) {
   const m = medsState().list.find((x) => x.id === medId); if (!m) return toast("That medicine isn't on the list on this phone");
   const p = medsProfile(), st = doseState(m.id, day, slot), ts = slotTs(day, slot);
   const codes = p.mode === "prompt" ? ["P", "R", "NT", "NR", "M"] : ["T", "R", "NT", "NR", "M"];
@@ -662,6 +672,8 @@ function openDoseSheet(medId, day, slot, after) {
       ${m.instructions ? `<div>${esc(m.instructions)}</div>` : ""}
       ${p.allergies ? `<div><strong style="color:var(--incident)">Allergies:</strong> ${esc(p.allergies)}</div>` : ""}
       ${!m.checkedAt ? `<div class="warn">This medicine's details haven't been checked against the label yet (changed by ${esc(m.updatedBy)}).</div>` : ""}
+      ${labelMismatch(m) ? `<div class="warn" style="background:var(--incident-soft)"><strong>The last supply's label didn't match the list</strong> (${esc(labelMismatch(m).mismatch || "")}). Check with the pharmacy or GP before giving it.</div>` : ""}
+      ${p.mode !== "prompt" && medsSignOffKnownNo() ? `<div class="warn"><strong>${esc(medsSignOffText())}</strong> Only give medicines if you're trained and assessed. You can still record what happened; giving it will be flagged for an administrator.</div>` : ""}
       ${ts > Date.now() + 60 * 60000 ? `<div class="warn">This dose isn't due until ${esc(slot)}${day !== dayKey(new Date()) ? " " + esc(dayLabel(ts).toLowerCase()) : ""}. Record it when it's given.</div>` : ""}</div>
     ${st.twice ? `<div class="warn small" style="background:var(--incident-soft)"><strong>Recorded as given twice.</strong> Check whether ${esc(S.client.name)} had it twice. If so, record an incident and get advice (GP or 111). If one entry is a mistake, correct it below.</div>` : ""}
     ${st.all.length ? `<div class="small" style="display:grid;gap:4px"><strong>Recorded for this dose</strong>${st.all.sort((a, b) => a.ts - b.ts).map((d) => `<div class="${st.live.includes(d) ? "" : "muted"}">${fmtTime(d.ts)} ${esc(doseLabel(d.code))}${d.amount ? " (" + esc(d.amount) + ")" : ""} · ${esc(doseBy(d))}${d.reason ? " · " + esc(d.reason) : ""}${d.corrects ? " · correction" : ""}${st.live.includes(d) ? "" : " · replaced"}</div>`).join("")}</div>
@@ -697,16 +709,19 @@ function openDoseSheet(medId, day, slot, after) {
     const now = doseState(m.id, day, slot);
     if (mode !== "correct" && GIVEN.has(code) && now.given.length) return toast(`Already recorded as given by ${doseBy(now.given[0])} at ${fmtTime(now.given[0].ts)}. Check before giving it again.`);
     pushDose({ medId: m.id, med: `${medName(m)}, ${m.dose}`, day, slot, code, amount: amt, reason: why, note, corrects: mode === "correct" ? $s("#dsTarget").value : undefined });
+    if (code === "T") flagUnsignedGiven(m, `${slot} ${dayLabel(ts).toLowerCase()}`);
     s.close(); render(); if (after) after();
     toast(code === "R" ? "Recorded as refused. You could offer it again a little later." : `Recorded: ${doseLabel(code)}`);
   };
+  if (preset && !st.last) { const b = s.root.querySelector(`[data-code="${preset}"]`); if (b) b.click(); } // suggested from a note: still checked and saved here
 }
 // A when-required dose: what for, how much, and how it fits the limits (warn, never block what happened).
-function openPrnSheet(after) {
+function openPrnSheet(after, presetId) {
   const list = medsState().list.filter((m) => m.prn && !m.stoppedAt && medOnDay(m, dayKey(new Date()))), p = medsProfile();
   if (!list.length) return toast("No when-required medicines on the list");
   const s = sheet(`${sheetHead("When-required medicine")}
-    <label class="f">Which medicine<select id="prM">${list.map((m) => `<option value="${esc(m.id)}">${esc(medName(m))}</option>`).join("")}</select></label>
+    <label class="f">Which medicine<select id="prM">${list.map((m) => `<option value="${esc(m.id)}" ${m.id === presetId ? "selected" : ""}>${esc(medName(m))}</option>`).join("")}</select></label>
+    ${p.mode !== "prompt" && medsSignOffKnownNo() ? `<div class="warn small"><strong>${esc(medsSignOffText())}</strong> Only give medicines if you're trained and assessed; giving it will be flagged for an administrator.</div>` : ""}
     <div id="prInfo" class="small" style="display:grid;gap:6px"></div>
     <label class="f">What for?<input type="text" id="prFor" maxlength="200" placeholder="e.g. Pain in her knee" autocomplete="off"></label>
     <label class="f" id="prAmtBox" hidden>Amount given<input type="text" id="prAmt" maxlength="40" placeholder="e.g. 1 tablet" autocomplete="off"></label>
@@ -724,13 +739,13 @@ function openPrnSheet(after) {
     const m = list.find((x) => x.id === $s("#prM").value), { warn, day, lastD } = check(m);
     $s("#prInfo").innerHTML = `<div><strong>${esc(m.dose)}</strong> · ${esc(m.route)}${m.prnFor ? ` · for ${esc(m.prnFor)}` : ""}</div>
       <div class="muted">${m.prnMinHours ? `At least ${m.prnMinHours} hours apart` : "No minimum gap given"}${m.prnMax24 ? `, at most ${m.prnMax24} doses in 24 hours` : ""}. ${lastD ? `Last given ${esc(dayLabel(lastD.ts).toLowerCase())} ${fmtTime(lastD.ts)} by ${esc(doseBy(lastD))}; ${day.length} dose${day.length === 1 ? "" : "s"} in the last 24 hours.` : "Not given in the last 3 days."}${navigator.onLine ? "" : " No signal: doses recorded on other phones may not show yet."}</div>
-      ${m.instructions ? `<div>${esc(m.instructions)}</div>` : ""}${warn ? `<div class="warn"><strong>Check:</strong> ${esc(warn)} If you give it, say why: it goes under Needs attention and into the handover.</div>` : ""}`;
+      ${m.instructions ? `<div>${esc(m.instructions)}</div>` : ""}${labelMismatch(m) ? `<div class="warn" style="background:var(--incident-soft)"><strong>The last supply's label didn't match the list.</strong> Check with the pharmacy or GP before giving it.</div>` : ""}${warn ? `<div class="warn"><strong>Check:</strong> ${esc(warn)} If you give it, say why: it goes under Needs attention and into the handover.</div>` : ""}`;
     if (!$s("#prFor").value) $s("#prFor").value = m.prnFor || "";
     $s("#prWhyBox").hidden = !warn; $s("#prAmtBox").hidden = !variableDose(m.dose);
   };
   $s("#prM").onchange = () => { $s("#prFor").value = ""; info(); };
   info();
-  const save = (code) => {
+  const store = (code) => { // not "save": that's the app's own save, used below
     const m = list.find((x) => x.id === $s("#prM").value), { warn } = check(m); // checked again at the moment of saving
     const why = $s("#prWhy").value.trim(), forWhat = $s("#prFor").value.trim(), amt = $s("#prAmt").value.trim();
     if (!forWhat) return toast("Say what it's for");
@@ -739,10 +754,11 @@ function openPrnSheet(after) {
     pushDose({ medId: m.id, med: `${medName(m)}, ${m.dose}`, day: dayKey(new Date()), slot: "prn", code, amount: code === "R" ? "" : amt, prnFor: forWhat, reason: code === "R" ? "Offered, refused" : "", note: warn && code !== "R" ? `${warn} Given because: ${why}` : "" });
     // Outside the limits: a To note flag so it reaches the handover and the administrators.
     if (warn && code !== "R") { S.flags.push({ id: uid(), ts: Date.now(), kind: "follow_up", title: `${m.name} given outside its limits`, detail: `${warn} Reason: ${why}`, status: "open", raisedBy: stampId() }); save(); }
+    if (code === "T") flagUnsignedGiven(m, `${fmtTime(Date.now())} when required`);
     s.close(); render(); if (after) after(); toast(code === "R" ? "Recorded as refused" : "Recorded");
   };
-  $s("#prGive").onclick = () => save(p.mode === "prompt" ? "P" : "T");
-  $s("#prNo").onclick = () => save("R");
+  $s("#prGive").onclick = () => store(p.mode === "prompt" ? "P" : "T");
+  $s("#prNo").onclick = () => store("R");
 }
 // Correct a when-required entry (wrong medicine, entered in error...): a new entry that replaces it.
 function openPrnCorrect(id, after) {
@@ -774,11 +790,12 @@ function openMeds(tabName = "today") {
       const prn = prnAll.filter((d) => !prnAll.some((x) => x.corrects === d.id) && d.code !== "V").sort((a, b) => a.ts - b.ts);
       body.innerHTML = `${p.allergies ? `<div class="small"><strong style="color:var(--incident)">Allergies:</strong> ${esc(p.allergies)}</div>` : ""}
         <div class="card" style="box-shadow:none"><div class="list">${due.length ? due.map(doseRowHTML).join("") : '<div class="empty">No doses on the list for today.</div>'}</div></div>
-        ${active.some((m) => m.prn) || prn.length ? `<div class="card" style="box-shadow:none"><div class="card-h"><h3>When required, today</h3></div>${prn.length ? prn.map((d) => `<div class="small" style="display:flex;gap:8px;align-items:center;justify-content:space-between"><span>${fmtTime(d.ts)} <strong>${esc(d.med)}</strong>${d.amount ? " (" + esc(d.amount) + ")" : ""}${d.prnFor ? " for " + esc(d.prnFor) : ""}: ${esc(doseLabel(d.code))} · ${esc(doseBy(d))}${d.corrects ? " · correction" : ""}</span><button class="link small" data-pcorr="${esc(d.id)}" style="min-height:44px">Correct</button></div>`).join("") : '<div class="empty">None given today.</div>'}
+        ${active.some((m) => m.prn) || prn.length ? `<div class="card" style="box-shadow:none"><div class="card-h"><h3>When required, today</h3></div>${prn.length ? prn.map((d) => `<div class="small" style="display:flex;gap:8px;align-items:center;justify-content:space-between"><span>${fmtTime(d.ts)} <strong>${esc(d.med)}</strong>${d.amount ? " (" + esc(d.amount) + ")" : ""}${d.prnFor ? " for " + esc(d.prnFor) : ""}: ${esc(doseLabel(d.code))} · ${esc(doseBy(d))}${d.corrects ? " · correction" : ""}</span><span>${GIVEN.has(d.code) ? (outcomeFor(d.id) ? `<span class="tiny muted">${esc(outcomeFor(d.id).outcome)}</span>` : `<button class="link small" data-pout="${esc(d.id)}" style="min-height:44px">Did it help?</button>`) : ""} <button class="link small" data-pcorr="${esc(d.id)}" style="min-height:44px">Correct</button></span></div>`).join("") : '<div class="empty">None given today.</div>'}
           ${active.some((m) => m.prn) ? '<button class="btn secondary block" data-mprn style="margin-top:10px">Give a when-required medicine</button>' : ""}</div>` : ""}
         <p class="tiny muted" style="margin:0">List as of ${ms.at ? esc(dayLabel(ms.at).toLowerCase()) + " " + fmtTime(ms.at) : "never"}.</p>`;
       bindMeds(body, back("today"));
       body.querySelectorAll("[data-pcorr]").forEach((b) => (b.onclick = () => openPrnCorrect(b.dataset.pcorr, back("today"))));
+      body.querySelectorAll("[data-pout]").forEach((b) => (b.onclick = () => openPrnOutcome(doses().find((x) => x.id === b.dataset.pout), back("today"))));
     } else if (tabNow === "list") {
       const card = (m) => `<div class="card" style="box-shadow:none;display:grid;gap:6px">
         <div><strong>${esc(medName(m))}</strong>${m.timeSensitive ? ' <span class="chip incident">On time</span>' : ""}${m.stoppedAt ? ' <span class="chip">Stopped</span>' : !m.checkedAt ? ` <span class="chip follow">${m.source === "verbal" && !m.writtenConfirmation ? "Waiting for written confirmation" : "Not yet checked"}</span>` : ""}</div>
@@ -786,13 +803,16 @@ function openMeds(tabName = "today") {
         ${m.instructions ? `<div class="small">${esc(m.instructions)}</div>` : ""}
         <div class="tiny muted">${m.prescriber ? "Prescribed by " + esc(m.prescriber) + " · " : ""}${m.startDate ? "from " + esc(m.startDate) : ""}${m.endDate ? " · stops " + esc(m.endDate) : ""}${m.reviewDate ? " · review " + esc(m.reviewDate) : ""}</div>
         <div class="tiny muted">From: ${esc(medSourceLabel(m.source))}${m.sourceDetail ? " (" + esc(m.sourceDetail) + ")" : ""}${m.source === "verbal" ? ` · asked by ${esc(m.verbalFrom)} at ${esc(m.verbalAt)}, read back${m.verbalRepeatedTo ? ", repeated to " + esc(m.verbalRepeatedTo) : ""}${m.writtenConfirmation ? " · in writing: " + esc(m.writtenConfirmation) : ""}` : ""} · ${m.stoppedAt ? "stopped" : "changed"} by ${esc(m.updatedBy)} ${esc(dayLabel(m.updatedAt).toLowerCase())} ${fmtTime(m.updatedAt)}${m.changeReason && !m.stoppedAt ? " · " + esc(m.changeReason) : ""}${m.stopReason ? " · " + esc(m.stopReason) : ""}${m.checkedAt ? ` · checked by ${esc(m.checkedBy)}` : ""}</div>
-        ${m.stoppedAt ? "" : `<div class="row" style="gap:8px">${!m.checkedAt ? (m.mine ? '<span class="tiny muted" style="align-self:center">Someone who didn\'t change it needs to check this against the label.</span>' : `<button class="btn primary" data-mcheck="${esc(m.id)}" style="flex:1 1 100%">${m.source === "verbal" && !m.writtenConfirmation ? "Written confirmation received" : "I've checked it against the label"}</button>`) : ""}
+        ${lastSupply(m.id) ? `<div class="tiny muted">Last supply: ${esc(lastSupply(m.id).qty)}${lastSupply(m.id).from ? " from " + esc(lastSupply(m.id).from) : ""}, ${esc(dayLabel(lastSupply(m.id).ts).toLowerCase())} · ${lastSupply(m.id).matches === "yes" ? "label matched" : "<strong>label didn't match</strong>"} · ${esc(doseBy(lastSupply(m.id)))}</div>` : ""}
+        ${m.stoppedAt ? "" : `<button class="btn ghost" data-msup="${esc(m.id)}">Record a new supply</button>`}
+        ${m.stoppedAt || !medsSignedOff() ? "" : `<div class="row" style="gap:8px">${!m.checkedAt ? (m.mine ? '<span class="tiny muted" style="align-self:center">Someone who didn\'t change it needs to check this against the label.</span>' : `<button class="btn primary" data-mcheck="${esc(m.id)}" style="flex:1 1 100%">${m.source === "verbal" && !m.writtenConfirmation ? "Written confirmation received" : "I've checked it against the label"}</button>`) : ""}
           <button class="btn secondary" data-medit="${esc(m.id)}" style="flex:1">Change</button><button class="btn ghost" data-mstop="${esc(m.id)}" style="flex:1">Stop</button></div>`}
         <button class="link small" data-mhist="${esc(m.id)}" style="justify-self:start;min-height:44px">Earlier versions</button></div>`;
-      body.innerHTML = `<button class="btn primary block" id="mdAdd">Add a medicine</button>
+      body.innerHTML = `${medsSignedOff() ? '<button class="btn primary block" id="mdAdd">Add a medicine</button>' : `<div class="warn small">${esc(medsSignOffText())} You can read the list and record supplies; adding, changing, stopping or checking medicines needs a sign-off from an administrator (Manage people).</div>`}
         ${active.length ? active.map(card).join("") : '<div class="empty">No medicines on the list yet.</div>'}
         ${stopped.length ? `<details><summary class="small">Stopped recently (${stopped.length})</summary>${stopped.map(card).join("")}</details>` : ""}`;
-      $("#mdAdd", s.root).onclick = () => openMedEdit(null, back("list"));
+      if ($("#mdAdd", s.root)) $("#mdAdd", s.root).onclick = () => openMedEdit(null, back("list"));
+      body.querySelectorAll("[data-msup]").forEach((b) => (b.onclick = () => openSupplySheet(ms.list.find((m) => m.id === b.dataset.msup), back("list"))));
       body.querySelectorAll("[data-medit]").forEach((b) => (b.onclick = () => openMedEdit(ms.list.find((m) => m.id === b.dataset.medit), back("list"))));
       body.querySelectorAll("[data-mcheck]").forEach((b) => (b.onclick = async () => {
         const m = ms.list.find((x) => x.id === b.dataset.mcheck);
@@ -826,7 +846,7 @@ function openMeds(tabName = "today") {
       body.querySelectorAll("[data-mmonth]").forEach((b) => (b.onclick = () => openMarChart(+b.dataset.mmonth)));
     } else {
       const uncheckedP = profileUnchecked();
-      body.innerHTML = `${uncheckedP ? `<div class="warn small">Changed by ${esc(p.updatedBy)} ${esc(dayLabel(p.updatedAt).toLowerCase())} ${fmtTime(p.updatedAt)}: not yet checked by a second person.${p.mine ? " Someone else needs to check it." : ""}</div>${p.mine ? "" : '<button class="btn primary block" id="mpOk">I\'ve checked who gives the medicines and the allergies</button>'}` : ""}
+      body.innerHTML = `${medsSignOffKnownNo() ? `<div class="warn small">${esc(medsSignOffText())} You can read these details; changing or checking them needs a sign-off from an administrator (Manage people).</div>` : ""}${uncheckedP ? `<div class="warn small">Changed by ${esc(p.updatedBy)} ${esc(dayLabel(p.updatedAt).toLowerCase())} ${fmtTime(p.updatedAt)}: not yet checked by a second person.${p.mine ? " Someone else needs to check it." : ""}</div>${p.mine || medsSignOffKnownNo() ? "" : '<button class="btn primary block" id="mpOk">I\'ve checked who gives the medicines and the allergies</button>'}` : ""}
         <form id="mdProf" style="display:grid;gap:12px">
         <label class="f">Who gives the medicines?<select id="mpMode"><option value="give" ${p.mode !== "prompt" && p.mode !== "self" ? "selected" : ""}>Carers give them</option><option value="prompt" ${p.mode === "prompt" ? "selected" : ""}>Carers remind or prompt only</option><option value="self" ${p.mode === "self" ? "selected" : ""}>${esc(S.client.name)} manages their own</option></select></label>
         <label class="check" id="mpSelfBox" ${p.mode === "self" ? "" : "hidden"}><input type="checkbox" id="mpSelf" ${p.selfLog ? "checked" : ""}><span>${esc(S.client.name)} would like carers to note their medicines anyway</span></label>
@@ -835,10 +855,10 @@ function openMeds(tabName = "today") {
         <label class="f">${clientCountry() === "AU" ? "Medicare number (optional)" : "NHS number (optional)"}<input type="text" id="mpNhs" maxlength="20" value="${esc(p.nhs || "")}" autocomplete="off"></label>
         <label class="f">GP practice<input type="text" id="mpGp" maxlength="120" value="${esc(p.gpPractice || "")}"></label>
         <label class="f" id="mpWhyBox" hidden>Why are who gives the medicines or the allergies changing?<input type="text" id="mpWhy" maxlength="300" placeholder="e.g. Agreed with Peter (LPA) 11 Oct" autocomplete="off"></label>
-        <button class="btn primary block">Save details</button></form>
+        ${medsSignOffKnownNo() ? "" : '<button class="btn primary block">Save details</button>'}</form>
         <div class="card" style="box-shadow:none;display:grid;gap:8px"><h3 style="font-size:17px">Fortnightly check</h3>
           <p class="small" style="margin:0">${p.listCheckedAt ? `Last checked ${esc(dayLabel(p.listCheckedAt).toLowerCase())} by ${esc(p.listCheckedBy)}.` : "Not checked yet."} Every two weeks, check each medicine on the list against its current label or prescription.</p>
-          <button class="btn secondary" id="mpCheck">I've checked the whole list against the labels</button></div>`;
+          ${medsSignOffKnownNo() ? "" : `<button class="btn secondary" id="mpCheck">I've checked the whole list against the labels</button>`}</div>`;
       const safetyChanged = () => !!p.updatedAt && ($("#mpMode", s.root).value !== p.mode || $("#mpAll", s.root).value.trim() !== (p.allergies || "") || ($("#mpMode", s.root).value === "self" && $("#mpSelf", s.root).checked !== !!p.selfLog));
       const upd = () => { $("#mpSelfBox", s.root).hidden = $("#mpMode", s.root).value !== "self"; $("#mpWhyBox", s.root).hidden = !safetyChanged(); };
       ["#mpMode", "#mpAll", "#mpSelf"].forEach((q) => { $(q, s.root).oninput = upd; $(q, s.root).onchange = upd; });
@@ -856,7 +876,7 @@ function openMeds(tabName = "today") {
         if (out.error) return toast(out.error);
         medsState().profile = out.profile; saveLocal(); draw(); toast(out.profile.checkedAt ? "Saved" : "Saved. Ask someone else to check it.");
       };
-      $("#mpCheck", s.root).onclick = (e) => confirmInline(e.currentTarget, async () => {
+      if ($("#mpCheck", s.root)) $("#mpCheck", s.root).onclick = (e) => confirmInline(e.currentTarget, async () => {
         const out = await syncJSON("/plan/meds/listcheck", { client: session.client.id }).catch(() => ({ error: "No connection" }));
         if (out.error) return toast(out.error);
         medsState().profile = out.profile; saveLocal(); draw(); toast("List check recorded");
@@ -959,7 +979,7 @@ function openMarChart(monthOffset = 0) {
   };
   const people = [...new Set(inMonth.map((d) => doseBy(d)))].sort(), initials = new Map();
   for (const n of people) { let i = initialsOf(n), k = 2; while ([...initials.values()].includes(i)) i = initialsOf(n) + k++; initials.set(n, i); }
-  const comments = inMonth.filter((d) => d.reason || d.note || d.corrects || d.amount).sort((a, b) => a.ts - b.ts);
+  const comments = inMonth.filter((d) => d.reason || d.note || d.corrects || d.amount || outcomeFor(d.id)).sort((a, b) => a.ts - b.ts);
   const root = $("#fullRoot");
   root.innerHTML = `<div class="full mar-print" role="dialog" aria-modal="true" aria-label="Medicines chart"><div class="wrap" style="max-width:none">
     <div class="row noprint" style="gap:8px;justify-content:space-between"><button class="btn ghost" id="mcClose">Close</button><button class="btn primary" id="mcPrint">Print or save as PDF</button></div>
@@ -970,7 +990,8 @@ function openMarChart(monthOffset = 0) {
       ${rows.length ? rows.map((r) => `<tr>${r.first ? `<td class="mn" rowspan="${r.span}"><strong>${esc(medName(r.m))}</strong><br>${esc(r.m.dose)} · ${esc(r.m.route)}${r.m.prn ? `<br>When required${r.m.prnFor ? " for " + esc(r.m.prnFor) : ""}` : ""}${r.m.instructions ? "<br>" + esc(r.m.instructions) : ""}${r.m.stoppedAt ? "<br><em>Stopped " + esc(dayKey(new Date(r.m.stoppedAt))) + "</em>" : ""}</td>` : ""}<td>${r.slot === "prn" ? "PRN" : esc(r.slot)}${r.slot !== "prn" && !(r.m.times || []).includes(r.slot) ? "<br><em>(earlier time)</em>" : ""}</td>${Array.from({ length: daysIn }, (_, i) => cell(r.m, r.slot, i + 1)).join("")}</tr>`).join("") : `<tr><td colspan="${daysIn + 2}">No medicines on the list this month.</td></tr>`}
     </tbody></table></div>
     <p class="tiny">Codes: ${DOSE_CODES.filter(([c]) => c !== "V").map(([c, l]) => `${c} = ${l}`).join(" · ")}. ? = not recorded; ×2 = recorded as given twice. Small letters are the initials of who recorded it. The heading shows each medicine as it is now; earlier doses and strengths are in the comments and the medicine's earlier versions. Record at the time of administration.</p>
-    ${comments.length ? `<h3 style="font-size:15px">Comments</h3><div class="tiny">${comments.map((d) => `<div>${esc(d.day)} ${d.slot === "prn" ? fmtTime(d.ts) : esc(d.slot)} ${esc(d.med || "")}: ${esc(doseLabel(d.code))}${d.amount ? " · " + esc(d.amount) : ""}${d.reason ? " · " + esc(d.reason) : ""}${d.prnFor ? " · for " + esc(d.prnFor) : ""}${d.note ? " · " + esc(d.note) : ""}${d.corrects ? " (correction)" : ""} · ${esc(doseBy(d))}</div>`).join("")}</div>` : ""}
+    ${comments.length ? `<h3 style="font-size:15px">Comments</h3><div class="tiny">${comments.map((d) => `<div>${esc(d.day)} ${d.slot === "prn" ? fmtTime(d.ts) : esc(d.slot)} ${esc(d.med || "")}: ${esc(doseLabel(d.code))}${d.amount ? " · " + esc(d.amount) : ""}${d.reason ? " · " + esc(d.reason) : ""}${d.prnFor ? " · for " + esc(d.prnFor) : ""}${d.note ? " · " + esc(d.note) : ""}${d.corrects ? " (correction)" : ""}${outcomeFor(d.id) ? " · outcome: " + esc(outcomeFor(d.id).outcome) : ""} · ${esc(doseBy(d))}</div>`).join("")}</div>` : ""}
+    ${(() => { const sup = supplies().filter((x) => { const d = dayKey(new Date(x.ts)); return d >= monthStart && d <= monthEnd; }).sort((a, b) => a.ts - b.ts); return sup.length ? `<h3 style="font-size:15px">Supplies received</h3><div class="tiny">${sup.map((x) => `<div>${esc(dayKey(new Date(x.ts)))} ${esc(x.med || "")}: ${esc(x.qty)}${x.from ? " from " + esc(x.from) : ""} · label ${x.matches === "yes" ? "matched the list" : "DIDN'T MATCH: " + esc(x.mismatch || "")} · ${esc(doseBy(x))}</div>`).join("")}</div>` : ""; })()}
     <h3 style="font-size:15px">Careworker identification</h3>
     <table class="mar who"><thead><tr><th>Name</th><th>Initials</th></tr></thead><tbody>${people.length ? people.map((n) => `<tr><td>${esc(n)}</td><td>${esc(initials.get(n))}</td></tr>`).join("") : '<tr><td colspan="2">No entries yet.</td></tr>'}</tbody></table>
     <p class="tiny muted">Dignity Notes · printed ${esc(fmtDay(Date.now()))} ${fmtTime(Date.now())} · pilot, made-up data only</p></div></div>`;
@@ -988,11 +1009,139 @@ function medsForHandover() {
     const st = o.st, l = st.last;
     out.push(`${o.day !== dayKey(new Date()) ? dayLabel(o.ts) + " " : ""}${o.slot} ${medName(o.m)}: ${st.twice ? "RECORDED AS GIVEN TWICE - check" : l ? `${doseLabel(l.code)}${l.amount ? " (" + l.amount + ")" : ""}${l.reason ? " (" + l.reason + ")" : ""}, ${doseBy(l)}` : `NOT RECORDED${o.m.timeSensitive ? " (time-sensitive)" : ""}`}`);
   }
-  for (const d of doses().filter((x) => x.slot === "prn" && x.ts >= from && x.code !== "V" && !doses().some((y) => y.corrects === x.id)).sort((a, b) => a.ts - b.ts)) out.push(`${fmtTime(d.ts)} ${d.med || "when-required medicine"} (when required${d.prnFor ? ", for " + d.prnFor : ""}): ${doseLabel(d.code)}${d.amount ? " (" + d.amount + ")" : ""}, ${doseBy(d)}`);
+  for (const d of doses().filter((x) => x.slot === "prn" && x.ts >= from && x.code !== "V" && !doses().some((y) => y.corrects === x.id)).sort((a, b) => a.ts - b.ts)) out.push(`${fmtTime(d.ts)} ${d.med || "when-required medicine"} (when required${d.prnFor ? ", for " + d.prnFor : ""}): ${doseLabel(d.code)}${d.amount ? " (" + d.amount + ")" : ""}, ${doseBy(d)}${outcomeFor(d.id) ? "; outcome: " + outcomeFor(d.id).outcome : ""}`);
   const uc = medsUnchecked(); if (uc.length) out.push(`Not yet checked against the label: ${uc.map((m) => m.name).join(", ")}`);
   if (profileUnchecked()) out.push("Medicines details (who gives them, allergies) changed and not yet checked");
   if (medsListCheckDue()) out.push("Fortnightly medicines list check is due");
   return out;
+}
+
+// Am I signed off to support with medicines (NG67 1.11)? Worked out on the phone from the review date,
+// so a sign-off that lapses while offline shows as lapsed. Unknown (not fetched yet) is not "no".
+const medsMe = () => medsState().me || null;
+const medsSignedOff = () => { const me = medsMe(); return !me || (!!me.competent && (!me.reviewOn || me.reviewOn >= dayKey(new Date()))); };
+const medsSignOffKnownNo = () => !!medsMe() && !medsSignedOff();
+const medsSignOffText = () => { const me = medsMe() || {}; return me.competent ? `Your medicines sign-off was due for review on ${me.reviewOn}.` : "You're not signed off as trained to support with medicines."; };
+// A dose given by someone not signed off is flagged for an administrator (whichever screen it came from).
+function flagUnsignedGiven(m, when) {
+  if (!medsSignOffKnownNo()) return;
+  S.flags.push({ id: uid(), ts: Date.now(), kind: "follow_up", title: `Medicine given by a carer not signed off: ${m.name}`, detail: `${when}. ${medsSignOffText()} An administrator should check this and arrange training and assessment.`, status: "open", raisedBy: stampId() });
+  save();
+}
+// A new supply arrives: what came, from where, and whether the label matches the list exactly.
+const supplies = () => S.supplies || [];
+const lastSupply = (medId) => supplies().filter((x) => x.medId === medId).sort((a, b) => b.ts - a.ts)[0];
+const labelFlagTitle = (m) => `Label doesn't match the medicine list: ${m.name}`;
+// Until its flag is resolved, a mismatched label shows wherever the medicine is given.
+const labelMismatch = (m) => { const l = lastSupply(m.id); return l && l.matches === "no" && S.flags.some((f) => f.status === "open" && f.title === labelFlagTitle(m)) ? l : null; };
+function openSupplySheet(m, after) {
+  const s = sheet(`${sheetHead("New supply: " + esc(m.name))}
+    <div class="small"><strong>On the list:</strong> ${esc(medName(m))} · ${esc(m.dose)} · ${esc(m.route)} · ${m.prn ? "when required" : esc((m.times || []).join(", "))}${m.instructions ? " · " + esc(m.instructions) : ""}</div>
+    <label class="f">How much came<input type="text" id="suQty" maxlength="60" placeholder="e.g. 28 tablets, 1 box" autocomplete="off"></label>
+    <label class="f">From<input type="text" id="suFrom" maxlength="80" placeholder="e.g. High Street Pharmacy" autocomplete="off"></label>
+    <p class="small" style="margin:0">Check the pharmacy label against the list: name, strength, dose, how it's taken and when.</p>
+    <div class="row" style="gap:8px"><button class="btn primary" id="suOk" style="flex:1">The label matches</button><button class="btn ghost" id="suNo" style="flex:1">Something's different</button></div>
+    <label class="f" id="suDiffBox" hidden>What's different?<input type="text" id="suDiff" maxlength="300" placeholder="e.g. Label says 10 mg, the list says 5 mg" autocomplete="off"></label>
+    <button class="btn danger block" id="suSaveNo" hidden>Save and flag it</button>`);
+  const $s = (q) => $(q, s.root);
+  const store = (matches) => { // not "save": that's the app's own save, used below
+    const qty = $s("#suQty").value.trim(), from = $s("#suFrom").value.trim(), diff = $s("#suDiff").value.trim();
+    if (!qty) return toast("Say how much came");
+    if (matches === "no" && !diff) return toast("Say what's different");
+    S.supplies = S.supplies || [];
+    const rec = { id: uid(), ts: Date.now(), medId: m.id, med: `${medName(m)}, ${m.dose}`, qty, from, matches, mismatch: matches === "no" ? diff : undefined, by: stampId() };
+    for (const k of Object.keys(rec)) if (rec[k] === undefined || rec[k] === "") delete rec[k];
+    S.supplies.push(rec);
+    // A label that doesn't match the list must reach the next carer and an administrator.
+    if (matches === "no") S.flags.push({ id: uid(), ts: Date.now(), kind: "follow_up", title: labelFlagTitle(m), detail: `${diff}. Check with the pharmacy or GP before giving it; change the list only from the prescription or label. Resolve this flag once it's sorted.`, status: "open", raisedBy: stampId() });
+    save(); s.close(); render(); if (after) after();
+    toast(matches === "no" ? "Saved and flagged. Check with the pharmacy before giving it." : "Supply recorded");
+  };
+  $s("#suOk").onclick = () => store("yes");
+  $s("#suNo").onclick = () => { $s("#suDiffBox").hidden = false; $s("#suSaveNo").hidden = false; $s("#suDiff").focus(); };
+  $s("#suSaveNo").onclick = () => store("no");
+}
+// A time-sensitive dose not recorded an hour after its time is an incident (design section 8). Only from
+// a phone with fresh data (signal, synced in the last 3 minutes, list fetched in the last 10), so a
+// phone that's been offline doesn't raise it for a dose another carer recorded. The flag has a fixed id
+// per dose, so phones raising it at the same time make one record, not two. The medicine's name is in
+// the detail, not the title (family may see incident titles if incidents are shared with them).
+function raiseMissedTimeSensitive() {
+  if (!cloudOn() || medsSelf() || !navigator.onLine) return false;
+  const now = Date.now(), ms = medsState();
+  if (!syncState.last || now - syncState.last > 3 * 60000 || !ms.at || now - ms.at > 10 * 60000) return false;
+  let added = false;
+  for (const o of dosesDue(now - 24 * 36e5, now - 60 * 60000)) {
+    if (!o.m.timeSensitive || o.st.last || !(o.m.times || []).includes(o.slot) || o.ts < (o.m.updatedAt || 0)) continue;
+    const id = `tsmiss_${o.m.id}_${o.day}_${o.slot.replace(":", "")}`;
+    if (S.flags.some((f) => f.id === id)) continue;
+    S.flags.push({ id, ts: now, kind: "incident", title: "Time-sensitive medicine not recorded", detail: `${medName(o.m)}, ${o.m.dose}, due at ${o.slot} ${dayLabel(o.ts).toLowerCase()}, has no entry on the medicines chart an hour later. Check whether it was given; record it on the chart, and get advice (GP, pharmacist or ${clientCountry() === "AU" ? "healthdirect" : "111"}) if it was missed.`, status: "open", raisedBy: stampId() });
+    added = true;
+  }
+  if (added) save();
+  return added;
+}
+// From a saved note to the medicines chart. Deliberately cautious: a medicine counts only when the same
+// sentence says it was given ("gave", "took", "had"...), and nothing in that sentence says it wasn't;
+// a refusal is suggested as Refused. Only dose times up to 30 minutes after the note are offered, the
+// latest unrecorded one first. Every suggestion opens the normal dose screen (with its checks and
+// warnings): nothing goes on the chart without the carer confirming it there (design 4.3).
+const NOTE_GIVEN = /(^|[^\p{L}])(gave|given|give|took|taken|take|had|has had|administered|swallowed|applied|put (?:on|in)|prompted|reminded|helped (?:her|him|them) (?:to )?take)([^\p{L}]|$)/iu;
+const NOTE_REFUSED = /(^|[^\p{L}])(refus\w*|declin\w*|spat\w*|said no|wouldn'?t (?:take|have)|would not (?:take|have)|won'?t (?:take|have)|didn'?t (?:want|take)|did not (?:want|take))([^\p{L}]|$)/iu;
+const NOTE_NOT = /(^|[^\p{L}])(no|not|never|didn'?t|did not|couldn'?t|could not|haven'?t|hasn'?t|run out|ran out|out of|reorder|missed|forgot|without|instead of)([^\p{L}]|$)/iu;
+const NOTE_GENERIC = /(^|[^\p{L}])(tablets?|medication|medicines?|meds|capsules?|pills)([^\p{L}]|$)/iu;
+// Every part of the name counts ("Vitamin D" needs the D), except units and the form.
+const wordsOf = (name) => String(name || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w && !/^(mg|mcg|ml|g|tablets?|capsules?|the|and|of)$/.test(w));
+const hasWord = (text, w) => new RegExp(`(^|[^\\p{L}\\p{N}])${w}([^\\p{L}\\p{N}]|$)`, "iu").test(text);
+function sentenceVerdict(sent) {
+  if (NOTE_REFUSED.test(sent)) return "R";
+  if (NOTE_NOT.test(sent)) return "";
+  return NOTE_GIVEN.test(sent) ? "G" : "";
+}
+function medsFromNote(n) {
+  const ms = medsState(), p = medsProfile();
+  if (!cloudOn() || medsSelf() || !ms.list.some((m) => !m.stoppedAt)) return { items: [], unknown: [], stopped: [] };
+  const sentences = String(n.note || "").split(/[.!?;\n]+/).map((x) => x.trim()).filter(Boolean), given = p.mode === "prompt" ? "P" : "T";
+  const latestOpen = (m, back) => dosesDue(n.ts - back, n.ts + 30 * 60000).filter((o) => o.m.id === m.id && !o.st.last && (o.m.times || []).includes(o.slot)).sort((a, b) => b.ts - a.ts)[0];
+  const items = [], seen = new Set(), stopped = [];
+  for (const m of ms.list) {
+    const ws = wordsOf(m.name); if (!ws.length) continue;
+    const sent = sentences.find((x) => ws.every((w) => hasWord(x, w))); if (!sent) continue;
+    const v = sentenceVerdict(sent); if (!v) continue;
+    if (m.stoppedAt) { stopped.push(m); continue; }
+    const code = v === "R" ? "R" : given;
+    if (m.prn) { items.push({ m, prn: true, code }); seen.add(m.id); continue; }
+    const o = latestOpen(m, 4 * 36e5); if (o) { items.push({ m, o, code }); seen.add(m.id); }
+  }
+  // "Gave her her morning tablets": doses due in the 2 hours before the note (or just after) not yet recorded.
+  const gsent = sentences.find((x) => NOTE_GENERIC.test(x) && sentenceVerdict(x));
+  if (gsent) {
+    const code = sentenceVerdict(gsent) === "R" ? "R" : given;
+    for (const m of ms.list.filter((x) => !x.stoppedAt && !x.prn && !seen.has(x.id))) { const o = latestOpen(m, 2 * 36e5); if (o) { items.push({ m, o, code }); seen.add(m.id); } }
+  }
+  // "Gave her aspirin" when aspirin isn't on the list: never added, only pointed out.
+  const listed = ms.list.flatMap((m) => wordsOf(m.name)).filter((w) => w.length >= 3);
+  const unknown = sentences.filter((x) => sentenceVerdict(x) === "G").flatMap((x) => [...x.matchAll(/\bgave (?:her|him|them) (?:some |her |his |their |a |an |the |two |one |\d+ )?([a-z]{5,})/gi)].map((y) => y[1].toLowerCase()))
+    .filter((w) => !NOTE_GENERIC.test(w) && !listed.some((nm) => nm === w || nm.startsWith(w) || w.startsWith(nm)) && !/^(breakfast|lunch|dinner|supper|drink|water|coffee|juice|squash|soup|toast|porridge|biscuit|snack|bath|shower|wash|shave|haircut|massage|help|hand|lift|cuddle|morning|evening|night|medicine|medication|walk|change|clean|bed|blanket|dressing|cream|lotion|glass|cup|plate|bowl|kiss|call|lots|plenty|something|everything|another)/.test(w));
+  return { items, unknown: [...new Set(unknown)], stopped };
+}
+function noteMedsHTML(n) {
+  const { items, unknown, stopped } = medsFromNote(n);
+  if (!items.length && !unknown.length && !stopped.length) return "";
+  return `<div class="card" style="box-shadow:none;display:grid;gap:8px"><strong class="small">Medicines chart: from this note</strong>
+    ${items.map((x, i) => `<div style="display:flex;gap:8px;align-items:center;justify-content:space-between"><span class="small">${x.prn ? "When required" : esc(x.o.slot)} <strong>${esc(medName(x.m))}</strong>: ${esc(doseLabel(x.code))}?</span>
+      <button class="btn secondary" data-nmrec="${i}" style="min-height:44px;padding:6px 12px;flex:none">Check and record</button></div>`).join("")}
+    ${stopped.length ? `<div class="warn small" style="background:var(--incident-soft)">The note mentions giving <strong>${stopped.map((m) => esc(m.name)).join(", ")}</strong>, which has been <strong>stopped</strong>. If it was given, record an incident and get advice (GP, pharmacist or ${clientCountry() === "AU" ? "healthdirect" : "111"}).</div>` : ""}
+    ${unknown.length ? `<div class="warn small">Is this a medicine? <strong>${unknown.map(esc).join(", ")}</strong> isn't on ${esc(S.client.name)}'s medicine list, so it hasn't been added to the chart. If it is a medicine, tell an administrator and check with the GP or pharmacist.</div>` : ""}
+    ${items.length ? '<p class="tiny muted" style="margin:0">Suggestions only. Each opens the dose screen to check and save; nothing is on the chart until you save it there.</p>' : ""}</div>`;
+}
+function bindNoteMeds(root, n, reopen) {
+  const { items } = medsFromNote(n);
+  root.querySelectorAll("[data-nmrec]").forEach((b) => (b.onclick = () => {
+    const x = items[+b.dataset.nmrec]; if (!x) return;
+    if (x.prn) return openPrnSheet(reopen, x.m.id);
+    openDoseSheet(x.m.id, x.o.day, x.o.slot, reopen, x.code);
+  }));
 }
 
 /* ---------- find ----------
@@ -1646,6 +1795,7 @@ function renderToday() {
   $("#qFind").onclick = () => openFind();
   bindTasks($("#view-today")); bindMeds(v);
   loadMeds(false).then((changed) => { if (changed && tab === "today" && !appBusy() && !userIsReading()) render(); });
+  if (raiseMissedTimeSensitive()) setTimeout(() => { if (tab === "today" && !appBusy()) render(); }, 0);
   if ($("#recentLog")) $("#recentLog").onclick = () => go("log");
   $("#qPlan").onclick = () => openPlan();
   if ($("#openPlan", v)) $("#openPlan", v).onclick = () => openPlan();
@@ -2590,6 +2740,7 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
     ${fl.length ? `<div style="display:grid;gap:6px"><div class="eyebrow">Flags raised</div>${fl.map((f) => `<div class="flag ${f.kind === "incident" ? "incident" : ""}"><div class="body"><strong>${esc(f.title)}</strong>${f.status === "resolved" ? ' <span class="muted small">(marked not needed)</span>' : ` <button class="link small" data-notneeded="${esc(f.id)}">Not needed</button>`}</div></div>`).join("")}</div>` : ""}
     ${(() => { const slot = careSlot(); const ts = tasksDone.map((title) => planTasks().find((t) => t.title === title)).filter((t) => t && !taskTick(t.id, slot.day));
       return ts.length ? `<div class="card" style="box-shadow:none;display:grid;gap:6px"><strong class="small">This note says these tasks were done. Tick them?</strong>${ts.map((t) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><span class="small">${esc(t.title)}</span><button class="btn secondary" data-svtask="${esc(t.id)}">Done</button></div>`).join("")}</div>` : ""; })()}
+    ${noteMedsHTML(n)}
     ${lostAt || lockedAt ? `<div class="warn small">${lockedAt ? "The recording stopped early because the screen locked or you left the app." : "Only part of the recording was turned into words."} Play it back; tap <strong>Add to this note</strong> for anything missing.</div>` : ""}
     ${unclear.length ? `<div class="warn small">These words may have been misheard: <strong>${unclear.map(esc).join(", ")}</strong>. Play the recording; if something's wrong, tap <strong>Add to this note</strong> and say the correct version.</div>` : ""}
     ${gaps.length ? `<div class="warn small">For a full incident record, you haven't said ${gaps.map((g) => gapNames[g] || g).map(esc).join(", ")}. Tap <strong>Add to this note</strong> to add it.</div>` : ""}
@@ -2605,6 +2756,7 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
     s.close(); openSavedNote(id, { unclear, gaps, lostAt, lockedAt, tasksDone }); render();
   }, "Tap again: not needed")));
   s.root.querySelectorAll("[data-svtask]").forEach((b) => (b.onclick = () => { const t = planTasks().find((x) => x.id === b.dataset.svtask); if (t) { tickTask({ t, day: careSlot().day }, "done", { noteId: id }); b.replaceWith(Object.assign(document.createElement("span"), { className: "small muted", textContent: "Ticked" })); } }));
+  bindNoteMeds(s.root, n, () => { s.close(); openSavedNote(id, { unclear, gaps, lostAt, lockedAt, tasksDone }); });
   const target = n.amends || n.id; // additions always hang off the original note
   $("#svAdd", s.root).onclick = () => openRecorder({ amends: target });
   $("#svType", s.root).onclick = () => openReview({ transcript: "", typed: true, amends: target });
@@ -2612,9 +2764,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-11.11";
+const PRIVACY_VERSION = "2026-10-11.12";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 11 · 11 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 12 · 11 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -2623,6 +2775,7 @@ const PRIVACY_HTML = `
 <ul>
 <li><strong>Your account:</strong> your name, username and password. We store passwords only in a scrambled (hashed) form that can't be read back.</li>
 <li><strong>Sign-in records:</strong> the time of each sign-in attempt, your IP address, your approximate location worked out from that address (town and country), your type of device and browser, and a random ID that this app stores on your device. We use these to keep accounts secure and to detect when a login is shared or used on another device.</li>
+<li><strong>Medicines training sign-off:</strong> if an administrator records that you're trained and assessed to support people with medicines: the date, who assessed you, the review date and any note. Administrators can see it; it's used to decide who can change the medicine list.</li>
 <li><strong>Your agreement:</strong> when you accepted this notice, and the IP address you accepted it from.</li>
 <li><strong>Clients:</strong> the name of each person being cared for, and the name and role of the person who agreed to Dignity Notes being used, with the date. This is kept on our relay so every carer sees the same agreement.</li>
 <li><strong>Carers for each client:</strong> which clients you care for, and your shift times for each. Administrators set who cares for whom. The other carers on the same client can see your name and shift.</li>
@@ -2630,7 +2783,7 @@ const PRIVACY_HTML = `
 </ul>
 <h3>Care notes and recordings</h3>
 <p><strong>Family accounts.</strong> An administrator can give an authorised family member their own sign-in, linked to a client. They see only the daily updates carers choose to share, coming appointments, messages with the carers, and incidents if that has been switched on for the client as agreed with the client or their representative. They never see care notes, recordings, the care plan, contacts or handovers. Messages and shared updates are kept in our cloud storage in the European Union with the client's record, and carers on the client see family messages.</p>
-<p><strong>Medicines chart.</strong> If carers help with a client's medicines, the client's medicine list (names, strengths, doses, times, prescriber, where each detail came from), their date of birth, NHS or Medicare number if given, GP practice and allergies, and every dose recorded (given, prompted, refused or not given, with reasons, who recorded it and when) are kept in our cloud storage in the European Union with the client's record. Carers on the client and the pilot administrators can see and add to it; family members cannot. Every change to the list is kept with who made it and who checked it, and dose entries are never changed (a correction is a new entry). The app records what carers did; it does not give medical advice.</p>
+<p><strong>Medicines chart.</strong> If carers help with a client's medicines, the client's medicine list (names, strengths, doses, times, prescriber, where each detail came from), their date of birth, NHS or Medicare number if given, GP practice and allergies, every dose recorded (given, prompted, refused or not given, with reasons, amounts, whether a when-required dose helped, who recorded it and when), and each new supply received (how much, from where, and whether the label matched) are kept in our cloud storage in the European Union with the client's record. Carers on the client and the pilot administrators can see and add to it; family members cannot. Every change to the list is kept with who made it and who checked it, and dose entries are never changed (a correction is a new entry). The app records what carers did; it does not give medical advice.</p>
 <p>Each client's <strong>contacts</strong> (names, roles, phone numbers, email and postal addresses of people and services involved in their care, such as the GP, pharmacy and family) are kept in our cloud storage in the European Union, shared with the client's carers and the pilot administrators, and can be added or changed by any of them; every change is kept with who made it. The last list seen is kept on the carer's device so it can be read without signal, and is removed if the carer is taken off the client.</p>
 <p>Each client's <strong>care plan and documents</strong> (such as an emergency care plan or risk assessments) are kept in our cloud storage, added by pilot administrators, and shown to the client's carers. A copy of the care plan, and of any document a carer opens, is kept on their device so it can be read without signal; document copies are removed when the document is taken out of the care plan, when the carer signs out, or when the client is removed.</p>
 <p>Care notes (with the words you spoke), voice recordings, flags, handovers and outings are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Your settings stay on your device only.</p>
@@ -2815,6 +2968,7 @@ function openTesters() {
           ${u.devices.length ? `<details style="margin-top:4px"><summary>Devices</summary>${u.devices.map((d, i) => `<div class="small" style="padding:4px 0"><strong>${i === 0 ? "Home device" : "Other device"}:</strong> ${esc(d.device)} · ${esc(d.place)}<br><span class="tiny muted">First ${esc(new Date(d.first).toLocaleString("en-GB"))} · last ${esc(new Date(d.last).toLocaleString("en-GB"))}</span></div>`).join("")}</details>` : ""}
           <div class="small" style="margin-top:8px"><strong>${u.role === "family" ? "Family of" : "Cares for"}</strong>${u.role === "admin" ? ' <span class="muted">(administrators can open every client)</span>' : ""}
             <div class="chips" style="margin-top:4px">${clients.length ? clients.map((c) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" data-assign="${esc(u.username)}" value="${esc(c.id)}" ${u.clients.includes(c.id) ? "checked" : ""} style="accent-color:var(--accent)">${esc(c.name)}</label>`).join("") : '<span class="muted">No clients yet</span>'}</div></div>
+          ${u.role !== "family" ? `<div class="small" style="margin-top:8px"><strong>Medicines</strong> ${u.meds && u.meds.valid ? `<span class="chip accent">Signed off</span> <span class="muted">assessed ${esc(u.meds.assessedOn)} by ${esc(u.meds.assessor)} · review by ${esc(u.meds.reviewOn)}</span>` : u.meds && u.meds.competent ? `<span class="chip incident">Review overdue (${esc(u.meds.reviewOn)})</span>` : '<span class="muted">Not signed off to support with medicines</span>'} <button class="link small" data-medsign="${esc(u.username)}" style="min-height:40px">${u.meds && u.meds.competent ? "Change" : "Sign off"}</button></div>` : ""}
           ${u.main ? '<p class="tiny muted" style="margin:6px 0 0">Main administrator: signs in with the relay settings, so the password and device lock aren\'t managed here.</p>' : `<label class="check small" style="margin-top:6px"><input type="checkbox" data-lock="${esc(u.username)}" ${u.locked ? "checked" : ""}><span>Lock to first device (refuse sign-ins from any other device)</span></label>`}
           ${u.devices.length ? `<button class="link small" data-devreset="${esc(u.username)}">Reset devices (next sign-in becomes the home device)</button>` : ""}</div>
         ${u.main ? "" : `<button class="link" data-reset="${esc(u.username)}">New password</button>
@@ -2830,6 +2984,27 @@ function openTesters() {
           if (session.client && c.value === session.client.id) checkClient(); // the client open on this phone changed
         } catch (e) { toast(e.message); c.checked = !c.checked; }
         boxes.forEach((x) => (x.disabled = false));
+      }));
+      // Medicines training sign-off (NICE NG67 1.11): who assessed them, when, and when to review (yearly).
+      listEl.querySelectorAll("[data-medsign]").forEach((b) => (b.onclick = () => {
+        const u = users.find((x) => x.username === b.dataset.medsign), c = u.meds || {}, slot = listEl.querySelector(`[data-slot="${CSS.escape(u.username)}"]`);
+        const today = dayKey(new Date()), inYear = (d) => { const x = new Date(d || today); x.setFullYear(x.getFullYear() + 1); return dayKey(x); };
+        slot.innerHTML = `<div class="card" style="box-shadow:none;display:grid;gap:10px;margin-top:8px"><strong class="small">Medicines sign-off: ${esc(u.name || u.username)}</strong>
+          <label class="check"><input type="checkbox" id="mcOn" ${c.competent ? "checked" : ""}><span>Trained and assessed as competent to support people with their medicines</span></label>
+          <label class="f">Date assessed<input type="date" id="mcOnDate" max="${today}" value="${esc(c.assessedOn || "")}"></label>
+          <label class="f">Assessed by<input type="text" id="mcBy" maxlength="80" value="${esc(c.assessor || "")}" placeholder="e.g. the training provider, pharmacist or GP"></label>
+          <label class="f">Review by (at most a year later)<input type="date" id="mcRev" value="${esc(c.reviewOn || "")}"></label>
+          <label class="f">Note (optional)<input type="text" id="mcNote" maxlength="200" value="${esc(c.note || "")}" placeholder="e.g. Course name, certificate seen"></label>
+          <p class="tiny muted" style="margin:0">NICE guidance: only trained carers, assessed as competent (including by watching them), give medicines or change the medicine list, and their competence is reviewed at least once a year. This records who assessed them; it isn't an assessment itself.</p>
+          <div class="row" style="gap:8px"><button class="btn primary" type="button" id="mcSave" style="flex:1">Save</button><button class="btn ghost" type="button" id="mcCancel" style="flex:1">Cancel</button></div></div>`;
+        $("#mcOnDate", slot).onchange = (e) => { $("#mcRev", slot).value = inYear(e.target.value); };
+        $("#mcCancel", slot).onclick = () => { slot.innerHTML = ""; };
+        $("#mcSave", slot).onclick = async () => {
+          try {
+            await relay("/admin/medscompetency", { username: u.username, competent: $("#mcOn", slot).checked, assessedOn: $("#mcOnDate", slot).value, assessor: $("#mcBy", slot).value, reviewOn: $("#mcRev", slot).value, note: $("#mcNote", slot).value });
+            toast($("#mcOn", slot).checked ? "Signed off for medicines" : "Medicines sign-off removed"); if (u.username === session.username && medsState()) medsState().at = 0; load();
+          } catch (e) { toast(e.message); }
+        };
       }));
       listEl.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
         try { await relay("/admin/remove", { username: b.dataset.remove }); toast("Removed"); load(); } catch (e) { toast(e.message); }
