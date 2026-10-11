@@ -1019,7 +1019,7 @@ function medsForHandover() {
 // Am I signed off to support with medicines (NG67 1.11)? Worked out on the phone from the review date,
 // so a sign-off that lapses while offline shows as lapsed. Unknown (not fetched yet) is not "no".
 const medsMe = () => medsState().me || null;
-const medsSignedOff = () => { const me = medsMe(); return !me || (typeof me.valid === "boolean" ? me.valid && (!me.reviewOn || me.reviewOn >= dayKey(new Date())) : !!me.competent && (!me.reviewOn || me.reviewOn >= dayKey(new Date()))); };
+const medsSignedOff = () => { const me = medsMe(); return !me || me.required === false || (typeof me.valid === "boolean" ? me.valid && (!me.reviewOn || me.reviewOn >= dayKey(new Date())) : !!me.competent && (!me.reviewOn || me.reviewOn >= dayKey(new Date()))); };
 const medsSignOffKnownNo = () => !!medsMe() && !medsSignedOff();
 /* ---------- medicines training certificates ----------
  * A carer uploads their certificate (or an administrator does it for them); another administrator
@@ -1103,7 +1103,7 @@ async function openMyTraining() {
     if (medsState()) medsState().me = me;
     const body = $("#mtBody", s.root); if (!body) return;
     const ok = me.valid || (me.competent && (!me.reviewOn || me.reviewOn >= dayKey(new Date())));
-    body.innerHTML = `<div class="${ok ? "card" : "warn"} small" style="${ok ? "box-shadow:none" : ""}">${ok ? `<strong>Signed off</strong> to support with medicines until ${esc(me.reviewOn)}${me.via === "certificate" ? " (from your verified certificate)" : me.assessor ? ` (assessed by ${esc(me.assessor)})` : ""}.` : "<strong>Not signed off yet.</strong> Upload your certificate; an administrator verifies it. A course without a practical assessment also needs someone to watch you give medicines, recorded by an administrator."}</div>
+    body.innerHTML = `${me.required === false && !ok ? `<div class="card small" style="box-shadow:none"><strong>Private carer:</strong> you don't need a medicines training sign-off to use the medicines chart. Training is still a good idea, and you can keep your certificates here.</div>` : `<div class="${ok ? "card" : "warn"} small" style="${ok ? "box-shadow:none" : ""}">${ok ? `<strong>Signed off</strong> to support with medicines until ${esc(me.reviewOn)}${me.via === "certificate" ? " (from your verified certificate)" : me.assessor ? ` (assessed by ${esc(me.assessor)})` : ""}.` : "<strong>Not signed off yet.</strong> Upload your certificate; an administrator verifies it. A course without a practical assessment also needs someone to watch you give medicines, recorded by an administrator."}</div>`}
       ${(me.certificates || []).map((c) => certRowHTML(c, session.username, { admin: session.role === "admin", self: true })).join("") || '<div class="empty">No certificates yet.</div>'}
       <button class="btn primary block" id="mtAdd">Add a certificate</button>`;
     bindCerts(body, me.certificates || [], openMyTraining, draw);
@@ -2857,9 +2857,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-11.13";
+const PRIVACY_VERSION = "2026-10-11.14";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 13 · 11 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 14 · 11 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -2868,6 +2868,7 @@ const PRIVACY_HTML = `
 <ul>
 <li><strong>Your account:</strong> your name, username and password. We store passwords only in a scrambled (hashed) form that can't be read back.</li>
 <li><strong>Sign-in records:</strong> the time of each sign-in attempt, your IP address, your approximate location worked out from that address (town and country), your type of device and browser, and a random ID that this app stores on your device. We use these to keep accounts secure and to detect when a login is shared or used on another device.</li>
+<li><strong>How you work, for medicines:</strong> whether an administrator has recorded you as a private carer (self-employed or employed by the client or family) or an agency carer, and who recorded it. It decides whether a medicines training sign-off is needed.</li>
 <li><strong>Medicines training sign-off:</strong> if an administrator records that you're trained and assessed to support people with medicines: the date, who assessed you, the review date and any note. Administrators can see it; it's used to decide who can change the medicine list.</li>
 <li><strong>Medicines training certificates:</strong> if you or an administrator upload one: the certificate file (a photo or PDF, which may show your full name and a certificate number), the course, who issued it, the dates, whether it included a practical assessment, who uploaded it, and who verified it and when. Only you and administrators can see it. It's deleted when you remove it (before it's verified), when an administrator removes it, or when your account is removed.</li>
 <li><strong>Your agreement:</strong> when you accepted this notice, and the IP address you accepted it from.</li>
@@ -3038,9 +3039,11 @@ function openTesters() {
       <label class="f">Password<span class="row"><input type="text" id="tPass" style="flex:1 1 170px" autocomplete="off" spellcheck="false"><button class="btn ghost" type="button" id="tGen" style="flex:0 0 auto">Suggest</button></span></label>
       ${session.client ? `<label class="check"><input type="checkbox" id="tCares" checked><span>Link to ${esc(session.client.name)} (cares for, or family of)</span></label>` : ""}
       <label class="f">Their accent (for speech-to-text)<select id="tAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
+      <label class="f" id="tTypeWrap">Works as (for medicines)<select id="tCarerType"><option value="private">A private carer: self-employed, or employed by the client or family (no training sign-off required)</option><option value="agency">An agency carer: employed by a registered care provider (training sign-off required)</option></select></label>
       <label class="f">They are<select id="tRole"><option value="tester">A carer</option><option value="family">A family member (sees shared updates and messages only)</option><option value="admin">An administrator (can add and remove people too)</option></select></label>
       <button class="btn primary">Add person</button><div class="small" id="tMsg"></div></form>`);
   const listEl = $("#tList", s.root);
+  $("#tRole", s.root).addEventListener("change", (e) => { $("#tTypeWrap", s.root).hidden = e.target.value === "family"; });
   const showShare = (el, username, password, label) => {
     el.innerHTML = `<div class="warn" style="display:grid;gap:8px"><span><strong>${esc(label)}</strong> Send these details to the tester yourself:</span>
       <code style="white-space:pre-wrap;font-size:13px">${esc(loginText(username, password))}</code>
@@ -3062,7 +3065,8 @@ function openTesters() {
           ${u.devices.length ? `<details style="margin-top:4px"><summary>Devices</summary>${u.devices.map((d, i) => `<div class="small" style="padding:4px 0"><strong>${i === 0 ? "Home device" : "Other device"}:</strong> ${esc(d.device)} · ${esc(d.place)}<br><span class="tiny muted">First ${esc(new Date(d.first).toLocaleString("en-GB"))} · last ${esc(new Date(d.last).toLocaleString("en-GB"))}</span></div>`).join("")}</details>` : ""}
           <div class="small" style="margin-top:8px"><strong>${u.role === "family" ? "Family of" : "Cares for"}</strong>${u.role === "admin" ? ' <span class="muted">(administrators can open every client)</span>' : ""}
             <div class="chips" style="margin-top:4px">${clients.length ? clients.map((c) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" data-assign="${esc(u.username)}" value="${esc(c.id)}" ${u.clients.includes(c.id) ? "checked" : ""} style="accent-color:var(--accent)">${esc(c.name)}</label>`).join("") : '<span class="muted">No clients yet</span>'}</div></div>
-          ${u.role !== "family" ? `<div class="small" style="margin-top:8px"><strong>Medicines</strong> ${u.meds && u.meds.valid ? `<span class="chip accent">Signed off</span> <span class="muted">${u.meds.via === "certificate" ? "verified certificate" : `assessed ${esc(u.meds.assessedOn)} by ${esc(u.meds.assessor)}`} · review by ${esc(u.meds.reviewOn)}</span>` : u.meds && u.meds.competent ? `<span class="chip incident">Review overdue (${esc(u.meds.reviewOn)})</span>` : (u.meds && (u.meds.certificates || []).some((c) => c.verifiedAt && !c.practical)) ? '<span class="chip follow">Course done: observed assessment needed</span>' : '<span class="muted">Not signed off to support with medicines</span>'} <button class="link small" data-medsign="${esc(u.username)}" style="min-height:40px">${u.meds && u.meds.assessedOn ? "Change" : "Record assessment"}</button>
+          ${u.role !== "family" ? `<div class="small" style="margin-top:8px"><strong>Medicines</strong> ${u.meds && u.meds.valid ? `<span class="chip accent">Signed off</span> <span class="muted">${u.meds.via === "certificate" ? "verified certificate" : `assessed ${esc(u.meds.assessedOn)} by ${esc(u.meds.assessor)}`} · review by ${esc(u.meds.reviewOn)}</span>` : u.meds && u.meds.competent ? `<span class="chip incident">Review overdue (${esc(u.meds.reviewOn)})</span>` : (u.meds && (u.meds.certificates || []).some((c) => c.verifiedAt && !c.practical)) ? '<span class="chip follow">Course done: observed assessment needed</span>' : u.meds && u.meds.required === false ? '<span class="chip">Private carer</span> <span class="muted">no sign-off required</span>' : '<span class="muted">Not signed off to support with medicines</span>'} <button class="link small" data-medsign="${esc(u.username)}" style="min-height:40px">${u.meds && u.meds.assessedOn ? "Change" : "Record assessment"}</button>
+            ${u.username === session.username ? (u.meds && u.meds.carerType ? `<div class="tiny muted">Works as: ${u.meds.carerType === "private" ? "private carer" : "agency carer"}</div>` : "") : `<label class="f" style="margin-top:4px">Works as<select data-carertype="${esc(u.username)}"><option value="" ${u.meds && u.meds.carerType ? "" : "selected"} disabled>Not set: sign-off required</option><option value="private" ${u.meds && u.meds.carerType === "private" ? "selected" : ""}>Private carer (no sign-off required)</option><option value="agency" ${u.meds && u.meds.carerType === "agency" ? "selected" : ""}>Agency carer (sign-off required)</option></select></label>`}
             ${(() => { const cs = (u.meds && u.meds.certificates) || [], waiting = cs.filter((c) => !c.verifiedAt).length; return `<details style="margin-top:4px" ${waiting ? "open" : ""}><summary>Certificates (${cs.length})${waiting ? ` <span class="chip follow">${waiting} to verify</span>` : ""}</summary><div data-certs="${esc(u.username)}" style="display:grid;gap:8px;margin-top:6px">${cs.map((c) => certRowHTML(c, u.username, { admin: true, self: u.username === session.username })).join("")}<button class="btn ghost" type="button" data-certadd="${esc(u.username)}">Add a certificate for ${esc(u.name || u.username)}</button></div></details>`; })()}</div>` : ""}
           ${u.main ? '<p class="tiny muted" style="margin:6px 0 0">Main administrator: signs in with the relay settings, so the password and device lock aren\'t managed here.</p>' : `<label class="check small" style="margin-top:6px"><input type="checkbox" data-lock="${esc(u.username)}" ${u.locked ? "checked" : ""}><span>Lock to first device (refuse sign-ins from any other device)</span></label>`}
           ${u.devices.length ? `<button class="link small" data-devreset="${esc(u.username)}">Reset devices (next sign-in becomes the home device)</button>` : ""}</div>
@@ -3079,6 +3083,10 @@ function openTesters() {
           if (session.client && c.value === session.client.id) checkClient(); // the client open on this phone changed
         } catch (e) { toast(e.message); c.checked = !c.checked; }
         boxes.forEach((x) => (x.disabled = false));
+      }));
+      listEl.querySelectorAll("[data-carertype]").forEach((sel) => (sel.onchange = async () => {
+        try { await relay("/admin/carertype", { username: sel.dataset.carertype, carerType: sel.value }); toast(sel.value === "private" ? "Private carer: no sign-off required" : "Agency carer: sign-off required"); load(); }
+        catch (e) { toast(e.message); load(); }
       }));
       // Certificates: view, verify (not your own), remove, or add one for them.
       listEl.querySelectorAll("[data-certs]").forEach((box) => { const u = users.find((x) => x.username === box.dataset.certs); bindCerts(box, (u.meds && u.meds.certificates) || [], openTesters, load); });
@@ -3144,7 +3152,7 @@ function openTesters() {
     if (!name || !username) { m.textContent = "Enter a name and a username."; return; }
     try {
       const role = $("#tRole").value;
-      await relay("/admin/add", { name, username, password, role, accent: $("#tAccent") ? $("#tAccent").value : undefined });
+      await relay("/admin/add", { name, username, password, role, accent: $("#tAccent") ? $("#tAccent").value : undefined, carerType: role === "family" ? undefined : $("#tCarerType").value });
       // Put them straight onto the client open on this phone, so they can be handed over to at once.
       const cares = $("#tCares") && $("#tCares").checked && session.client;
       if (cares) { try { await relay("/admin/assign", { username, clientIds: [session.client.id] }); await checkClient(); } catch (err) { toast("Added, but couldn't put them on " + session.client.name + ": " + err.message); } }
