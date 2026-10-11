@@ -169,7 +169,7 @@ audio{width:100%;height:40px}
 
 /* Forms */
 label.f{display:grid;gap:6px;font-weight:600;font-size:14px}
-input[type=text],input[type=password],select,textarea{width:100%;border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:12px 14px;font-size:16px;font-weight:400}
+input[type=text],input[type=password],input[type=date],input[type=number],input[type=search],select,textarea{width:100%;border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:12px 14px;font-size:16px;font-weight:400}
 textarea{resize:vertical;min-height:120px;line-height:1.55}
 textarea.note-edit{font-family:var(--f-note);font-size:16.5px;min-height:170px}
 .check{display:flex;gap:12px;align-items:flex-start;font-size:15px}
@@ -231,6 +231,28 @@ textarea.note-edit{font-family:var(--f-note);font-size:16.5px;min-height:170px}
 .fd-link { display: block; text-align: left; height: auto; padding: 10px 14px; }
 .fd-link .body strong { display: block; }
 .fd-link .muted { font-weight: 400; }
+/* Medicines chart (MAR): the paper-style grid, scrolling sideways on a phone; printed landscape. */
+.mar-head{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 16px}
+.mar-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+table.mar{border-collapse:collapse;font-size:12px;min-width:100%}
+table.mar th,table.mar td{border:1px solid var(--line);padding:3px 4px;text-align:center;vertical-align:middle;min-width:24px}
+table.mar .mn{text-align:left;min-width:150px;max-width:220px;position:sticky;left:0;background:var(--surface)}
+table.mar td.off{background:var(--surface-2)}
+table.mar td.miss{background:var(--incident-soft)}
+table.mar td.c-R,table.mar td.c-NT,table.mar td.c-E{background:var(--follow-soft)}
+table.mar .ini{display:block;font-size:9px;color:var(--ink-2)}
+table.mar.who{min-width:0;width:auto}
+table.mar.who td,table.mar.who th{text-align:left;min-width:120px}
+@media print{
+  @page{size:A4 landscape;margin:8mm}
+  body.printing-mar>*:not(#fullRoot){display:none!important}
+  body.printing-mar .full{position:static;overflow:visible;background:#fff;color:#000}
+  body.printing-mar .noprint{display:none!important}
+  body.printing-mar table.mar td{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-mar .mar-wrap{overflow:visible;border:0}
+  body.printing-mar table.mar .mn{position:static}
+  body.printing-mar table.mar th,body.printing-mar table.mar td{border-color:#999}
+}
 /* Family accounts see only their own screen (no recording, tabs or carer on duty). */
 .family-mode nav.tabs, .family-mode #dutyBtn, .family-mode #outBanner { display: none !important; }
 </style>
