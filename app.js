@@ -1019,8 +1019,99 @@ function medsForHandover() {
 // Am I signed off to support with medicines (NG67 1.11)? Worked out on the phone from the review date,
 // so a sign-off that lapses while offline shows as lapsed. Unknown (not fetched yet) is not "no".
 const medsMe = () => medsState().me || null;
-const medsSignedOff = () => { const me = medsMe(); return !me || (!!me.competent && (!me.reviewOn || me.reviewOn >= dayKey(new Date()))); };
+const medsSignedOff = () => { const me = medsMe(); return !me || (typeof me.valid === "boolean" ? me.valid && (!me.reviewOn || me.reviewOn >= dayKey(new Date())) : !!me.competent && (!me.reviewOn || me.reviewOn >= dayKey(new Date()))); };
 const medsSignOffKnownNo = () => !!medsMe() && !medsSignedOff();
+/* ---------- medicines training certificates ----------
+ * A carer uploads their certificate (or an administrator does it for them); another administrator
+ * verifies it. A verified certificate for a course with a practical or observed assessment counts as
+ * the medicines sign-off for a year (or to its expiry). A knowledge-only course still needs an observed
+ * assessment recorded in Manage people. Only the person and administrators see a certificate.
+ */
+const certStatus = (c) => !c.verifiedAt ? "Waiting for an administrator to verify it"
+  : c.counts ? `Verified by ${c.verifiedBy}: counts as the medicines sign-off until ${c.reviewOn}`
+  : !c.practical ? `Verified by ${c.verifiedBy}: a course without a practical assessment, so an observed assessment is still needed`
+  : `Verified by ${c.verifiedBy}: over a year old or expired (${c.reviewOn}), so it needs renewing`;
+const certRowHTML = (c, who, { admin = false, self = false } = {}) => `<div class="card" style="box-shadow:none;display:grid;gap:4px;padding:10px 12px">
+  <div><strong>${esc(c.course)}</strong> <span class="muted small">· ${esc(c.issuer)} · ${esc(c.awardedOn)}${c.expiresOn ? " · expires " + esc(c.expiresOn) : ""}</span></div>
+  <div class="small ${c.counts ? "" : "muted"}">${c.counts ? '<span class="chip accent">Counts</span> ' : ""}${esc(certStatus(c))}</div>
+  <div class="tiny muted">Uploaded by ${esc(c.uploadedBy)} ${esc(dayLabel(c.uploadedAt).toLowerCase())}${c.practical ? " · includes a practical assessment" : " · knowledge only"}${c.verifyNote ? " · " + esc(c.verifyNote) : ""}</div>
+  <div class="row" style="gap:8px"><button class="btn ghost" data-certview="${esc(who)}|${esc(c.id)}|${esc(c.type)}" style="flex:1">View</button>
+    ${admin && !self ? `<button class="btn ${c.verifiedAt ? "ghost" : "primary"}" data-certverify="${esc(who)}|${esc(c.id)}" style="flex:1">${c.verifiedAt ? "Change check" : "Verify"}</button>` : ""}
+    ${admin || !c.verifiedAt ? `<button class="btn ghost" data-certrm="${esc(who)}|${esc(c.id)}" style="flex:1">Remove</button>` : ""}</div></div>`;
+// The app shows one sheet at a time, so each certificate sheet goes back to the screen it came from
+// (Settings → Medicines training, or Manage people) when it closes, which also shows the change.
+async function viewCert(who, id, type, back) {
+  let url = "";
+  const s = sheet(`${sheetHead("Certificate")}<div id="cvBody"><div class="recorder"><div class="spinner"></div></div></div>`, { onClose: () => { if (url) setTimeout(() => URL.revokeObjectURL(url), 60000); if (back) back(); } });
+  try {
+    const r = await syncFetch("/me/medscert/get", { body: JSON.stringify({ username: who, id }) }), blob = await r.blob();
+    url = URL.createObjectURL(new Blob([blob], { type }));
+    $("#cvBody", s.root).innerHTML = type.startsWith("image/") ? `<img src="${url}" alt="Certificate" style="width:100%;border-radius:10px;border:1px solid var(--line)">` : `<a class="btn primary block" href="${url}" target="_blank" rel="noopener">Open the PDF</a>`;
+  } catch (e) { if ($("#cvBody", s.root)) $("#cvBody", s.root).innerHTML = `<div class="warn">Couldn't open it: ${esc(e.message)}</div>`; }
+}
+function openCertUpload(who, back) {
+  const s = sheet(`${sheetHead("Add a certificate")}
+    <p class="small muted" style="margin:0">A photo or PDF of the medicines training certificate. An administrator checks it's genuine. Pilot: made-up details only.</p>
+    <label class="f">Certificate (PDF, JPG or PNG, up to 10 MB)<input type="file" id="cuFile" accept="application/pdf,image/jpeg,image/png"></label>
+    <label class="f">Course name<input type="text" id="cuCourse" maxlength="120" placeholder="e.g. Level 2 Certificate in Safe Handling and Administration of Medication"></label>
+    <label class="f">Issued by<input type="text" id="cuIssuer" maxlength="80" placeholder="e.g. NQual, NCFE, or a registered training organisation"></label>
+    <div class="row" style="gap:8px"><label class="f" style="flex:1">Date awarded<input type="date" id="cuDate" max="${dayKey(new Date())}"></label><label class="f" style="flex:1">Expires (if it says)<input type="date" id="cuExp"></label></div>
+    <label class="check"><input type="checkbox" id="cuPrac"><span>The course included a practical or observed assessment of giving medicines</span></label>
+    <button class="btn primary block" id="cuSave">Upload</button>`, { onClose: back, guard: () => !!$("#cuFile", document).files.length });
+  const $s = (q) => $(q, s.root);
+  $s("#cuSave").onclick = async () => {
+    const f = $s("#cuFile").files[0];
+    if (!f) return toast("Choose the certificate file");
+    if (!/^(application\/pdf|image\/jpeg|image\/png)$/.test(f.type)) return toast("It must be a PDF, JPG or PNG");
+    if (f.size > 10 * 1024 * 1024) return toast("Certificates can be up to 10 MB");
+    const q = new URLSearchParams({ username: who || "", course: $s("#cuCourse").value.trim(), issuer: $s("#cuIssuer").value.trim(), awarded: $s("#cuDate").value, expires: $s("#cuExp").value, practical: $s("#cuPrac").checked ? "1" : "0" });
+    $s("#cuSave").disabled = true;
+    try { await syncFetch(`/me/medscert/put?${q}`, { headers: { "Content-Type": f.type }, body: f }); toast("Uploaded. An administrator will verify it."); if (medsState()) medsState().at = 0; s.close(); }
+    catch (e) { toast(e.message); $s("#cuSave").disabled = false; }
+  };
+}
+function openCertVerify(who, id, cert, back) {
+  const s = sheet(`${sheetHead("Verify certificate")}
+    <p class="small" style="margin:0"><strong>${esc(cert.course)}</strong> · ${esc(cert.issuer)} · ${esc(cert.awardedOn)}</p>
+    <p class="small muted" style="margin:0">Open the certificate and check: it's this person's, it's genuine (check with the issuer if unsure), it's about giving medicines, and it's in date.</p>
+    <p class="tiny muted" style="margin:0">${esc(cert.uploadedBy)} said it ${cert.practical ? "included" : "didn't include"} a practical assessment. Check the certificate or with the issuer yourself.</p>
+    <label class="check"><input type="checkbox" id="cvPrac"><span>I've confirmed the course included a practical or observed assessment of giving medicines (then it counts as the sign-off)</span></label>
+    <label class="f">Note (optional)<input type="text" id="cvNote" maxlength="200" placeholder="e.g. Checked with the awarding body" value="${esc(cert.verifyNote || "")}"></label>
+    <div class="row" style="gap:8px"><button class="btn primary" id="cvYes" style="flex:1">It's genuine</button>${cert.verifiedAt ? '<button class="btn ghost" id="cvNo" style="flex:1">Not verified</button>' : ""}</div>`, { onClose: back });
+  const send = async (verified) => {
+    try { await relay("/me/medscert/verify", { username: who, id, verified, practical: $("#cvPrac", s.root).checked, note: $("#cvNote", s.root).value }); toast(verified ? "Verified" : "Marked not verified"); s.close(); }
+    catch (e) { toast(e.message); }
+  };
+  $("#cvYes", s.root).onclick = () => send(true);
+  if ($("#cvNo", s.root)) $("#cvNo", s.root).onclick = () => send(false);
+}
+function bindCerts(root, list, back, redraw) {
+  root.querySelectorAll("[data-certview]").forEach((b) => (b.onclick = () => { const [w, id, type] = b.dataset.certview.split("|"); viewCert(w, id, type, back); }));
+  root.querySelectorAll("[data-certverify]").forEach((b) => (b.onclick = () => { const [w, id] = b.dataset.certverify.split("|"); openCertVerify(w, id, list.find((c) => c.id === id), back); }));
+  root.querySelectorAll("[data-certrm]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
+    const [w, id] = b.dataset.certrm.split("|");
+    try { await relay("/me/medscert/remove", { username: w, id }); toast("Removed"); if (medsState()) medsState().at = 0; redraw(); } catch (e) { toast(e.message); }
+  }, "Tap again to remove")));
+}
+// Settings → Medicines training: your own sign-off and certificates.
+async function openMyTraining() {
+  const s = sheet(`${sheetHead("Medicines training")}<div id="mtBody" style="display:grid;gap:10px"><div class="recorder"><div class="spinner"></div></div></div>`, { onClose: openSettings });
+  const draw = async () => {
+    let me;
+    try { me = (await syncJSON("/me/medscert/list", {})).meds || { certificates: [] }; }
+    catch (e) { const b = $("#mtBody", s.root); if (b) b.innerHTML = `<div class="warn">Couldn't load your training: ${esc(e.message)}</div>`; return; }
+    if (medsState()) medsState().me = me;
+    const body = $("#mtBody", s.root); if (!body) return;
+    const ok = me.valid || (me.competent && (!me.reviewOn || me.reviewOn >= dayKey(new Date())));
+    body.innerHTML = `<div class="${ok ? "card" : "warn"} small" style="${ok ? "box-shadow:none" : ""}">${ok ? `<strong>Signed off</strong> to support with medicines until ${esc(me.reviewOn)}${me.via === "certificate" ? " (from your verified certificate)" : me.assessor ? ` (assessed by ${esc(me.assessor)})` : ""}.` : "<strong>Not signed off yet.</strong> Upload your certificate; an administrator verifies it. A course without a practical assessment also needs someone to watch you give medicines, recorded by an administrator."}</div>
+      ${(me.certificates || []).map((c) => certRowHTML(c, session.username, { admin: session.role === "admin", self: true })).join("") || '<div class="empty">No certificates yet.</div>'}
+      <button class="btn primary block" id="mtAdd">Add a certificate</button>`;
+    bindCerts(body, me.certificates || [], openMyTraining, draw);
+    $("#mtAdd", s.root).onclick = () => openCertUpload("", openMyTraining);
+  };
+  draw();
+}
+
 const medsSignOffText = () => { const me = medsMe() || {}; return me.competent ? `Your medicines sign-off was due for review on ${me.reviewOn}.` : "You're not signed off as trained to support with medicines."; };
 // A dose given by someone not signed off is flagged for an administrator (whichever screen it came from).
 function flagUnsignedGiven(m, when) {
@@ -2127,6 +2218,7 @@ function openSettings() {
       <p class="small" style="margin:0">Signed in as <strong>${esc(session.name)}</strong> <span class="muted">(${esc(session.username)} · ${session.role === "admin" ? "Administrator" : session.role === "family" ? "Family" : "Carer"})</span></p>
       ${session.role === "admin" ? '<button class="btn primary" id="stTesters">Manage people</button>' : ""}
       <button class="btn secondary" id="stTest">Check AI connection</button><div class="small" id="stMsg"></div>
+      ${session.local || session.role === "family" ? "" : '<button class="btn secondary" id="stTrain">Medicines training</button>'}
       ${session.local ? "" : '<button class="btn secondary" id="stPw">Change my password</button><div id="stPush"></div>'}
       <button class="btn ghost" id="stOut">Sign out</button></div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Client</h3>
@@ -2179,6 +2271,7 @@ function openSettings() {
   };
   if ($("#stTesters")) $("#stTesters").onclick = () => { s.close(); openTesters(); };
   if ($("#stPw")) $("#stPw").onclick = openChangePassword;
+  if ($("#stTrain")) $("#stTrain").onclick = openMyTraining;
   if ($("#stPush")) drawPushSetting($("#stPush"));
   if ($("#stCountry") && !$("#stCountry").disabled) $("#stCountry").onchange = async (e) => {
     const was = clientCountry(), want = e.target.value;
@@ -2764,9 +2857,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-11.12";
+const PRIVACY_VERSION = "2026-10-11.13";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 12 · 11 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 13 · 11 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -2776,6 +2869,7 @@ const PRIVACY_HTML = `
 <li><strong>Your account:</strong> your name, username and password. We store passwords only in a scrambled (hashed) form that can't be read back.</li>
 <li><strong>Sign-in records:</strong> the time of each sign-in attempt, your IP address, your approximate location worked out from that address (town and country), your type of device and browser, and a random ID that this app stores on your device. We use these to keep accounts secure and to detect when a login is shared or used on another device.</li>
 <li><strong>Medicines training sign-off:</strong> if an administrator records that you're trained and assessed to support people with medicines: the date, who assessed you, the review date and any note. Administrators can see it; it's used to decide who can change the medicine list.</li>
+<li><strong>Medicines training certificates:</strong> if you or an administrator upload one: the certificate file (a photo or PDF, which may show your full name and a certificate number), the course, who issued it, the dates, whether it included a practical assessment, who uploaded it, and who verified it and when. Only you and administrators can see it. It's deleted when you remove it (before it's verified), when an administrator removes it, or when your account is removed.</li>
 <li><strong>Your agreement:</strong> when you accepted this notice, and the IP address you accepted it from.</li>
 <li><strong>Clients:</strong> the name of each person being cared for, and the name and role of the person who agreed to Dignity Notes being used, with the date. This is kept on our relay so every carer sees the same agreement.</li>
 <li><strong>Carers for each client:</strong> which clients you care for, and your shift times for each. Administrators set who cares for whom. The other carers on the same client can see your name and shift.</li>
@@ -2968,7 +3062,8 @@ function openTesters() {
           ${u.devices.length ? `<details style="margin-top:4px"><summary>Devices</summary>${u.devices.map((d, i) => `<div class="small" style="padding:4px 0"><strong>${i === 0 ? "Home device" : "Other device"}:</strong> ${esc(d.device)} · ${esc(d.place)}<br><span class="tiny muted">First ${esc(new Date(d.first).toLocaleString("en-GB"))} · last ${esc(new Date(d.last).toLocaleString("en-GB"))}</span></div>`).join("")}</details>` : ""}
           <div class="small" style="margin-top:8px"><strong>${u.role === "family" ? "Family of" : "Cares for"}</strong>${u.role === "admin" ? ' <span class="muted">(administrators can open every client)</span>' : ""}
             <div class="chips" style="margin-top:4px">${clients.length ? clients.map((c) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" data-assign="${esc(u.username)}" value="${esc(c.id)}" ${u.clients.includes(c.id) ? "checked" : ""} style="accent-color:var(--accent)">${esc(c.name)}</label>`).join("") : '<span class="muted">No clients yet</span>'}</div></div>
-          ${u.role !== "family" ? `<div class="small" style="margin-top:8px"><strong>Medicines</strong> ${u.meds && u.meds.valid ? `<span class="chip accent">Signed off</span> <span class="muted">assessed ${esc(u.meds.assessedOn)} by ${esc(u.meds.assessor)} · review by ${esc(u.meds.reviewOn)}</span>` : u.meds && u.meds.competent ? `<span class="chip incident">Review overdue (${esc(u.meds.reviewOn)})</span>` : '<span class="muted">Not signed off to support with medicines</span>'} <button class="link small" data-medsign="${esc(u.username)}" style="min-height:40px">${u.meds && u.meds.competent ? "Change" : "Sign off"}</button></div>` : ""}
+          ${u.role !== "family" ? `<div class="small" style="margin-top:8px"><strong>Medicines</strong> ${u.meds && u.meds.valid ? `<span class="chip accent">Signed off</span> <span class="muted">${u.meds.via === "certificate" ? "verified certificate" : `assessed ${esc(u.meds.assessedOn)} by ${esc(u.meds.assessor)}`} · review by ${esc(u.meds.reviewOn)}</span>` : u.meds && u.meds.competent ? `<span class="chip incident">Review overdue (${esc(u.meds.reviewOn)})</span>` : (u.meds && (u.meds.certificates || []).some((c) => c.verifiedAt && !c.practical)) ? '<span class="chip follow">Course done: observed assessment needed</span>' : '<span class="muted">Not signed off to support with medicines</span>'} <button class="link small" data-medsign="${esc(u.username)}" style="min-height:40px">${u.meds && u.meds.assessedOn ? "Change" : "Record assessment"}</button>
+            ${(() => { const cs = (u.meds && u.meds.certificates) || [], waiting = cs.filter((c) => !c.verifiedAt).length; return `<details style="margin-top:4px" ${waiting ? "open" : ""}><summary>Certificates (${cs.length})${waiting ? ` <span class="chip follow">${waiting} to verify</span>` : ""}</summary><div data-certs="${esc(u.username)}" style="display:grid;gap:8px;margin-top:6px">${cs.map((c) => certRowHTML(c, u.username, { admin: true, self: u.username === session.username })).join("")}<button class="btn ghost" type="button" data-certadd="${esc(u.username)}">Add a certificate for ${esc(u.name || u.username)}</button></div></details>`; })()}</div>` : ""}
           ${u.main ? '<p class="tiny muted" style="margin:6px 0 0">Main administrator: signs in with the relay settings, so the password and device lock aren\'t managed here.</p>' : `<label class="check small" style="margin-top:6px"><input type="checkbox" data-lock="${esc(u.username)}" ${u.locked ? "checked" : ""}><span>Lock to first device (refuse sign-ins from any other device)</span></label>`}
           ${u.devices.length ? `<button class="link small" data-devreset="${esc(u.username)}">Reset devices (next sign-in becomes the home device)</button>` : ""}</div>
         ${u.main ? "" : `<button class="link" data-reset="${esc(u.username)}">New password</button>
@@ -2985,15 +3080,20 @@ function openTesters() {
         } catch (e) { toast(e.message); c.checked = !c.checked; }
         boxes.forEach((x) => (x.disabled = false));
       }));
+      // Certificates: view, verify (not your own), remove, or add one for them.
+      listEl.querySelectorAll("[data-certs]").forEach((box) => { const u = users.find((x) => x.username === box.dataset.certs); bindCerts(box, (u.meds && u.meds.certificates) || [], openTesters, load); });
+      listEl.querySelectorAll("[data-certadd]").forEach((b) => (b.onclick = () => openCertUpload(b.dataset.certadd, openTesters)));
       // Medicines training sign-off (NICE NG67 1.11): who assessed them, when, and when to review (yearly).
       listEl.querySelectorAll("[data-medsign]").forEach((b) => (b.onclick = () => {
         const u = users.find((x) => x.username === b.dataset.medsign), c = u.meds || {}, slot = listEl.querySelector(`[data-slot="${CSS.escape(u.username)}"]`);
         const today = dayKey(new Date()), inYear = (d) => { const x = new Date(d || today); x.setFullYear(x.getFullYear() + 1); return dayKey(x); };
+        const certNow = (c.certificates || []).find((x) => x.counts);
         slot.innerHTML = `<div class="card" style="box-shadow:none;display:grid;gap:10px;margin-top:8px"><strong class="small">Medicines sign-off: ${esc(u.name || u.username)}</strong>
+          ${certNow ? `<div class="warn small">A verified certificate (${esc(certNow.course)}) also signs them off until ${esc(certNow.reviewOn)}. To stop them handling medicines, also open Certificates and mark it <strong>Not verified</strong>.</div>` : ""}
           <label class="check"><input type="checkbox" id="mcOn" ${c.competent ? "checked" : ""}><span>Trained and assessed as competent to support people with their medicines</span></label>
           <label class="f">Date assessed<input type="date" id="mcOnDate" max="${today}" value="${esc(c.assessedOn || "")}"></label>
           <label class="f">Assessed by<input type="text" id="mcBy" maxlength="80" value="${esc(c.assessor || "")}" placeholder="e.g. the training provider, pharmacist or GP"></label>
-          <label class="f">Review by (at most a year later)<input type="date" id="mcRev" value="${esc(c.reviewOn || "")}"></label>
+          <label class="f">Review by (at most a year later)<input type="date" id="mcRev" value="${esc(c.assessedOn ? c.reviewOn || "" : "")}"></label>
           <label class="f">Note (optional)<input type="text" id="mcNote" maxlength="200" value="${esc(c.note || "")}" placeholder="e.g. Course name, certificate seen"></label>
           <p class="tiny muted" style="margin:0">NICE guidance: only trained carers, assessed as competent (including by watching them), give medicines or change the medicine list, and their competence is reviewed at least once a year. This records who assessed them; it isn't an assessment itself.</p>
           <div class="row" style="gap:8px"><button class="btn primary" type="button" id="mcSave" style="flex:1">Save</button><button class="btn ghost" type="button" id="mcCancel" style="flex:1">Cancel</button></div></div>`;
