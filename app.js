@@ -618,6 +618,11 @@ function dosesDue(from, to) {
 const prnLive = (medId, since) => { const all = doses().filter((d) => d.medId === medId && d.slot === "prn"); return all.filter((d) => d.ts >= since && !all.some((x) => x.corrects === d.id) && GIVEN.has(d.code)); };
 const medsUnchecked = () => medsState().list.filter((m) => !m.stoppedAt && !m.checkedAt);
 const medsListCheckDue = () => { const ms = medsState(), p = medsProfile(); return ms.list.some((m) => !m.stoppedAt) && (!p.listCheckedAt || Date.now() - p.listCheckedAt > 14 * 864e5); };
+// With one live-in carer there's often nobody else to check a change: the carer who made it can
+// double-check it (reading the label again and typing the strength and dose, or the allergies). It
+// still counts as not checked until the next carer checks it at handover.
+const medSelfChecked = (m) => !!(m && m.selfCheck && m.selfCheck.of === m.updatedAt);
+const profileSelfChecked = () => { const p = medsProfile(); return !!(p.selfCheck && p.selfCheck.of === p.updatedAt); };
 const profileUnchecked = () => { const p = medsProfile(); return !!p.updatedAt && !p.checkedAt; };
 const doseStatusHTML = (o) => {
   const st = o.st, last = st.last;
@@ -635,14 +640,15 @@ function medsCardHTML() {
   const ms = medsState(), p = medsProfile(), active = ms.list.filter((m) => !m.stoppedAt);
   if (!cloudOn() || (!active.length && p.mode !== "self")) return "";
   const head = `<div class="card-h"><h3>Medicines</h3><button class="link small" data-openmeds style="min-height:44px">Open chart</button></div>`;
-  const pcheck = profileUnchecked() ? `<button class="warn small" data-openmeds="details" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">Medicines details changed by ${esc(p.updatedBy || "someone")} (who gives them${p.allergies ? ", allergies" : ""}): not yet checked by a second person. Tap to check.</button>` : "";
+  const pcheck = profileUnchecked() ? `<button class="warn small" data-openmeds="details" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">Medicines details changed by ${esc(p.updatedBy || "someone")} (who gives them${p.allergies ? ", allergies" : ""}): ${profileSelfChecked() ? `double-checked by ${esc(p.selfCheck.by)}; the next carer checks them at handover.` : "not yet checked."} Tap to ${p.mine && !profileSelfChecked() ? "double-check" : "check"}.</button>` : "";
   if (medsSelf()) return `<div class="card">${head}${pcheck}<p class="small muted" style="margin:0">${esc(S.client.name)} manages their own medicines. Nothing to record here.</p></div>`;
   const now = Date.now(), due = dosesForToday(), uc = medsUnchecked();
   const open = due.filter((o) => (!o.st.last && o.ts <= now + 30 * 60000) || o.st.twice).length;
   return `<div class="card">${head}
     ${p.allergies ? `<div class="small" style="margin:-4px 0 8px"><strong style="color:var(--incident)">Allergies:</strong> ${esc(p.allergies)}</div>` : ""}
     ${pcheck}
-    ${uc.length ? `<button class="warn small" data-openmeds="list" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">${uc.length} change${uc.length > 1 ? "s" : ""} to the list not yet checked against the label: ${esc(uc.map((m) => m.name).join(", "))}. Tap to check.</button>` : ""}
+    ${uc.filter((m) => !medSelfChecked(m)).length ? `<button class="warn small" data-openmeds="list" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">${uc.filter((m) => !medSelfChecked(m)).length} change${uc.filter((m) => !medSelfChecked(m)).length > 1 ? "s" : ""} to the list not yet checked against the label: ${esc(uc.filter((m) => !medSelfChecked(m)).map((m) => m.name).join(", "))}. Tap to check.</button>` : ""}
+    ${uc.filter(medSelfChecked).length ? `<button class="warn small" data-openmeds="list" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">Double-checked by the carer who changed them, to check at handover: ${esc(uc.filter(medSelfChecked).map((m) => `${m.name} (${m.selfCheck.by})`).join(", "))}. Tap to check against the label.</button>` : ""}
     ${medsListCheckDue() ? `<button class="warn small" data-openmeds="details" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">Fortnightly check due: does the list still match the labels? Tap to check.</button>` : ""}
     <div class="list">${due.length ? due.map(doseRowHTML).join("") : '<div class="empty">No doses due this shift.</div>'}</div>
     ${active.some((m) => m.prn) ? '<button class="btn secondary block" data-mprn style="margin-top:10px">Give a when-required medicine</button>' : ""}
@@ -798,14 +804,14 @@ function openMeds(tabName = "today") {
       body.querySelectorAll("[data-pout]").forEach((b) => (b.onclick = () => openPrnOutcome(doses().find((x) => x.id === b.dataset.pout), back("today"))));
     } else if (tabNow === "list") {
       const card = (m) => `<div class="card" style="box-shadow:none;display:grid;gap:6px">
-        <div><strong>${esc(medName(m))}</strong>${m.timeSensitive ? ' <span class="chip incident">On time</span>' : ""}${m.stoppedAt ? ' <span class="chip">Stopped</span>' : !m.checkedAt ? ` <span class="chip follow">${m.source === "verbal" && !m.writtenConfirmation ? "Waiting for written confirmation" : "Not yet checked"}</span>` : ""}</div>
+        <div><strong>${esc(medName(m))}</strong>${m.timeSensitive ? ' <span class="chip incident">On time</span>' : ""}${m.stoppedAt ? ' <span class="chip">Stopped</span>' : !m.checkedAt ? ` <span class="chip follow">${m.source === "verbal" && !m.writtenConfirmation ? "Waiting for written confirmation" : medSelfChecked(m) ? `Double-checked by ${esc(m.selfCheck.by)}: check at handover` : "Not yet checked"}</span>` : ""}</div>
         <div class="small">${esc(m.dose)} · ${esc(m.route)} · ${m.prn ? `when required${m.prnFor ? " for " + esc(m.prnFor) : ""}${m.prnMinHours ? `, ${m.prnMinHours} h apart` : ""}${m.prnMax24 ? `, at most ${m.prnMax24} doses in 24 h` : ""}` : esc((m.times || []).join(", "))}</div>
         ${m.instructions ? `<div class="small">${esc(m.instructions)}</div>` : ""}
         <div class="tiny muted">${m.prescriber ? "Prescribed by " + esc(m.prescriber) + " · " : ""}${m.startDate ? "from " + esc(m.startDate) : ""}${m.endDate ? " · stops " + esc(m.endDate) : ""}${m.reviewDate ? " · review " + esc(m.reviewDate) : ""}</div>
         <div class="tiny muted">From: ${esc(medSourceLabel(m.source))}${m.sourceDetail ? " (" + esc(m.sourceDetail) + ")" : ""}${m.source === "verbal" ? ` · asked by ${esc(m.verbalFrom)} at ${esc(m.verbalAt)}, read back${m.verbalRepeatedTo ? ", repeated to " + esc(m.verbalRepeatedTo) : ""}${m.writtenConfirmation ? " · in writing: " + esc(m.writtenConfirmation) : ""}` : ""} · ${m.stoppedAt ? "stopped" : "changed"} by ${esc(m.updatedBy)} ${esc(dayLabel(m.updatedAt).toLowerCase())} ${fmtTime(m.updatedAt)}${m.changeReason && !m.stoppedAt ? " · " + esc(m.changeReason) : ""}${m.stopReason ? " · " + esc(m.stopReason) : ""}${m.checkedAt ? ` · checked by ${esc(m.checkedBy)}` : ""}</div>
         ${lastSupply(m.id) ? `<div class="tiny muted">Last supply: ${esc(lastSupply(m.id).qty)}${lastSupply(m.id).from ? " from " + esc(lastSupply(m.id).from) : ""}, ${esc(dayLabel(lastSupply(m.id).ts).toLowerCase())} · ${lastSupply(m.id).matches === "yes" ? "label matched" : "<strong>label didn't match</strong>"} · ${esc(doseBy(lastSupply(m.id)))}</div>` : ""}
         ${m.stoppedAt ? "" : `<button class="btn ghost" data-msup="${esc(m.id)}">Record a new supply</button>`}
-        ${m.stoppedAt || !medsSignedOff() ? "" : `<div class="row" style="gap:8px">${!m.checkedAt ? (m.mine ? '<span class="tiny muted" style="align-self:center">Someone who didn\'t change it needs to check this against the label.</span>' : `<button class="btn primary" data-mcheck="${esc(m.id)}" style="flex:1 1 100%">${m.source === "verbal" && !m.writtenConfirmation ? "Written confirmation received" : "I've checked it against the label"}</button>`) : ""}
+        ${m.stoppedAt || !medsSignedOff() ? "" : `<div class="row" style="gap:8px">${!m.checkedAt ? (m.mine ? (medSelfChecked(m) ? '<span class="tiny muted" style="align-self:center">You double-checked this. The next carer checks it against the label at handover.</span>' : `<span class="tiny muted" style="align-self:center;flex:1 1 100%">Someone who didn't change it should check this against the label. If you're the only carer here:</span><button class="btn primary" data-mself="${esc(m.id)}" style="flex:1 1 100%">Double-check it myself</button>`) : `<button class="btn primary" data-mcheck="${esc(m.id)}" style="flex:1 1 100%">${m.source === "verbal" && !m.writtenConfirmation ? "Written confirmation received" : "I've checked it against the label"}</button>`) : ""}
           <button class="btn secondary" data-medit="${esc(m.id)}" style="flex:1">Change</button><button class="btn ghost" data-mstop="${esc(m.id)}" style="flex:1">Stop</button></div>`}
         <button class="link small" data-mhist="${esc(m.id)}" style="justify-self:start;min-height:44px">Earlier versions</button></div>`;
       body.innerHTML = `${medsSignedOff() ? '<button class="btn primary block" id="mdAdd">Add a medicine</button>' : `<div class="warn small">${esc(medsSignOffText())} You can read the list and record supplies; adding, changing, stopping or checking medicines needs a sign-off from an administrator (Manage people).</div>`}
@@ -814,6 +820,22 @@ function openMeds(tabName = "today") {
       if ($("#mdAdd", s.root)) $("#mdAdd", s.root).onclick = () => openMedEdit(null, back("list"));
       body.querySelectorAll("[data-msup]").forEach((b) => (b.onclick = () => openSupplySheet(ms.list.find((m) => m.id === b.dataset.msup), back("list"))));
       body.querySelectorAll("[data-medit]").forEach((b) => (b.onclick = () => openMedEdit(ms.list.find((m) => m.id === b.dataset.medit), back("list"))));
+      body.querySelectorAll("[data-mself]").forEach((b) => (b.onclick = async () => {
+        const m = ms.list.find((x) => x.id === b.dataset.mself);
+        let written;
+        if (m.source === "verbal" && !m.writtenConfirmation) {
+          written = (window.prompt("This change was made by phone. Which written confirmation has arrived? (e.g. GP letter 12 Oct, new pharmacy label)") || "").trim();
+          if (!written) return;
+        }
+        window.alert(`Double-check ${m.name}: pick up the pharmacy label or prescription and read it again. Type what it says, not what you remember.`);
+        const typedStrength = m.strength ? window.prompt("What strength does the label say? (e.g. 10 mg)") : "";
+        if (typedStrength === null) return;
+        const typedDose = window.prompt("What dose does the label say? (e.g. 1 tablet)");
+        if (typedDose === null) return;
+        const out = await syncJSON("/plan/meds/confirm", { client: session.client.id, id: m.id, baseUpdatedAt: m.updatedAt, written, self: true, typedStrength, typedDose }).catch(() => ({ error: "No connection" }));
+        if (out.error) return toast(out.error);
+        Object.assign(m, out.med); saveLocal(); draw(); toast("Double-checked. The next carer checks it at handover.");
+      }));
       body.querySelectorAll("[data-mcheck]").forEach((b) => (b.onclick = async () => {
         const m = ms.list.find((x) => x.id === b.dataset.mcheck);
         let written;
@@ -846,7 +868,7 @@ function openMeds(tabName = "today") {
       body.querySelectorAll("[data-mmonth]").forEach((b) => (b.onclick = () => openMarChart(+b.dataset.mmonth)));
     } else {
       const uncheckedP = profileUnchecked();
-      body.innerHTML = `${medsSignOffKnownNo() ? `<div class="warn small">${esc(medsSignOffText())} You can read these details; changing or checking them needs a sign-off from an administrator (Manage people).</div>` : ""}${uncheckedP ? `<div class="warn small">Changed by ${esc(p.updatedBy)} ${esc(dayLabel(p.updatedAt).toLowerCase())} ${fmtTime(p.updatedAt)}: not yet checked by a second person.${p.mine ? " Someone else needs to check it." : ""}</div>${p.mine || medsSignOffKnownNo() ? "" : '<button class="btn primary block" id="mpOk">I\'ve checked who gives the medicines and the allergies</button>'}` : ""}
+      body.innerHTML = `${medsSignOffKnownNo() ? `<div class="warn small">${esc(medsSignOffText())} You can read these details; changing or checking them needs a sign-off from an administrator (Manage people).</div>` : ""}${uncheckedP ? `<div class="warn small">Changed by ${esc(p.updatedBy)} ${esc(dayLabel(p.updatedAt).toLowerCase())} ${fmtTime(p.updatedAt)}: ${profileSelfChecked() ? `double-checked by ${esc(p.selfCheck.by)}; the next carer checks them at handover.` : "not yet checked by a second person."}${p.mine && !profileSelfChecked() ? " Someone else should check it. If you're the only carer here, double-check it yourself." : ""}</div>${medsSignOffKnownNo() ? "" : p.mine ? (profileSelfChecked() ? "" : '<button class="btn primary block" id="mpSelfOk">Double-check it myself</button>') : '<button class="btn primary block" id="mpOk">I\'ve checked who gives the medicines and the allergies</button>'}` : ""}
         <form id="mdProf" style="display:grid;gap:12px">
         <label class="f">Who gives the medicines?<select id="mpMode"><option value="give" ${p.mode !== "prompt" && p.mode !== "self" ? "selected" : ""}>Carers give them</option><option value="prompt" ${p.mode === "prompt" ? "selected" : ""}>Carers remind or prompt only</option><option value="self" ${p.mode === "self" ? "selected" : ""}>${esc(S.client.name)} manages their own</option></select></label>
         <label class="check" id="mpSelfBox" ${p.mode === "self" ? "" : "hidden"}><input type="checkbox" id="mpSelf" ${p.selfLog ? "checked" : ""}><span>${esc(S.client.name)} would like carers to note their medicines anyway</span></label>
@@ -862,6 +884,16 @@ function openMeds(tabName = "today") {
       const safetyChanged = () => !!p.updatedAt && ($("#mpMode", s.root).value !== p.mode || $("#mpAll", s.root).value.trim() !== (p.allergies || "") || ($("#mpMode", s.root).value === "self" && $("#mpSelf", s.root).checked !== !!p.selfLog));
       const upd = () => { $("#mpSelfBox", s.root).hidden = $("#mpMode", s.root).value !== "self"; $("#mpWhyBox", s.root).hidden = !safetyChanged(); };
       ["#mpMode", "#mpAll", "#mpSelf"].forEach((q) => { $(q, s.root).oninput = upd; $(q, s.root).onchange = upd; });
+      if ($("#mpSelfOk", s.root)) $("#mpSelfOk", s.root).onclick = async () => {
+        const typedAllergies = window.prompt(`Check ${S.client.name}'s allergies again (with them, the family, or the GP or pharmacy record). Type them, or "None known":`);
+        if (typedAllergies === null) return;
+        const modes = { give: "Carers give them", prompt: "Carers remind or prompt only", self: `${S.client.name} manages their own` };
+        const mode = ["prompt", "self"].includes(p.mode) ? p.mode : "give";
+        if (!window.confirm(`Who gives the medicines: "${modes[mode]}". Have you checked this is right?`)) return;
+        const out = await syncJSON("/plan/meds/profilecheck", { client: session.client.id, baseUpdatedAt: p.updatedAt, self: true, typedAllergies, typedMode: mode }).catch(() => ({ error: "No connection" }));
+        if (out.error) return toast(out.error);
+        medsState().profile = out.profile; saveLocal(); draw(); toast("Double-checked. The next carer checks them at handover.");
+      };
       if ($("#mpOk", s.root)) $("#mpOk", s.root).onclick = (e) => confirmInline(e.currentTarget, async () => {
         const out = await syncJSON("/plan/meds/profilecheck", { client: session.client.id, baseUpdatedAt: p.updatedAt }).catch(() => ({ error: "No connection" }));
         if (out.error) return toast(out.error);
@@ -903,7 +935,7 @@ function parseMedTimes(text) {
 function openMedEdit(m, after) {
   const v = m ? { ...m, source: "", sourceDetail: "", verbalFrom: "", verbalAt: "", readBack: false, verbalRepeatedTo: "" } : { times: [], route: "By mouth" };
   const s = sheet(`${sheetHead(m ? "Change " + esc(m.name) : "Add a medicine")}
-    <p class="small muted" style="margin:0">Copy it exactly from the pharmacy label or prescription. ${m ? "The change" : "It"} shows as not yet checked until someone else confirms it against the label. Pilot: made-up details only.</p>
+    <p class="small muted" style="margin:0">Copy it exactly from the pharmacy label or prescription. ${m ? "The change" : "It"} shows as not yet checked until someone else confirms it against the label. If you're the only carer, double-check it yourself afterwards; the next carer checks it at handover. Pilot: made-up details only.</p>
     <form id="meForm" style="display:grid;gap:12px">
       <label class="f">Medicine name<input type="text" id="meName" maxlength="80" value="${esc(v.name || "")}" placeholder="e.g. Amlodipine" autocomplete="off"></label>
       <div class="row" style="gap:8px"><label class="f" style="flex:1">Strength<input type="text" id="meStr" maxlength="60" value="${esc(v.strength || "")}" placeholder="e.g. 5 mg"></label><label class="f" style="flex:1">Form<input type="text" id="meForm2" maxlength="60" value="${esc(v.form || "")}" placeholder="e.g. tablets"></label></div>
@@ -1010,8 +1042,10 @@ function medsForHandover() {
     out.push(`${o.day !== dayKey(new Date()) ? dayLabel(o.ts) + " " : ""}${o.slot} ${medName(o.m)}: ${st.twice ? "RECORDED AS GIVEN TWICE - check" : l ? `${doseLabel(l.code)}${l.amount ? " (" + l.amount + ")" : ""}${l.reason ? " (" + l.reason + ")" : ""}, ${doseBy(l)}` : `NOT RECORDED${o.m.timeSensitive ? " (time-sensitive)" : ""}`}`);
   }
   for (const d of doses().filter((x) => x.slot === "prn" && x.ts >= from && x.code !== "V" && !doses().some((y) => y.corrects === x.id)).sort((a, b) => a.ts - b.ts)) out.push(`${fmtTime(d.ts)} ${d.med || "when-required medicine"} (when required${d.prnFor ? ", for " + d.prnFor : ""}): ${doseLabel(d.code)}${d.amount ? " (" + d.amount + ")" : ""}, ${doseBy(d)}${outcomeFor(d.id) ? "; outcome: " + outcomeFor(d.id).outcome : ""}`);
-  const uc = medsUnchecked(); if (uc.length) out.push(`Not yet checked against the label: ${uc.map((m) => m.name).join(", ")}`);
-  if (profileUnchecked()) out.push("Medicines details (who gives them, allergies) changed and not yet checked");
+  const uc = medsUnchecked();
+  if (uc.some((m) => !medSelfChecked(m))) out.push(`Not yet checked against the label: ${uc.filter((m) => !medSelfChecked(m)).map((m) => m.name).join(", ")}`);
+  if (uc.some(medSelfChecked)) out.push(`Double-checked by the carer who changed them; incoming carer, please check against the label: ${uc.filter(medSelfChecked).map((m) => m.name).join(", ")}`);
+  if (profileUnchecked()) out.push(profileSelfChecked() ? "Medicines details (who gives them, allergies) double-checked by the carer who changed them; incoming carer, please check them" : "Medicines details (who gives them, allergies) changed and not yet checked");
   if (medsListCheckDue()) out.push("Fortnightly medicines list check is due");
   return out;
 }
