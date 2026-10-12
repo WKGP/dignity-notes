@@ -809,6 +809,7 @@ function openMeds(tabName = "today") {
         ${m.instructions ? `<div class="small">${esc(m.instructions)}</div>` : ""}
         <div class="tiny muted">${m.prescriber ? "Prescribed by " + esc(m.prescriber) + " · " : ""}${m.startDate ? "from " + esc(m.startDate) : ""}${m.endDate ? " · stops " + esc(m.endDate) : ""}${m.reviewDate ? " · review " + esc(m.reviewDate) : ""}</div>
         <div class="tiny muted">From: ${esc(medSourceLabel(m.source))}${m.sourceDetail ? " (" + esc(m.sourceDetail) + ")" : ""}${m.source === "verbal" ? ` · asked by ${esc(m.verbalFrom)} at ${esc(m.verbalAt)}, read back${m.verbalRepeatedTo ? ", repeated to " + esc(m.verbalRepeatedTo) : ""}${m.writtenConfirmation ? " · in writing: " + esc(m.writtenConfirmation) : ""}` : ""} · ${m.stoppedAt ? "stopped" : "changed"} by ${esc(m.updatedBy)} ${esc(dayLabel(m.updatedAt).toLowerCase())} ${fmtTime(m.updatedAt)}${m.changeReason && !m.stoppedAt ? " · " + esc(m.changeReason) : ""}${m.stopReason ? " · " + esc(m.stopReason) : ""}${m.checkedAt ? ` · checked by ${esc(m.checkedBy)}` : ""}</div>
+        ${m.stoppedAt && m.stopCheck ? `<div class="tiny ${m.stopCheck === "unchecked" ? "" : "muted"}" ${m.stopCheck === "unchecked" ? 'style="color:var(--incident)"' : ""}>Stopped: ${esc(m.stopReason || "")} · ${m.stopCheck === "now" ? "pharmacist or doctor said it can stop now" : m.stopCheck === "gradual" ? "pharmacist or doctor said to reduce it gradually" : "how to stop it not yet checked with a pharmacist or doctor"}${m.stopCheckWith ? " (" + esc(m.stopCheckWith) + ")" : ""}</div>` : ""}
         ${lastSupply(m.id) ? `<div class="tiny muted">Last supply: ${esc(lastSupply(m.id).qty)}${lastSupply(m.id).from ? " from " + esc(lastSupply(m.id).from) : ""}, ${esc(dayLabel(lastSupply(m.id).ts).toLowerCase())} · ${lastSupply(m.id).matches === "yes" ? "label matched" : "<strong>label didn't match</strong>"} · ${esc(doseBy(lastSupply(m.id)))}</div>` : ""}
         ${m.stoppedAt ? "" : `<button class="btn ghost" data-msup="${esc(m.id)}">Record a new supply</button>`}
         ${m.stoppedAt || !medsSignedOff() ? "" : `<div class="row" style="gap:8px">${!m.checkedAt ? (m.mine ? (medSelfChecked(m) ? '<span class="tiny muted" style="align-self:center">You double-checked this. The next carer checks it against the label at handover.</span>' : `<span class="tiny muted" style="align-self:center;flex:1 1 100%">Someone who didn't change it should check this against the label. If you're the only carer here:</span><button class="btn primary" data-mself="${esc(m.id)}" style="flex:1 1 100%">Double-check it myself</button>`) : `<button class="btn primary" data-mcheck="${esc(m.id)}" style="flex:1 1 100%">${m.source === "verbal" && !m.writtenConfirmation ? "Written confirmation received" : "I've checked it against the label"}</button>`) : ""}
@@ -849,11 +850,25 @@ function openMeds(tabName = "today") {
       }));
       body.querySelectorAll("[data-mstop]").forEach((b) => (b.onclick = () => {
         const m = ms.list.find((x) => x.id === b.dataset.mstop);
-        const st = sheet(`${sheetHead("Stop " + esc(m.name))}<label class="f">Why is it stopping?<input type="text" id="stWhy" maxlength="300" placeholder="e.g. Course finished, GP letter 9 Oct" autocomplete="off"></label><button class="btn danger block" id="stGo">Stop this medicine</button>`);
+        // Some medicines need reducing gradually, not stopping at once. The app doesn't say which: it asks
+        // whether a pharmacist or doctor has said how to stop it, and an unchecked stop becomes a "to note" flag.
+        const st = sheet(`${sheetHead("Stop " + esc(m.name))}<label class="f">Why is it stopping?<input type="text" id="stWhy" maxlength="300" placeholder="e.g. Course finished, GP letter 9 Oct" autocomplete="off"></label>
+          <fieldset style="border:0;padding:0;margin:0;display:grid;gap:8px"><legend class="small" style="font-weight:600;margin-bottom:6px">Some medicines need to be reduced gradually rather than stopped at once. Has a pharmacist or doctor said how to stop this one?</legend>
+            <label class="check"><input type="radio" name="stChk" value="now"><span>Yes: they said it can stop now</span></label>
+            <label class="check"><input type="radio" name="stChk" value="gradual"><span>Yes: they said to reduce it gradually (add the reducing doses to the list as they said)</span></label>
+            <label class="check"><input type="radio" name="stChk" value="unchecked"><span>Not checked yet</span></label></fieldset>
+          <label class="f" id="stWithBox" hidden>Who said so?<input type="text" id="stWith" maxlength="120" placeholder="e.g. Boots pharmacist, Dr Patel by phone 12 Oct" autocomplete="off"></label>
+          <button class="btn danger block" id="stGo">Stop this medicine</button>`);
+        st.root.querySelectorAll('[name="stChk"]').forEach((r) => (r.onchange = () => { $("#stWithBox", st.root).hidden = r.value === "unchecked"; }));
         $("#stGo", st.root).onclick = async () => {
           const why = $("#stWhy", st.root).value.trim(); if (!why) return toast("Say why");
-          const out = await syncJSON("/plan/meds/stop", { client: session.client.id, id: m.id, baseUpdatedAt: m.updatedAt, reason: why }).catch(() => ({ error: "No connection" }));
+          const chk = (st.root.querySelector('[name="stChk"]:checked') || {}).value;
+          if (!chk) return toast("Say whether a pharmacist or doctor has said how to stop it");
+          const withWho = $("#stWith", st.root).value.trim();
+          if (chk !== "unchecked" && !withWho) return toast("Say who said so");
+          const out = await syncJSON("/plan/meds/stop", { client: session.client.id, id: m.id, baseUpdatedAt: m.updatedAt, reason: why, stopCheck: chk, stopCheckWith: withWho }).catch(() => ({ error: "No connection" }));
           if (out.error) return toast(out.error);
+          if (chk === "unchecked") { S.flags.push({ id: uid(), ts: Date.now(), kind: "follow_up", title: `Stopping ${m.name}: not yet checked`, detail: `${m.name} was stopped (${why}). Not yet checked with a pharmacist or doctor whether it should have been reduced gradually rather than stopped at once.`, status: "open", raisedBy: stampId() }); save(); }
           medsState().at = 0; await loadMeds(true); st.close(); render(); openMeds("list"); toast("Stopped");
         };
       }));
@@ -1655,23 +1670,12 @@ async function openTasksEdit() {
   };
 }
 
-function planCardHTML() {
-  const p = plan(), docs = planDocs(), r = respectDoc();
-  if (!p.sections.length && !docs.length && !isAdminHere()) return "";
-  const order = { urgent: 0, important: 1, non_urgent: 2 };
-  const top = [...p.sections].filter((s) => s.urgency !== "non_urgent").sort((a, b) => order[a.urgency] - order[b.urgency]).slice(0, 4);
-  if (p.sections.length && !top.length) return "";
-  return `<div class="card"><div class="card-h"><h3>${p.sections.length ? "Care plan: key points" : "Care plan"}</h3><span class="muted small">${p.sections.length} section${p.sections.length === 1 ? "" : "s"} · ${docs.length} document${docs.length === 1 ? "" : "s"}</span></div>
-    ${p.sections.length ? `<div class="list">${top.map((s) => `<div class="item"><div class="body"><div><strong>${esc(s.title)}</strong> ${urgencyPill(s.urgency)}</div><div class="muted small">${esc((s.text || "").slice(0, 90))}${(s.text || "").length > 90 ? "…" : ""}</div></div></div>`).join("")}</div>`
-      : `<div class="empty">No care plan yet.${isAdminHere() ? " Set one up so carers can see what each area of care involves." : ""}</div>`}
-    <div style="margin-top:10px"><button class="link" id="openPlan">${p.sections.length || docs.length ? "Open the care plan" : "Set up the care plan"}</button></div></div>`;
-}
 function openPlan() {
   loadPlan();
   const p = plan(), docs = planDocs(), r = respectDoc();
   const s = sheet(`${sheetHead(`Care plan · ${esc(S.client.name)}`)}
     ${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency care plan</button>` : ""}
-    ${p.sections.length ? p.sections.map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}</summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "No details written yet.")}</p></details>`).join("")
+    ${p.sections.length ? [...p.sections].sort((a, b) => ({ urgent: 0, important: 1 }[a.urgency] ?? 2) - ({ urgent: 0, important: 1 }[b.urgency] ?? 2)).map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}</summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "No details written yet.")}</p></details>`).join("")
       : '<div class="empty">No sections yet.</div>'}
     <div class="card" style="box-shadow:none;display:grid;gap:6px"><h3 style="font-size:17px;margin:0">Shift tasks</h3>
       ${planTasks().length ? planTasks().map((t) => `<div class="small"><strong>${esc(t.title)}</strong> <span class="muted">· ${esc(periodLabel(t.period))}${t.days.length ? " · " + t.days.map((d) => DAY_NAMES[d]).join(", ") : ""}</span></div>`).join("") : '<div class="small muted">No tasks yet.</div>'}
@@ -1913,7 +1917,6 @@ function renderToday() {
     <div class="card"><div class="card-h"><h3>Coming up</h3></div>
       <div class="list">${sched.length ? sched.map((s) => `<div class="item ${s.when < Date.now() ? "past" : ""}"><div class="when">${fmtTime(s.when)}</div><div class="body"><div><strong>${esc(s.label)}</strong></div><div class="muted small">${dayLabel(s.when)}${s.detail ? " · " + esc(s.detail) : ""}</div></div></div>`).join("") : '<div class="empty">Nothing scheduled.</div>'}</div>
       <div style="margin-top:10px"><button class="link" id="addEvent">+ Add appointment or plan</button></div></div>
-    ${planCardHTML()}
     ${recentNotesHTML(latest)}`;
   $("#ctaRec").onclick = () => openRecorder();
   $("#qContacts").onclick = () => openContacts();
@@ -1923,7 +1926,6 @@ function renderToday() {
   if (raiseMissedTimeSensitive()) setTimeout(() => { if (tab === "today" && !appBusy()) render(); }, 0);
   if ($("#recentLog")) $("#recentLog").onclick = () => go("log");
   $("#qPlan").onclick = () => openPlan();
-  if ($("#openPlan", v)) $("#openPlan", v).onclick = () => openPlan();
   bindStorageBanner(v);
   $("#addEvent").onclick = () => openEventSheet();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
@@ -2855,6 +2857,13 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
   else run();
 }
 
+// The transcript with possibly misheard words highlighted (escaped first, then marked).
+const markUnclear = (text, words) => {
+  const pats = words.map((w) => esc(w).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).filter(Boolean);
+  const out = esc(text || "");
+  // One pass, so a highlighted word is never matched again inside the markup just added.
+  return pats.length ? out.replace(new RegExp(pats.join("|"), "gi"), (m) => `<mark style="background:var(--follow);color:var(--surface);padding:0 3px;border-radius:3px">${m}</mark>`) : out;
+};
 // The note just saved, with anything to check, and a way to add to it (never to change it).
 function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, tasksDone = [] } = {}) {
   const n = S.notes.find((x) => x.id === id); if (!n) return;
@@ -2869,13 +2878,18 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
       return ts.length ? `<div class="card" style="box-shadow:none;display:grid;gap:6px"><strong class="small">This note says these tasks were done. Tick them?</strong>${ts.map((t) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><span class="small">${esc(t.title)}</span><button class="btn secondary" data-svtask="${esc(t.id)}">Done</button></div>`).join("")}</div>` : ""; })()}
     ${noteMedsHTML(n)}
     ${lostAt || lockedAt ? `<div class="warn small">${lockedAt ? "The recording stopped early because the screen locked or you left the app." : "Only part of the recording was turned into words."} Play it back; tap <strong>Add to this note</strong> for anything missing.</div>` : ""}
-    ${unclear.length ? `<div class="warn small">These words may have been misheard: <strong>${unclear.map(esc).join(", ")}</strong>. Play the recording; if something's wrong, tap <strong>Add to this note</strong> and say the correct version.</div>` : ""}
+    ${unclear.length ? `<div class="warn small" style="display:grid;gap:8px"><span>These words may have been misheard: <strong>${unclear.map(esc).join(", ")}</strong>. They're highlighted below. Play the recording; if something's wrong, tap <strong>Add to this note</strong> and say the correct version.</span>
+      ${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}" style="width:100%"></audio>` : ""}
+      <p class="note-text" style="margin:0;background:var(--surface, #fff);border-radius:8px;padding:10px 12px;font-size:17px;line-height:1.5">${markUnclear(n.transcript, unclear)}</p></div>` : ""}
     ${gaps.length ? `<div class="warn small">For a full incident record, you haven't said ${gaps.map((g) => gapNames[g] || g).map(esc).join(", ")}. Tap <strong>Add to this note</strong> to add it.</div>` : ""}
-    <details><summary class="small">Recording and words</summary>${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}"></audio>` : ""}<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p></details>
+    ${unclear.length ? "" : `<details ${lostAt || lockedAt ? "open" : ""}><summary class="small">Recording and words</summary>${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}"></audio>` : ""}<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p></details>`}
     <div class="row"><button class="btn secondary" id="svAdd">Add to this note</button><button class="btn ghost" id="svType">Type an addition</button></div>
     <button class="btn primary block" id="svDone">Done</button>
     <p class="tiny muted" style="margin:0;text-align:center">Saved notes aren't changed. Corrections and extra details are added underneath, with who added them and when.</p>`);
-  const a = s.root.querySelector("audio[data-audio]"); if (a) s.root.querySelector("details").addEventListener("toggle", () => loadAudio(a, true), { once: true });
+  // With misheard words (or a cut-short recording) the player is ready on this sheet; otherwise it loads when opened.
+  const a = s.root.querySelector("audio[data-audio]");
+  if (a && (unclear.length || lostAt || lockedAt)) loadAudio(a, true);
+  else if (a) a.closest("details").addEventListener("toggle", () => loadAudio(a, true), { once: true });
   s.root.querySelectorAll("[data-notneeded]").forEach((b) => (b.onclick = () => confirmInline(b, () => {
     // Raised automatically but not needed: resolved with a reason (flags are never deleted).
     const f = S.flags.find((x) => x.id === b.dataset.notneeded); if (!f || f.status !== "open") return;
