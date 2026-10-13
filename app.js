@@ -2343,6 +2343,7 @@ function openSettings() {
       ${session.role === "admin" ? '<button class="btn primary" id="stTesters">Manage people</button>' : ""}
       <button class="btn secondary" id="stTest">Check AI connection</button><div class="small" id="stMsg"></div>
       ${session.local || session.role === "family" ? "" : '<button class="btn secondary" id="stTrain">Medicines training</button>'}
+      ${session.local || session.role === "family" ? "" : `<button class="btn secondary" id="stPron">How notes refer to you${session.pronounsAsked ? ` (${esc(session.pronouns || "your name")})` : ""}</button>`}
       ${session.local ? "" : '<button class="btn secondary" id="stPw">Change my password</button><div id="stPush"></div>'}
       ${isSharedPhone() ? '<button class="btn primary" id="stShSwitch">Switch carer</button>' : ""}
       ${storageState.installed ? "" : '<button class="btn secondary" id="stInstall">Install app on this phone</button><div class="small" id="stInstallMsg"></div>'}
@@ -2357,6 +2358,7 @@ function openSettings() {
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Client</h3>
       <p class="small" style="margin:0">Notes are for <strong>${esc(S.client.name)}</strong>.</p>
       <label class="f">Where the care is<select id="stCountry" ${session.role === "admin" && !session.local ? "" : "disabled"}><option value="UK" ${clientCountry() === "UK" ? "selected" : ""}>United Kingdom</option><option value="AU" ${clientCountry() === "AU" ? "selected" : ""}>Australia</option></select></label>
+      <label class="f">How notes refer to ${esc(S.client.name)}<select id="stCPron" ${session.role === "admin" && !session.local ? "" : "disabled"}>${[["", `By name (${S.client.name})`], ["he/him", "He / him"], ["she/her", "She / her"], ["they/them", "They / them"]].map(([v, l]) => `<option value="${esc(v)}" ${(session.client.pronouns || "") === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
       <p class="tiny muted" style="margin:-6px 0 0">Sets the emergency numbers and contacts under Who to tell, the agreement wording, and the spelling the AI uses.${session.role === "admin" ? "" : " An administrator can change it."}</p>
       ${isSharedPhone() ? "" : '<button class="btn secondary" id="stSwitch">Switch or add client</button>'}</div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Carers for ${esc(S.client.name)}</h3>
@@ -2405,6 +2407,11 @@ function openSettings() {
   if ($("#stTesters")) $("#stTesters").onclick = () => { s.close(); openTesters(); };
   if ($("#stPw")) $("#stPw").onclick = openChangePassword;
   if ($("#stShSwitch")) $("#stShSwitch").onclick = () => { s.close(); switchCarer(); };
+  if ($("#stPron")) $("#stPron").onclick = () => { s.close(); openPronouns(); };
+  if ($("#stCPron") && !$("#stCPron").disabled) $("#stCPron").onchange = async (e) => {
+    try { const out = await relay("/clients/pronouns", { id: session.client.id, pronouns: e.target.value }); session.client.pronouns = out.client.pronouns || ""; saveSession(); toast("Saved"); }
+    catch (err) { toast(err.message); }
+  };
   // Always available: Chrome only offers its own install prompt now and then.
   if ($("#stInstall")) $("#stInstall").onclick = async () => {
     if (installPrompt) { try { installPrompt.prompt(); await installPrompt.userChoice; } catch {} installPrompt = null; await checkStorage(); s.close(); openSettings(); return; }
@@ -3040,6 +3047,7 @@ const PRIVACY_HTML = `
 <h3>What we collect about you</h3>
 <ul>
 <li><strong>Your account:</strong> your name, username and password. We store passwords only in a scrambled (hashed) form that can't be read back.</li>
+<li><strong>How notes refer to you:</strong> the pronouns you choose (for example she/her), or that notes should use your name. Optional, and you can change it in Settings. Notes, handovers and the AI use it so you're referred to correctly.</li>
 <li><strong>Shared phones:</strong> if an administrator makes a phone a client's shared phone (kept at the client's home for the carers), we keep a random ID for that phone with the client, a description of it (for example "Android · Chrome"), who set it up and when. Signing in on it is recorded as the shared phone and isn't added to your own devices.</li>
 <li><strong>Sign-in records:</strong> the time of each sign-in attempt, your IP address, your approximate location worked out from that address (town and country), your type of device and browser, and a random ID that this app stores on your device. We use these to keep accounts secure and to detect when a login is shared or used on another device.</li>
 <li><strong>How you work, for medicines:</strong> whether an administrator has recorded you as a private carer (self-employed or employed by the client or family) or an agency carer, and who recorded it. It decides whether a medicines training sign-off is needed.</li>
@@ -3122,11 +3130,43 @@ function afterSignIn(privacyAccepted) {
   if (privacyAccepted && session.privacyAccepted !== PRIVACY_VERSION) { session.privacyAccepted = PRIVACY_VERSION; saveSession(); }
   const go2 = () => {
     if (isSharedPhone() && pushSupported() && Notification.permission === "granted") subscribePush().catch(() => {}); // the phone's notifications are now this carer's
-    if (session.client) { $("#fullRoot").innerHTML = ""; loadUser(); go("today"); openFromHash(); checkClient(); checkPush(); } else showClients(false);
+    if (session.client) { $("#fullRoot").innerHTML = ""; loadUser(); go("today"); openFromHash(); checkClient(); checkPush(); setTimeout(checkPronouns, 1500); } else showClients(false);
   };
   if (session.local || privacyAccepted || session.privacyAccepted === PRIVACY_VERSION) go2(); else showPrivacy(go2);
 }
 
+
+/* ---------- pronouns ----------
+ * How notes and handovers refer to people. Each carer chooses their own (asked once, at the next
+ * sign-in or app open); an administrator sets the client's. The AI is told never to guess from a name.
+ */
+const PRONOUN_CHOICES = [["she/her", "She / her"], ["he/him", "He / him"], ["they/them", "They / them"], ["", "Just use my name"]];
+function openPronouns(after) {
+  const cur = session.pronouns || "", other = cur && !PRONOUN_CHOICES.some(([v]) => v === cur);
+  const s = sheet(`${sheetHead("How notes refer to you")}
+    <p class="small" style="margin:0">Notes and handovers often say who did what (for example "Jo helped Nana up; she then called the GP"). Choose how they should refer to you, so it's never guessed from your name. You can change it any time in Settings.</p>
+    <div style="display:grid;gap:8px">${PRONOUN_CHOICES.map(([v, l]) => `<label class="check"><input type="radio" name="prn" value="${esc(v)}" ${!other && v === cur && session.pronounsAsked ? "checked" : ""}><span>${esc(l)}</span></label>`).join("")}
+      <label class="check"><input type="radio" name="prn" value="other" ${other ? "checked" : ""}><span>Something else</span></label>
+      <input type="text" id="prnOther" maxlength="24" placeholder="e.g. ze/zir" value="${other ? esc(cur) : ""}" ${other ? "" : "hidden"} autocomplete="off"></div>
+    <button class="btn primary block" id="prnSave">Save</button>
+    <button class="btn ghost block" id="prnSkip">Skip: use my name</button>`, { onClose: after });
+  s.root.querySelectorAll('[name="prn"]').forEach((r) => (r.onchange = () => { $("#prnOther", s.root).hidden = r.value !== "other"; }));
+  const save = async (val) => {
+    try { const out = await relay("/me/pronouns", { pronouns: val }); val = out.pronouns ?? val; session.pronouns = val; session.pronounsAsked = true; saveSession(); toast(val ? `Notes will use ${val}` : "Notes will use your name"); s.close(); }
+    catch (e) { toast(e.message); }
+  };
+  $("#prnSave", s.root).onclick = () => { const r = s.root.querySelector('[name="prn"]:checked'); if (!r) return toast("Choose one"); save(r.value === "other" ? $("#prnOther", s.root).value.trim() : r.value); };
+  $("#prnSkip", s.root).onclick = () => (navigator.onLine ? save("") : s.close()); // offline: asked again later
+}
+// Ask once: on the next sign-in or app open, for carers and administrators.
+async function checkPronouns() {
+  if (!session || session.local || session.role === "family" || session.pronounsAsked || !navigator.onLine) return;
+  try {
+    const me = await relay("/me", {});
+    if (me.pronouns) { session.pronouns = me.pronouns.p || ""; session.pronounsAsked = true; saveSession(); return; }
+    if (session && !appBusy() && !$("#lockRoot")) openPronouns();
+  } catch {}
+}
 
 /* ---------- the client's shared phone ----------
  * A phone kept at the client's home and used by several carers. An administrator makes it the
@@ -3847,14 +3887,14 @@ async function checkClient() {
     toast(isFamily() ? `You're no longer linked to ${session.client.name}, or it was removed` : `You're no longer a carer for ${session.client.name}, or it was removed`);
     detachClient();
     session.client = null; saveSession(); KEY = null; S = seed(); showClients(false);
-  } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name || (fresh.country || "UK") !== clientCountry() || JSON.stringify(fresh.family || []) !== JSON.stringify(session.client.family || []) || !!fresh.familyIncidents !== !!session.client.familyIncidents || (fresh.familyAt || "") !== (session.client.familyAt || "")) {
+  } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name || (fresh.country || "UK") !== clientCountry() || JSON.stringify(fresh.family || []) !== JSON.stringify(session.client.family || []) || !!fresh.familyIncidents !== !!session.client.familyIncidents || (fresh.familyAt || "") !== (session.client.familyAt || "") || (fresh.pronouns || "") !== (session.client.pronouns || "")) {
     // Carers or shifts changed elsewhere (e.g. an administrator assigned someone): pick that up.
-    session.client = { id: fresh.id, name: fresh.name, country: fresh.country || "UK", consent: fresh.consent, carers: fresh.carers || [], family: fresh.family || [], familyIncidents: !!fresh.familyIncidents, familyAt: fresh.familyAt || "" };
+    session.client = { id: fresh.id, name: fresh.name, country: fresh.country || "UK", consent: fresh.consent, carers: fresh.carers || [], family: fresh.family || [], familyIncidents: !!fresh.familyIncidents, familyAt: fresh.familyAt || "", pronouns: fresh.pronouns || "" };
     saveSession(); loadUser(); render();
   }
 }
 function chooseClient(client) {
-  session.client = { id: client.id, name: client.name, country: client.country || "UK", consent: client.consent, carers: client.carers || [], family: client.family || [], familyIncidents: !!client.familyIncidents };
+  session.client = { id: client.id, name: client.name, country: client.country || "UK", consent: client.consent, carers: client.carers || [], family: client.family || [], familyIncidents: !!client.familyIncidents, familyAt: client.familyAt || "", pronouns: client.pronouns || "", shared: client.shared || [] };
   saveSession(); loadUser(); $("#fullRoot").innerHTML = ""; go("today");
 }
 // manual = opened from Settings; otherwise a single client is picked automatically.
@@ -3960,6 +4000,7 @@ checkStorage().then(() => { if (session && session.client && tab === "today") re
 if (session && (session.token || session.local)) {
   if (session.client) { loadUser(); render(); } else render();
   checkLock(); // a shared phone that was locked (or left unused) stays locked after reopening
+  if (session.client) setTimeout(checkPronouns, 2500);
   if (session.local || session.privacyAccepted === PRIVACY_VERSION) { if (session.client) checkClient(); else showClients(false); }
   else relay("/me", {}).then((me) => afterSignIn(me.privacyAccepted)).catch((e) => {
     if (!session) return; // sign-in ended: the login screen is already showing
