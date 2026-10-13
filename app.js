@@ -428,6 +428,15 @@ function shiftStart() {
   const last = S.handovers.filter((h) => !isExample(h) && h.ts <= Date.now()).reduce((m, h) => Math.max(m, h.ts), 0);
   return Math.max(Date.now() - 12 * 36e5, last);
 }
+// A shift's start and end in minutes from midnight, from text like "Day · 04:00–13:30" (or 4-13.30,
+// 4am-1:30pm). null when there are no clear times. Used to tell who is on shift.
+function shiftRange(text) {
+  const m = String(text || "").toLowerCase().match(/(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\s*(?:–|—|-|to)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?/);
+  if (!m) return null;
+  const mins = (h, mm, ap) => { h = Number(h); if (ap === "pm" && h < 12) h += 12; if (ap === "am" && h === 12) h = 0; return h <= 24 && Number(mm || 0) < 60 ? (h % 24) * 60 + Number(mm || 0) : NaN; };
+  const from = mins(m[1], m[2], m[3]), to = mins(m[4], m[5], m[6]);
+  return Number.isNaN(from) || Number.isNaN(to) || from === to ? null : { from, to };
+}
 // The family update covers the last 24 hours, from every carer.
 const familyNotes = () => S.notes.filter((n) => Math.max(n.ts, n.approvedTs || 0) >= Date.now() - 24 * 36e5 && !isExample(n)).sort((a, b) => a.ts - b.ts);
 function shiftNotes() {
@@ -1081,13 +1090,17 @@ const medsSignOffKnownNo = () => !!medsMe() && !medsSignedOff();
  * the medicines sign-off for a year (or to its expiry). A knowledge-only course still needs an observed
  * assessment recorded in Manage people. Only the person and administrators see a certificate.
  */
-const certStatus = (c) => !c.verifiedAt ? "Waiting for an administrator to verify it"
+// required: whether this person needs a sign-off (agency carers). For private carers a certificate is a
+// record: no expiry warnings, just a suggested refresher once it's over 3 years old.
+const certStatus = (c, required = true) => !required
+  ? `${c.verifiedAt ? `Checked by ${c.verifiedBy}` : "Kept on record"}${c.refresher ? ". Over 3 years old: a refresher course is recommended" : ""}`
+  : !c.verifiedAt ? "Waiting for an administrator to verify it"
   : c.counts ? `Verified by ${c.verifiedBy}: counts as the medicines sign-off until ${c.reviewOn}`
   : !c.practical ? `Verified by ${c.verifiedBy}: a course without a practical assessment, so an observed assessment is still needed`
   : `Verified by ${c.verifiedBy}: over a year old or expired (${c.reviewOn}), so it needs renewing`;
-const certRowHTML = (c, who, { admin = false, self = false } = {}) => `<div class="card" style="box-shadow:none;display:grid;gap:4px;padding:10px 12px">
+const certRowHTML = (c, who, { admin = false, self = false, required = true } = {}) => `<div class="card" style="box-shadow:none;display:grid;gap:4px;padding:10px 12px">
   <div><strong>${esc(c.course)}</strong> <span class="muted small">· ${esc(c.issuer)} · ${esc(c.awardedOn)}${c.expiresOn ? " · expires " + esc(c.expiresOn) : ""}</span></div>
-  <div class="small ${c.counts ? "" : "muted"}">${c.counts ? '<span class="chip accent">Counts</span> ' : ""}${esc(certStatus(c))}</div>
+  <div class="small ${c.counts ? "" : "muted"}">${required && c.counts ? '<span class="chip accent">Counts</span> ' : ""}${!required && c.refresher ? '<span class="chip follow">Refresher</span> ' : ""}${esc(certStatus(c, required))}</div>
   <div class="tiny muted">Uploaded by ${esc(c.uploadedBy)} ${esc(dayLabel(c.uploadedAt).toLowerCase())}${c.practical ? " · includes a practical assessment" : " · knowledge only"}${c.verifyNote ? " · " + esc(c.verifyNote) : ""}</div>
   <div class="row" style="gap:8px"><button class="btn ghost" data-certview="${esc(who)}|${esc(c.id)}|${esc(c.type)}" style="flex:1">View</button>
     ${admin && !self ? `<button class="btn ${c.verifiedAt ? "ghost" : "primary"}" data-certverify="${esc(who)}|${esc(c.id)}" style="flex:1">${c.verifiedAt ? "Change check" : "Verify"}</button>` : ""}
@@ -1158,7 +1171,7 @@ async function openMyTraining() {
     const body = $("#mtBody", s.root); if (!body) return;
     const ok = me.valid || (me.competent && (!me.reviewOn || me.reviewOn >= dayKey(new Date())));
     body.innerHTML = `${me.required === false && !ok ? `<div class="card small" style="box-shadow:none"><strong>Private carer:</strong> you don't need a medicines training sign-off to use the medicines chart. Training is still a good idea, and you can keep your certificates here.</div>` : `<div class="${ok ? "card" : "warn"} small" style="${ok ? "box-shadow:none" : ""}">${ok ? `<strong>Signed off</strong> to support with medicines until ${esc(me.reviewOn)}${me.via === "certificate" ? " (from your verified certificate)" : me.assessor ? ` (assessed by ${esc(me.assessor)})` : ""}.` : "<strong>Not signed off yet.</strong> Upload your certificate; an administrator verifies it. A course without a practical assessment also needs someone to watch you give medicines, recorded by an administrator."}</div>`}
-      ${(me.certificates || []).map((c) => certRowHTML(c, session.username, { admin: session.role === "admin", self: true })).join("") || '<div class="empty">No certificates yet.</div>'}
+      ${(me.certificates || []).map((c) => certRowHTML(c, session.username, { admin: session.role === "admin", self: true, required: me.required !== false })).join("") || '<div class="empty">No certificates yet.</div>'}
       <button class="btn primary block" id="mtAdd">Add a certificate</button>`;
     bindCerts(body, me.certificates || [], openMyTraining, draw);
     $("#mtAdd", s.root).onclick = () => openCertUpload("", openMyTraining);
@@ -1372,7 +1385,7 @@ document.querySelectorAll(".tab[data-tab]").forEach((b) => b.addEventListener("c
 $("#recTab").addEventListener("click", () => openRecorder());
 $("#dutyBtn").addEventListener("click", () => openCarerSheet());
 $("#settingsBtn").addEventListener("click", () => (isFamily() ? openFamilySettings() : openSettings()));
-$("#brandBtn").addEventListener("click", () => { if (session && !appBusy()) showClients(true); });
+$("#brandBtn").addEventListener("click", () => { if (session && !appBusy() && !isSharedPhone()) showClients(true); }); // a shared phone only has its own client
 $("#helpBtn").addEventListener("click", () => openHelp());
 $("#returnBtn").addEventListener("click", () => openReturnSheet());
 
@@ -1901,13 +1914,20 @@ async function loadFbQuestions(force) {
   try { const out = await relay("/feedback/questions", {}); const before = JSON.stringify(fbQuestions.list); fbQuestions.list = out.questions || []; fbQuestions.at = Date.now(); return before !== JSON.stringify(fbQuestions.list); }
   catch { return false; } finally { fbQuestions.busy = false; }
 }
-const fbQuestionsHTML = () => fbQuestions.list.map((q) => `<div class="card" style="border-left:4px solid var(--accent)"><div class="card-h"><h3>A question about your ${q.kind === "bug" ? "problem report" : "idea"}</h3></div>
+const fbQuestionsHTML = () => fbQuestions.list.map((q) => q.info ? `<div class="card" style="border-left:4px solid var(--accent)"><div class="card-h"><h3>A message from the developer</h3></div>
+  <p style="margin:0 0 10px;white-space:pre-line">${esc(q.q)}</p>
+  <button class="btn secondary block" data-fbqseen="${esc(q.id)}|${esc(q.qid)}">Got it</button></div>` : `<div class="card" style="border-left:4px solid var(--accent)"><div class="card-h"><h3>A question about your ${q.kind === "bug" ? "problem report" : "idea"}</h3></div>
   ${q.summary ? `<p class="tiny muted" style="margin:0 0 6px">${esc(q.summary)}</p>` : ""}
   <p style="margin:0 0 10px;white-space:pre-line"><strong>${esc(q.q)}</strong></p>
   <textarea class="grow" data-fbqa="${esc(q.id)}|${esc(q.qid)}" maxlength="2000" rows="3" placeholder="Your answer" aria-label="Your answer" style="width:100%">${esc(fbQuestions.drafts[q.id + "|" + q.qid] || "")}</textarea>
   <button class="btn primary block" data-fbqsend="${esc(q.id)}|${esc(q.qid)}" style="margin-top:8px">Send answer</button></div>`).join("");
 function bindFbQuestions(v) {
   v.querySelectorAll("[data-fbqa]").forEach((ta) => (ta.oninput = () => { fbQuestions.drafts[ta.dataset.fbqa] = ta.value; }));
+  v.querySelectorAll("[data-fbqseen]").forEach((b) => (b.onclick = async () => {
+    const [id, qid] = b.dataset.fbqseen.split("|"); b.disabled = true;
+    try { await relay("/feedback/answer", { id, qid, seen: true }); fbQuestions.list = fbQuestions.list.filter((x) => !(x.id === id && x.qid === qid)); render(); }
+    catch (e) { toast(e.message); b.disabled = false; }
+  }));
   v.querySelectorAll("[data-fbqsend]").forEach((b) => (b.onclick = async () => {
     const [id, qid] = b.dataset.fbqsend.split("|"), ta = v.querySelector(`[data-fbqa="${CSS.escape(b.dataset.fbqsend)}"]`);
     const answer = (ta ? ta.value : "").trim(); if (!answer) return toast("Write your answer first");
@@ -1929,6 +1949,7 @@ function renderToday() {
     <div class="hello"><h2>${greet}, ${esc(onDuty().name)}</h2><p>${fmtDay(Date.now())}${onDuty().shift ? " · " + esc(onDuty().shift) : ""}</p></div>
     ${storageBanner()}
     <button class="cta" id="ctaRec">${ICON.mic}Record a note</button>
+    ${isSharedPhone() ? `<p class="small" style="margin:-4px 0 0;text-align:center">Recording as <strong>${esc(session.name)}</strong> · <button class="link small" id="shSwitch" style="min-height:40px">Not you? Switch carer</button></p>` : ""}
     <div class="tiles">
       <button class="tile" id="qFind">${ICON.search}Find</button>
       <button class="tile" id="qContacts">${ICON.people}Contacts</button>
@@ -1950,6 +1971,7 @@ function renderToday() {
       <div style="margin-top:10px"><button class="link" id="addEvent">+ Add appointment or plan</button></div></div>
     ${recentNotesHTML(latest)}`;
   $("#ctaRec").onclick = () => openRecorder();
+  if ($("#shSwitch")) $("#shSwitch").onclick = () => switchCarer();
   $("#qContacts").onclick = () => openContacts();
   $("#qFind").onclick = () => openFind();
   bindTasks($("#view-today")); bindMeds(v); bindFbQuestions(v);
@@ -2322,14 +2344,23 @@ function openSettings() {
       <button class="btn secondary" id="stTest">Check AI connection</button><div class="small" id="stMsg"></div>
       ${session.local || session.role === "family" ? "" : '<button class="btn secondary" id="stTrain">Medicines training</button>'}
       ${session.local ? "" : '<button class="btn secondary" id="stPw">Change my password</button><div id="stPush"></div>'}
+      ${isSharedPhone() ? '<button class="btn primary" id="stShSwitch">Switch carer</button>' : ""}
+      ${storageState.installed ? "" : '<button class="btn secondary" id="stInstall">Install app on this phone</button><div class="small" id="stInstallMsg"></div>'}
       <button class="btn ghost" id="stOut">Sign out</button></div>
+    ${!session.local && session.role === "admin" && session.client ? `<div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">This phone</h3>
+      ${isSharedPhone() ? `<p class="small" style="margin:0">This is <strong>${esc(S.client.name)}</strong>'s shared phone. It opens only ${esc(S.client.name)}, carers switch with their own password, and it locks when it isn't used.</p>
+        <label class="f">Lock after<select id="stShLock">${[5, 15, 30].map((n) => `<option value="${n}" ${n === (Number(session.shared.lockMins) || 15) ? "selected" : ""}>${n} minutes unused</option>`).join("")}</select></label>
+        <button class="btn ghost" id="stShOff">Stop being ${esc(S.client.name)}'s shared phone</button>`
+      : `<p class="small" style="margin:0">If this phone stays at ${esc(S.client.name)}'s home for all the carers to use, make it the shared phone: it opens only ${esc(S.client.name)}, doesn't count as anyone's own device, has Switch carer, and locks after 15 minutes unused.</p>
+        <button class="btn secondary" id="stShOn">Make this ${esc(S.client.name)}'s shared phone</button>`}
+      ${(session.client.shared || []).length ? `<div class="small"><strong>Shared phones for ${esc(S.client.name)}</strong>${session.client.shared.map((x) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px;margin-top:6px"><span>${esc(x.label)} <span class="muted">· set up ${esc(dayLabel(x.setAt).toLowerCase())} by ${esc(x.setBy)}</span></span><button class="link small" data-shrm="${esc(x.key)}">Stop</button></div>`).join("")}</div>` : ""}</div>` : ""}
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Client</h3>
       <p class="small" style="margin:0">Notes are for <strong>${esc(S.client.name)}</strong>.</p>
       <label class="f">Where the care is<select id="stCountry" ${session.role === "admin" && !session.local ? "" : "disabled"}><option value="UK" ${clientCountry() === "UK" ? "selected" : ""}>United Kingdom</option><option value="AU" ${clientCountry() === "AU" ? "selected" : ""}>Australia</option></select></label>
       <p class="tiny muted" style="margin:-6px 0 0">Sets the emergency numbers and contacts under Who to tell, the agreement wording, and the spelling the AI uses.${session.role === "admin" ? "" : " An administrator can change it."}</p>
-      <button class="btn secondary" id="stSwitch">Switch or add client</button></div>
+      ${isSharedPhone() ? "" : '<button class="btn secondary" id="stSwitch">Switch or add client</button>'}</div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Carers for ${esc(S.client.name)}</h3>
-      ${roster().filter((x) => !x.notOnRoster).map((x) => `<label class="f">${esc(x.name)}<input type="text" data-cs="${esc(x.id)}" data-was="${esc(x.shift)}" value="${esc(x.shift)}" placeholder="Shift, e.g. Day · 08:00–20:00" maxlength="40" autocomplete="off"></label>`).join("") || `<p class="small muted" style="margin:0">No carers are on ${esc(S.client.name)} yet.</p>`}
+      ${roster().filter((x) => !x.notOnRoster).map((x) => `<label class="f">${esc(x.name)}<input type="text" data-cs="${esc(x.id)}" data-was="${esc(x.shift)}" value="${esc(x.shift)}" placeholder="Shift, e.g. Day · 08:00–20:00" maxlength="40" autocomplete="off">${x.shift && !shiftRange(x.shift) ? '<span class="tiny" style="color:var(--follow)">Add the times, like 04:00–13:30, so the app can tell who is on shift.</span>' : ""}</label>`).join("") || `<p class="small muted" style="margin:0">No carers are on ${esc(S.client.name)} yet.</p>`}
       ${roster().some((x) => x.notOnRoster) ? `<p class="tiny muted" style="margin:0">You're not one of ${esc(S.client.name)}'s carers, so you aren't listed here.</p>` : ""}
       ${roster().some((x) => !x.notOnRoster) ? '<button class="btn secondary" id="stPeople">Save shifts</button>' : ""}
       ${session.role === "admin" ? `<button class="link" id="stWho" style="justify-self:start">Change who cares for ${esc(S.client.name)}</button>` : `<p class="tiny muted" style="margin:0">An administrator decides who cares for ${esc(S.client.name)}.</p>`}</div>
@@ -2373,6 +2404,27 @@ function openSettings() {
   };
   if ($("#stTesters")) $("#stTesters").onclick = () => { s.close(); openTesters(); };
   if ($("#stPw")) $("#stPw").onclick = openChangePassword;
+  if ($("#stShSwitch")) $("#stShSwitch").onclick = () => { s.close(); switchCarer(); };
+  // Always available: Chrome only offers its own install prompt now and then.
+  if ($("#stInstall")) $("#stInstall").onclick = async () => {
+    if (installPrompt) { try { installPrompt.prompt(); await installPrompt.userChoice; } catch {} installPrompt = null; await checkStorage(); s.close(); openSettings(); return; }
+    $("#stInstallMsg").innerHTML = storageState.ios
+      ? "In Safari: tap the <b>Share</b> button (square with an arrow), then <b>Add to Home Screen</b>, then <b>Add</b>. Open Dignity Notes from the new icon from now on."
+      : "In Chrome: tap the <b>⋮</b> menu (top right), then <b>Add to Home screen</b> or <b>Install app</b>, then <b>Install</b>. If it says <b>Open app</b>, it's already installed: open it from your home screen.";
+  };
+  const shSet = async (body, msg) => {
+    try {
+      const out = await relay("/clients/sharedphone", { id: session.client.id, ...body });
+      session.client.shared = out.client.shared || [];
+      if (body.on === true) { session.shared = { clientId: session.client.id, lockMins: body.lockMins || 15 }; setSharedPhone({ ...session.shared, clientName: session.client.name, secret: out.sharedSecret || (sharedPhone() || {}).secret }); markActive(); }
+      else if (body.sharedSecret) { delete session.shared; setSharedPhone(null); }
+      saveSession(); toast(msg); s.close(); openSettings();
+    } catch (e) { toast(e.message); }
+  };
+  if ($("#stShOn")) $("#stShOn").onclick = (e) => confirmInline(e.currentTarget, () => shSet({ on: true, lockMins: 15 }, `This is now ${session.client.name}'s shared phone`), "Tap again to make it the shared phone");
+  if ($("#stShLock")) $("#stShLock").onchange = (e) => shSet({ sharedSecret: (sharedPhone() || {}).secret, on: true, lockMins: Number(e.target.value) }, `Locks after ${e.target.value} minutes unused`);
+  if ($("#stShOff")) $("#stShOff").onclick = (e) => confirmInline(e.currentTarget, () => shSet({ sharedSecret: (sharedPhone() || {}).secret, on: false }, "This is an ordinary phone again"));
+  s.root.querySelectorAll("[data-shrm]").forEach((b) => (b.onclick = () => confirmInline(b, () => shSet({ key: b.dataset.shrm, on: false }, "That phone is no longer a shared phone"))));
   if ($("#stTrain")) $("#stTrain").onclick = openMyTraining;
   if ($("#stPush")) drawPushSetting($("#stPush"));
   if ($("#stCountry") && !$("#stCountry").disabled) $("#stCountry").onchange = async (e) => {
@@ -2389,7 +2441,7 @@ function openSettings() {
     if (!session.local) relay("/logout", {}).catch(() => {});
     s.close(); signedOut("You've signed out.");
   });
-  $("#stSwitch").onclick = () => { s.close(); handoverDraft = familySummary = null; showClients(true); };
+  if ($("#stSwitch")) $("#stSwitch").onclick = () => { s.close(); handoverDraft = familySummary = null; showClients(true); };
   if ($("#stWho")) $("#stWho").onclick = () => { s.close(); openTesters(); };
   if ($("#stPeople")) $("#stPeople").onclick = async (e) => {
     // Only what this person changed, so an older view doesn't overwrite someone else's update.
@@ -2978,9 +3030,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-12.15";
+const PRIVACY_VERSION = "2026-10-13.16";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 15 · 12 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 16 · 13 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -2988,6 +3040,7 @@ const PRIVACY_HTML = `
 <h3>What we collect about you</h3>
 <ul>
 <li><strong>Your account:</strong> your name, username and password. We store passwords only in a scrambled (hashed) form that can't be read back.</li>
+<li><strong>Shared phones:</strong> if an administrator makes a phone a client's shared phone (kept at the client's home for the carers), we keep a random ID for that phone with the client, a description of it (for example "Android · Chrome"), who set it up and when. Signing in on it is recorded as the shared phone and isn't added to your own devices.</li>
 <li><strong>Sign-in records:</strong> the time of each sign-in attempt, your IP address, your approximate location worked out from that address (town and country), your type of device and browser, and a random ID that this app stores on your device. We use these to keep accounts secure and to detect when a login is shared or used on another device.</li>
 <li><strong>How you work, for medicines:</strong> whether an administrator has recorded you as a private carer (self-employed or employed by the client or family) or an agency carer, and who recorded it. It decides whether a medicines training sign-off is needed.</li>
 <li><strong>Medicines training sign-off:</strong> if an administrator records that you're trained and assessed to support people with medicines: the date, who assessed you, the review date and any note. Administrators can see it; it's used to decide who can change the medicine list.</li>
@@ -3067,8 +3120,85 @@ function viewPrivacy() {
 function afterSignIn(privacyAccepted) {
   if (!session) return;
   if (privacyAccepted && session.privacyAccepted !== PRIVACY_VERSION) { session.privacyAccepted = PRIVACY_VERSION; saveSession(); }
-  const go2 = () => { if (session.client) { $("#fullRoot").innerHTML = ""; loadUser(); go("today"); openFromHash(); checkClient(); checkPush(); } else showClients(false); };
+  const go2 = () => {
+    if (isSharedPhone() && pushSupported() && Notification.permission === "granted") subscribePush().catch(() => {}); // the phone's notifications are now this carer's
+    if (session.client) { $("#fullRoot").innerHTML = ""; loadUser(); go("today"); openFromHash(); checkClient(); checkPush(); } else showClients(false);
+  };
   if (session.local || privacyAccepted || session.privacyAccepted === PRIVACY_VERSION) go2(); else showPrivacy(go2);
+}
+
+
+/* ---------- the client's shared phone ----------
+ * A phone kept at the client's home and used by several carers. An administrator makes it the
+ * client's shared phone (Settings, holding the phone). Then it opens only that client, isn't counted
+ * as anyone's own device, has "Switch carer" (tap your name, type your own password), shows who is
+ * recording, and locks after a few minutes unused (never mid-recording; anything open stays underneath).
+ * Switching sends everything first, then removes the previous carer's copy from the phone.
+ */
+const SHARED_KEY = "dignitynotes.sharedphone", SHARED_PEOPLE = "dignitynotes.sharedpeople", LOCK_KEY = "dignitynotes.locked", ACTIVE_KEY = "dignitynotes.active";
+const sharedPhone = () => { try { return JSON.parse(localStorage.getItem(SHARED_KEY) || "null"); } catch { return null; } };
+const setSharedPhone = (v) => { try { v ? localStorage.setItem(SHARED_KEY, JSON.stringify(v)) : localStorage.removeItem(SHARED_KEY); } catch {} };
+const isSharedPhone = () => !!(session && !session.local && session.shared && sharedPhone());
+const sharedPeople = () => { try { return JSON.parse(localStorage.getItem(SHARED_PEOPLE) || "[]"); } catch { return []; } };
+function rememberSharedPerson(u, name) {
+  try { localStorage.setItem(SHARED_PEOPLE, JSON.stringify([{ u, name }, ...sharedPeople().filter((p) => p.u !== u)].slice(0, 12))); } catch {}
+}
+let lastActive = (() => { try { return Number(localStorage.getItem(ACTIVE_KEY)) || Date.now(); } catch { return Date.now(); } })(), activeSaved = 0;
+const markActive = () => { lastActive = Date.now(); if (lastActive - activeSaved > 30000) { activeSaved = lastActive; try { localStorage.setItem(ACTIVE_KEY, String(lastActive)); } catch {} } };
+["pointerdown", "keydown", "touchstart", "wheel"].forEach((ev) => addEventListener(ev, () => { if (!$("#lockRoot")) markActive(); }, { passive: true, capture: true }));
+const isLocked = () => { try { return localStorage.getItem(LOCK_KEY) === "1"; } catch { return false; } };
+function checkLock() {
+  if (!isSharedPhone() || $("#lockRoot")) return;
+  if (rec.on || rec.starting) { markActive(); return; } // never in the middle of a recording
+  const mins = Number(session.shared.lockMins) || 15;
+  if (isLocked() || Date.now() - lastActive >= mins * 60000) lockPhone();
+}
+setInterval(checkLock, 20000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkLock(); });
+function lockPhone() {
+  try { localStorage.setItem(LOCK_KEY, "1"); } catch {}
+  const el = document.createElement("div"); el.id = "lockRoot";
+  el.innerHTML = `<div class="full" role="dialog" aria-modal="true" style="z-index:9999"><div class="wrap" style="max-width:440px">
+    <div style="display:grid;gap:10px;margin-top:6vh">
+      <span class="eyebrow">${esc((sharedPhone() || {}).clientName || "Shared phone")}'s shared phone</span>
+      <h2 style="font-size:30px;line-height:1.15">Locked</h2>
+      <p style="margin:0"><strong>${esc(session.name)}</strong> was signed in. Anything you had open is kept.</p>
+      <form id="lkForm" style="display:grid;gap:10px"><label class="f">${esc(session.name)}'s password<input type="password" id="lkPass" autocomplete="current-password"></label>
+        <button class="btn primary block" id="lkGo">Unlock</button><div class="small" id="lkMsg" role="alert" style="color:var(--incident)"></div></form>
+      <button class="btn secondary block" id="lkSwitch">Not ${esc(session.name)}? Switch carer</button>
+    </div></div></div>`;
+  document.body.appendChild(el);
+  [...document.body.children].forEach((c) => { if (c !== el) c.inert = true; }); // nothing behind it can be reached
+  $("#lkForm").onsubmit = async (e) => {
+    e.preventDefault(); const pw = $("#lkPass").value, m = $("#lkMsg"); if (!pw) return;
+    $("#lkGo").disabled = true; m.textContent = "";
+    try {
+      const out = await relay("/login", { username: session.username, password: pw, deviceId, sharedSecret: (sharedPhone() || {}).secret }, { auth: false });
+      const old = session.token; session.token = out.token; session.shared = out.shared || session.shared; saveSession();
+      fetch(relayBase() + "/logout", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + old }, body: "{}" }).catch(() => {});
+      unlockPhone();
+    } catch (err) { m.textContent = err.message; $("#lkGo").disabled = false; }
+  };
+  $("#lkSwitch").onclick = () => switchCarer();
+  setTimeout(() => $("#lkPass") && $("#lkPass").focus(), 50);
+}
+function unlockPhone() { try { localStorage.removeItem(LOCK_KEY); } catch {} const el = $("#lockRoot"); if (el) el.remove(); [...document.body.children].forEach((c) => (c.inert = false)); markActive(); }
+// Send everything, then remove this carer's copy from the shared phone and let the next one sign in.
+async function switchCarer() {
+  if (rec.on || rec.starting || rec.finishing) return toast("Finish the recording first");
+  if ((S.pending || []).length) return toast(`${session.name} has a recording that isn't saved yet. Unlock and save it first.`);
+  if (navigator.onLine) await syncNow().catch(() => {});
+  const left = unsynced().length + unsentAudio().length + countFailed(); // counted now, not the last sync's figures
+  if (left) return toast(`${left} item${left === 1 ? "" : "s"} not sent yet. Connect to the internet, wait a moment, then switch.`);
+  const who = session.username, token = session.token;
+  if (token && relayBase()) fetch(relayBase() + "/logout", { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token }, body: "{}" }).catch(() => {});
+  unlockPhone();
+  signedOut(`${session.name} has switched off. Next carer: tap your name and sign in.`);
+  try {
+    const mineKey = (k) => k === "nanacare.v3." + who || ["nanacare.v3.", "dignitynotes.dict.", "dignitynotes.speechlang.", "dignitynotes.fbdraft."].some((p) => k === p + who || k.startsWith(p + who + "."));
+    for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && mineKey(k)) localStorage.removeItem(k); }
+  } catch {}
+  audioDB.keys().then((ks) => audioDB.del((ks || []).filter((k) => !String(k).startsWith("doc_")))).catch(() => {}); // recordings already sent
 }
 
 /* ---------- sign-in ---------- */
@@ -3097,7 +3227,8 @@ function showLogin(msg) {
   const root = $("#fullRoot");
   root.innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap" style="max-width:440px">
     <div style="display:grid;gap:6px;margin-top:4vh"><div style="background:#FDFAF3;border-radius:18px;padding:12px 14px;box-shadow:var(--shadow);margin-bottom:12px"><img src="logo-wordmark.png" alt="Dignity Notes: Spoken care notes" width="720" height="195" style="width:100%;height:auto;display:block"></div>
-      <h2 style="font-size:32px;line-height:1.1">Sign in</h2>
+      <h2 style="font-size:32px;line-height:1.1">${sharedPhone() ? `${esc(sharedPhone().clientName || "Shared")}'s phone` : "Sign in"}</h2>
+      ${sharedPhone() && sharedPeople().length ? `<p class="small" style="margin:0">Who's using it? Tap your name, then type your own password.</p><div class="chips">${sharedPeople().map((p) => `<button type="button" class="chip" data-lgu="${esc(p.u)}" style="min-height:44px;font-size:16px">${esc(p.name)}</button>`).join("")}</div>` : ""}
       <p class="muted" style="margin:0">Spoken care notes for people who care for older adults at home. Use the username and password you were given.</p></div>
     ${msg ? `<div class="warn">${esc(msg)}</div>` : ""}
     <form id="lgForm" style="display:grid;gap:14px">
@@ -3120,10 +3251,12 @@ function showLogin(msg) {
     btn.disabled = true; btn.textContent = "Signing in…";
     session = { relayUrl };
     try {
-      const out = await relay("/login", { username, password, deviceId }, { auth: false });
+      const out = await relay("/login", { username, password, deviceId, sharedSecret: (sharedPhone() || {}).secret }, { auth: false });
       if (!out.token) throw new Error("That address isn't the Dignity Notes relay.");
       if (out.privacyVersion && out.privacyVersion !== PRIVACY_VERSION) throw new Error("A newer version of the app is available. Close and reopen it, then sign in again.");
-      session = { token: out.token, username: out.username, role: out.role, name: out.name, relayUrl };
+      session = { token: out.token, username: out.username, role: out.role, name: out.name, relayUrl, ...(out.shared ? { shared: out.shared } : {}) };
+      if (out.shared) { setSharedPhone({ ...(sharedPhone() || {}), ...out.shared }); if (out.role !== "admin") rememberSharedPerson(out.username, out.name); } else setSharedPhone(null); // not (or no longer) a shared phone
+      try { localStorage.removeItem(LOCK_KEY); } catch {} markActive();
       saveSession(); accentFromServer(out.accent); afterSignIn(out.privacyAccepted);
     } catch (err) {
       session = null; btn.disabled = false; btn.textContent = "Sign in";
@@ -3134,6 +3267,7 @@ function showLogin(msg) {
     session = { username: "local", role: "admin", name: "Local tester", local: true, relayUrl: "" };
     saveSession(); showClients(false);
   };
+  root.querySelectorAll("[data-lgu]").forEach((b) => (b.onclick = () => { $("#lgUser").value = b.dataset.lgu; $("#lgPass").focus(); }));
   setTimeout(() => $("#lgUser") && $("#lgUser").focus(), 50);
 }
 
@@ -3187,8 +3321,8 @@ function openTesters() {
           <div class="small" style="margin-top:8px"><strong>${u.role === "family" ? "Family of" : "Cares for"}</strong>${u.role === "admin" ? ' <span class="muted">(administrators can open every client)</span>' : ""}
             <div class="chips" style="margin-top:4px">${clients.length ? clients.map((c) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" data-assign="${esc(u.username)}" value="${esc(c.id)}" ${u.clients.includes(c.id) ? "checked" : ""} style="accent-color:var(--accent)">${esc(c.name)}</label>`).join("") : '<span class="muted">No clients yet</span>'}</div></div>
           ${u.role !== "family" ? `<div class="small" style="margin-top:8px"><strong>Medicines</strong> ${u.meds && u.meds.valid ? `<span class="chip accent">Signed off</span> <span class="muted">${u.meds.via === "certificate" ? "verified certificate" : `assessed ${esc(u.meds.assessedOn)} by ${esc(u.meds.assessor)}`} · review by ${esc(u.meds.reviewOn)}</span>` : u.meds && u.meds.competent ? `<span class="chip incident">Review overdue (${esc(u.meds.reviewOn)})</span>` : (u.meds && (u.meds.certificates || []).some((c) => c.verifiedAt && !c.practical)) ? '<span class="chip follow">Course done: observed assessment needed</span>' : u.meds && u.meds.required === false ? '<span class="chip">Private carer</span> <span class="muted">no sign-off required</span>' : '<span class="muted">Not signed off to support with medicines</span>'} <button class="link small" data-medsign="${esc(u.username)}" style="min-height:40px">${u.meds && u.meds.assessedOn ? "Change" : "Record assessment"}</button>
-            ${u.username === session.username ? (u.meds && u.meds.carerType ? `<div class="tiny muted">Works as: ${u.meds.carerType === "private" ? "private carer" : "agency carer"}</div>` : "") : `<label class="f" style="margin-top:4px">Works as<select data-carertype="${esc(u.username)}"><option value="" ${u.meds && u.meds.carerType ? "" : "selected"} disabled>Not set: sign-off required</option><option value="private" ${u.meds && u.meds.carerType === "private" ? "selected" : ""}>Private carer (no sign-off required)</option><option value="agency" ${u.meds && u.meds.carerType === "agency" ? "selected" : ""}>Agency carer (sign-off required)</option></select></label>`}
-            ${(() => { const cs = (u.meds && u.meds.certificates) || [], waiting = cs.filter((c) => !c.verifiedAt).length; return `<details style="margin-top:4px" ${waiting ? "open" : ""}><summary>Certificates (${cs.length})${waiting ? ` <span class="chip follow">${waiting} to verify</span>` : ""}</summary><div data-certs="${esc(u.username)}" style="display:grid;gap:8px;margin-top:6px">${cs.map((c) => certRowHTML(c, u.username, { admin: true, self: u.username === session.username })).join("")}<button class="btn ghost" type="button" data-certadd="${esc(u.username)}">Add a certificate for ${esc(u.name || u.username)}</button></div></details>`; })()}</div>` : ""}
+            ${u.username === session.username ? (u.meds && u.meds.carerType ? `<div class="tiny muted">Works as: ${u.meds.carerType === "private" ? "private carer" : "agency carer"}</div>` : "") : `<label class="f" style="margin-top:4px">Works as<select data-carertype="${esc(u.username)}"><option value="" ${u.meds && u.meds.carerType ? "" : "selected"} disabled>Not set: private carer (no sign-off needed)</option><option value="private" ${u.meds && u.meds.carerType === "private" ? "selected" : ""}>Private carer (no sign-off required)</option><option value="agency" ${u.meds && u.meds.carerType === "agency" ? "selected" : ""}>Agency carer (sign-off required)</option></select></label>`}
+            ${(() => { const cs = (u.meds && u.meds.certificates) || [], waiting = cs.filter((c) => !c.verifiedAt).length; return `<details style="margin-top:4px" ${waiting ? "open" : ""}><summary>Certificates (${cs.length})${waiting ? ` <span class="chip follow">${waiting} to verify</span>` : ""}</summary><div data-certs="${esc(u.username)}" style="display:grid;gap:8px;margin-top:6px">${cs.map((c) => certRowHTML(c, u.username, { admin: true, self: u.username === session.username, required: !!(u.meds && u.meds.required) })).join("")}<button class="btn ghost" type="button" data-certadd="${esc(u.username)}">Add a certificate for ${esc(u.name || u.username)}</button></div></details>`; })()}</div>` : ""}
           ${u.main ? '<p class="tiny muted" style="margin:6px 0 0">Main administrator: signs in with the relay settings, so the password and device lock aren\'t managed here.</p>' : `<label class="check small" style="margin-top:6px"><input type="checkbox" data-lock="${esc(u.username)}" ${u.locked ? "checked" : ""}><span>Lock to first device (refuse sign-ins from any other device)</span></label>`}
           ${u.devices.length ? `<button class="link small" data-devreset="${esc(u.username)}">Reset devices (next sign-in becomes the home device)</button>` : ""}</div>
         ${u.main ? "" : `<button class="link" data-reset="${esc(u.username)}">New password</button>
@@ -3825,6 +3959,7 @@ setTimeout(() => { try { openFromHash(); checkPush(); } catch {} }, 300); // ope
 checkStorage().then(() => { if (session && session.client && tab === "today") render(); });
 if (session && (session.token || session.local)) {
   if (session.client) { loadUser(); render(); } else render();
+  checkLock(); // a shared phone that was locked (or left unused) stays locked after reopening
   if (session.local || session.privacyAccepted === PRIVACY_VERSION) { if (session.client) checkClient(); else showClients(false); }
   else relay("/me", {}).then((me) => afterSignIn(me.privacyAccepted)).catch((e) => {
     if (!session) return; // sign-in ended: the login screen is already showing
