@@ -448,14 +448,16 @@ function summaryPayload(mode, toId) {
   return {
     mode, country: clientCountry(), clientId: session && session.client ? session.client.id : "", client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
     notes: (mode === "family" ? familyNotes() : shiftNotes()).map((n) => { const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name, note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
-    flags: openFlags().filter((f) => !isExample(f) && !(mode === "family" && f.kind === "incident" && !familyIncidentsOn()) && !(mode === "family" && / given outside its limits$/.test(f.title))).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
-    transfers: S.transfers.filter((t) => t.outTs >= shiftStart() || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
+    flags: openFlags().filter((f) => !isExample(f) && !(mode === "family" && f.kind === "incident" && !familyIncidentsOn()) && !(mode === "family" && (f.ts < Date.now() - 24 * 36e5 || MEDS_SAFETY_FLAG.test(f.title)))).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
+    transfers: S.transfers.filter((t) => t.outTs >= (mode === "family" ? Date.now() - 24 * 36e5 : shiftStart()) || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
     planGaps: mode === "handover" ? planGaps() : [],
     tasksMissed: mode === "handover" ? tasksMissedForHandover() : [],
     medsSummary: mode === "handover" ? medsForHandover() : [],
     schedule: S.schedule.filter((s) => s.when > Date.now() && !isExample(s)).sort((a, b) => a.when - b.when).slice(0, 4).map((s) => `${dayLabel(s.when)} ${fmtTime(s.when)}: ${s.label}${s.detail ? " - " + s.detail : ""}`),
   };
 }
+// Medicine-safety follow-ups are for the carers, not the family update.
+const MEDS_SAFETY_FLAG = / given outside its limits$|^Stopping .+: not yet checked$|not signed off|label doesn't match|recorded twice/i;
 function basicSummary(p) {
   const first = (s) => (s.match(/[^.!?]+[.!?]/) || [s])[0].trim();
   if (p.mode === "family") {
@@ -464,8 +466,7 @@ function basicSummary(p) {
     return (lines.length ? lines.join(" ") : `No notes recorded yet today for ${p.client}.`) + (inc.length ? `\n\nTo note: ${inc.map((f) => f.detail).join(" ")}` : "");
   }
   return [
-    "How the shift went", ...(p.notes.length ? p.notes.map((n) => `- ${n.time} ${first(n.note)}`) : ["- No notes recorded this shift."]),
-    ...(p.transfers.length ? p.transfers.map((t) => `- ${t}`) : []),
+    "How the shift went", ...(p.notes.length || p.transfers.length ? [...p.notes.map((n) => [n.time, `- ${n.time} ${first(n.note)}`]), ...p.transfers.map((t) => [t.slice(0, 5), `- ${t}`])].sort((a, b) => a[0].localeCompare(b[0])).map((x) => x[1]) : ["- No notes recorded this shift."]),
     "", "Points to note", ...(p.flags.length ? p.flags.map((f) => `- ${f.title}: ${f.detail}`) : ["- Nothing to note."]),
     "", "Coming up", ...(p.schedule.length ? p.schedule.map((s) => `- ${s}`) : ["- Nothing scheduled."]),
     ...((p.tasksMissed || []).length ? ["", "Tasks not done this shift:", ...p.tasksMissed.map((t) => `- ${t}`)] : []),
@@ -1073,8 +1074,8 @@ function medsForHandover() {
   for (const d of doses().filter((x) => x.slot === "prn" && x.ts >= from && x.code !== "V" && !doses().some((y) => y.corrects === x.id)).sort((a, b) => a.ts - b.ts)) out.push(`${fmtTime(d.ts)} ${d.med || "when-required medicine"} (when required${d.prnFor ? ", for " + d.prnFor : ""}): ${doseLabel(d.code)}${d.amount ? " (" + d.amount + ")" : ""}, ${doseBy(d)}${outcomeFor(d.id) ? "; outcome: " + outcomeFor(d.id).outcome : ""}`);
   const uc = medsUnchecked();
   if (uc.some((m) => !medSelfChecked(m))) out.push(`Not yet checked against the label: ${uc.filter((m) => !medSelfChecked(m)).map((m) => m.name).join(", ")}`);
-  if (uc.some(medSelfChecked)) out.push(`Double-checked by the carer who changed them; incoming carer, please check against the label: ${uc.filter(medSelfChecked).map((m) => m.name).join(", ")}`);
-  if (profileUnchecked()) out.push(profileSelfChecked() ? "Medicines details (who gives them, allergies) double-checked by the carer who changed them; incoming carer, please check them" : "Medicines details (who gives them, allergies) changed and not yet checked");
+  if (uc.some(medSelfChecked)) out.push(`Double-checked by the carer who changed them, not yet checked against the label by a second person: ${uc.filter(medSelfChecked).map((m) => `${m.name} (${m.selfCheck.by})`).join(", ")}`);
+  if (profileUnchecked()) out.push(profileSelfChecked() ? `Medicines details (who gives them, allergies) double-checked by ${medsProfile().selfCheck.by}, not yet checked by a second person` : "Medicines details (who gives them, allergies) changed and not yet checked");
   if (medsListCheckDue()) out.push("Fortnightly medicines list check is due");
   return out;
 }
@@ -1099,7 +1100,7 @@ const certStatus = (c, required = true) => !required
   : !c.practical ? `Verified by ${c.verifiedBy}: a course without a practical assessment, so an observed assessment is still needed`
   : `Verified by ${c.verifiedBy}: over a year old or expired (${c.reviewOn}), so it needs renewing`;
 const certRowHTML = (c, who, { admin = false, self = false, required = true } = {}) => `<div class="card" style="box-shadow:none;display:grid;gap:4px;padding:10px 12px">
-  <div><strong>${esc(c.course)}</strong> <span class="muted small">· ${esc(c.issuer)} · ${esc(c.awardedOn)}${c.expiresOn ? " · expires " + esc(c.expiresOn) : ""}</span></div>
+  <div><strong>${esc(c.course)}</strong> <span class="muted small">· ${esc(c.issuer)} · ${esc(c.awardedOn)}${c.expiresOn && required ? " · expires " + esc(c.expiresOn) : ""}</span></div>
   <div class="small ${c.counts ? "" : "muted"}">${required && c.counts ? '<span class="chip accent">Counts</span> ' : ""}${!required && c.refresher ? '<span class="chip follow">Refresher</span> ' : ""}${esc(certStatus(c, required))}</div>
   <div class="tiny muted">Uploaded by ${esc(c.uploadedBy)} ${esc(dayLabel(c.uploadedAt).toLowerCase())}${c.practical ? " · includes a practical assessment" : " · knowledge only"}${c.verifyNote ? " · " + esc(c.verifyNote) : ""}</div>
   <div class="row" style="gap:8px"><button class="btn ghost" data-certview="${esc(who)}|${esc(c.id)}|${esc(c.type)}" style="flex:1">View</button>
@@ -2155,14 +2156,22 @@ async function autoFamilyUpdate() {
   if (!due || isFamily() || !cloudOn() || !navigator.onLine || familyAuto.busy || Date.now() < familyAuto.retryAt) return false;
   if (familySharedSince(due) || (S.familyDraft && S.familyDraft.due === due)) return false;
   familyAuto.busy = true;
-  const key = KEY; // the client this is for: the carer may switch client while it's being written
+  const key = KEY, id = session.client.id; // the client this is for: the carer may switch client meanwhile
   try {
-    const d = await summarise("family");
+    // One draft per client, kept on the relay and shared by every phone: written once, not per phone.
+    let d = (await relay("/clients/familydraft", { id, op: "get" })).draft;
     if (KEY !== key) return false;
-    // Only an AI-written update is offered; if the AI couldn't be reached, try again in 15 minutes.
-    if (d.source !== "ai") { familyAuto.retryAt = Date.now() + 15 * 60000; return false; }
-    S.familyDraft = { ...d, due, at: Date.now() }; saveLocal(); return true;
-  } finally { familyAuto.busy = false; }
+    if (!d || d.due !== due) {
+      const w = await summarise("family");
+      if (KEY !== key) return false;
+      // Only an AI-written update is offered; if the AI couldn't be reached, try again in 15 minutes.
+      if (w.source !== "ai") { familyAuto.retryAt = Date.now() + 15 * 60000; return false; }
+      d = (await relay("/clients/familydraft", { id, op: "put", due, text: w.text, source: w.source })).draft;
+      if (KEY !== key) return false;
+    }
+    S.familyDraft = { text: d.text, source: d.source, due, at: d.at }; saveLocal(); return true;
+  } catch { familyAuto.retryAt = Date.now() + 15 * 60000; return false; }
+  finally { familyAuto.busy = false; }
 }
 const familyReadyHTML = () => { const due = familyDueAt(); return due && S.familyDraft && S.familyDraft.due === due && !familySharedSince(due)
   ? `<button class="warn small" data-gofamily style="display:block;width:100%;text-align:left;border:0">Today's family update is written and ready to check. Tap to read it and share it with the family.</button>` : ""; };
@@ -2198,7 +2207,8 @@ function renderFamily() {
   if ($("#famShare")) $("#famShare").onclick = (e) => confirmInline(e.currentTarget, () => {
     S.summaries = S.summaries || [];
     const text = ($("#famText") ? $("#famText").value : familySummary.text).trim().slice(0, 4000); if (!text) return toast("Write the update first");
-    S.summaries.push({ id: uid(), ts: Date.now(), day: new Date().toLocaleDateString("en-CA"), text }); S.familyDraft = null; save(); familySummary = null; renderFamily(); toast("Shared with family");
+    S.summaries.push({ id: uid(), ts: Date.now(), day: new Date().toLocaleDateString("en-CA"), text }); S.familyDraft = null; save();
+    if (cloudOn()) relay("/clients/familydraft", { id: session.client.id, op: "drop" }).catch(() => {}); familySummary = null; renderFamily(); toast("Shared with family");
   }, "Tap again to share with the family");
   v.querySelectorAll("[data-as]").forEach((b) => (b.onclick = () => { sendAs = b.dataset.as; renderFamily(); }));
   $("#msgForm").onsubmit = (e) => {
@@ -2358,7 +2368,7 @@ function openSettings() {
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Client</h3>
       <p class="small" style="margin:0">Notes are for <strong>${esc(S.client.name)}</strong>.</p>
       <label class="f">Where the care is<select id="stCountry" ${session.role === "admin" && !session.local ? "" : "disabled"}><option value="UK" ${clientCountry() === "UK" ? "selected" : ""}>United Kingdom</option><option value="AU" ${clientCountry() === "AU" ? "selected" : ""}>Australia</option></select></label>
-      <label class="f">How notes refer to ${esc(S.client.name)}<select id="stCPron" ${session.role === "admin" && !session.local ? "" : "disabled"}>${[["", `By name (${S.client.name})`], ["he/him", "He / him"], ["she/her", "She / her"], ["they/them", "They / them"]].map(([v, l]) => `<option value="${esc(v)}" ${(session.client.pronouns || "") === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+      <label class="f">How notes refer to ${esc(S.client.name)}<select id="stCPron" ${session.role === "admin" && !session.local ? "" : "disabled"}>${[["", `By name (${S.client.name})`], ["he/him", "He / him"], ["she/her", "She / her"], ["they/them", "They / them"]].map(([v, l]) => `<option value="${esc(v)}" ${(session.client.pronouns || "") === v ? "selected" : ""}>${esc(l)}</option>`).join("")}${session.client.pronouns && !["he/him", "she/her", "they/them"].includes(session.client.pronouns) ? `<option value="${esc(session.client.pronouns)}" selected>${esc(session.client.pronouns)}</option>` : ""}<option value="other">Something else…</option></select></label>
       <p class="tiny muted" style="margin:-6px 0 0">Sets the emergency numbers and contacts under Who to tell, the agreement wording, and the spelling the AI uses.${session.role === "admin" ? "" : " An administrator can change it."}</p>
       ${isSharedPhone() ? "" : '<button class="btn secondary" id="stSwitch">Switch or add client</button>'}</div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Carers for ${esc(S.client.name)}</h3>
@@ -2409,7 +2419,9 @@ function openSettings() {
   if ($("#stShSwitch")) $("#stShSwitch").onclick = () => { s.close(); switchCarer(); };
   if ($("#stPron")) $("#stPron").onclick = () => { s.close(); openPronouns(); };
   if ($("#stCPron") && !$("#stCPron").disabled) $("#stCPron").onchange = async (e) => {
-    try { const out = await relay("/clients/pronouns", { id: session.client.id, pronouns: e.target.value }); session.client.pronouns = out.client.pronouns || ""; saveSession(); toast("Saved"); }
+    let v = e.target.value;
+    if (v === "other") { v = (prompt(`How should notes refer to ${S.client.name}? (e.g. ze/zir)`) || "").trim(); if (!v) { e.target.value = session.client.pronouns || ""; return; } }
+    try { const out = await relay("/clients/pronouns", { id: session.client.id, pronouns: v }); session.client.pronouns = out.client.pronouns || ""; saveSession(); toast("Saved"); }
     catch (err) { toast(err.message); }
   };
   // Always available: Chrome only offers its own install prompt now and then.
@@ -3189,7 +3201,7 @@ const markActive = () => { lastActive = Date.now(); if (lastActive - activeSaved
 const isLocked = () => { try { return localStorage.getItem(LOCK_KEY) === "1"; } catch { return false; } };
 function checkLock() {
   if (!isSharedPhone() || $("#lockRoot")) return;
-  if (rec.on || rec.starting) { markActive(); return; } // never in the middle of a recording
+  if (rec.on || rec.starting || rec.finishing || $("#rvTx")) { markActive(); return; } // never mid-recording, or with a note being checked
   const mins = Number(session.shared.lockMins) || 15;
   if (isLocked() || Date.now() - lastActive >= mins * 60000) lockPhone();
 }
@@ -3226,7 +3238,9 @@ function unlockPhone() { try { localStorage.removeItem(LOCK_KEY); } catch {} con
 // Send everything, then remove this carer's copy from the shared phone and let the next one sign in.
 async function switchCarer() {
   if (rec.on || rec.starting || rec.finishing) return toast("Finish the recording first");
-  if ((S.pending || []).length) return toast(`${session.name} has a recording that isn't saved yet. Unlock and save it first.`);
+  // A recording not saved yet stays on this phone (hidden) for that carer, so the phone isn't stuck.
+  const keepFor = (S.pending || []).length ? session.username : "";
+  if (keepFor && !confirm(`${session.name} has a recording that isn't saved yet. It will be kept on this phone, hidden, until ${session.name} signs in here again. Switch carer?`)) return;
   if (navigator.onLine) await syncNow().catch(() => {});
   const left = unsynced().length + unsentAudio().length + countFailed(); // counted now, not the last sync's figures
   if (left) return toast(`${left} item${left === 1 ? "" : "s"} not sent yet. Connect to the internet, wait a moment, then switch.`);
@@ -3235,10 +3249,10 @@ async function switchCarer() {
   unlockPhone();
   signedOut(`${session.name} has switched off. Next carer: tap your name and sign in.`);
   try {
-    const mineKey = (k) => k === "nanacare.v3." + who || ["nanacare.v3.", "dignitynotes.dict.", "dignitynotes.speechlang.", "dignitynotes.fbdraft."].some((p) => k === p + who || k.startsWith(p + who + "."));
+    const mineKey = (k) => (!keepFor && k === "nanacare.v3." + who) || (keepFor ? ["dignitynotes.fbdraft."] : ["nanacare.v3.", "dignitynotes.dict.", "dignitynotes.speechlang.", "dignitynotes.fbdraft."]).some((p) => k === p + who || k.startsWith(p + who + "."));
     for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && mineKey(k)) localStorage.removeItem(k); }
   } catch {}
-  audioDB.keys().then((ks) => audioDB.del((ks || []).filter((k) => !String(k).startsWith("doc_")))).catch(() => {}); // recordings already sent
+  if (!keepFor) audioDB.keys().then((ks) => audioDB.del((ks || []).filter((k) => !String(k).startsWith("doc_")))).catch(() => {}); // recordings already sent
 }
 
 /* ---------- sign-in ---------- */
@@ -3409,6 +3423,13 @@ function openTesters() {
           } catch (e) { toast(e.message); }
         };
       }));
+      // Shared phones for every client, so a lost one can be stopped from here (its sign-ins end at once).
+      const sp = clients.filter((c) => (c.shared || []).length);
+      if (sp.length) listEl.insertAdjacentHTML("afterbegin", `<div class="card" style="box-shadow:none;display:grid;gap:6px;margin-bottom:8px"><strong class="small">Shared phones</strong>${sp.map((c) => c.shared.map((x) => `<div class="row small" style="justify-content:space-between;align-items:center;gap:8px"><span>${esc(c.name)}: ${esc(x.label)} <span class="muted">· set up ${esc(dayLabel(x.setAt).toLowerCase())} by ${esc(x.setBy)}</span></span><button class="link small" data-sprm="${esc(c.id)}|${esc(x.key)}">Stop</button></div>`).join("")).join("")}</div>`);
+      listEl.querySelectorAll("[data-sprm]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
+        const [id, key] = b.dataset.sprm.split("|");
+        try { await relay("/clients/sharedphone", { id, key, on: false }); toast("That phone is no longer a shared phone, and anyone signed in on it is signed out"); load(); } catch (e) { toast(e.message); }
+      }, "Tap again to stop it")));
       listEl.querySelectorAll("[data-remove]").forEach((b) => (b.onclick = () => confirmInline(b, async () => {
         try { await relay("/admin/remove", { username: b.dataset.remove }); toast("Removed"); load(); } catch (e) { toast(e.message); }
       })));
@@ -3889,12 +3910,15 @@ async function checkClient() {
     session.client = null; saveSession(); KEY = null; S = seed(); showClients(false);
   } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name || (fresh.country || "UK") !== clientCountry() || JSON.stringify(fresh.family || []) !== JSON.stringify(session.client.family || []) || !!fresh.familyIncidents !== !!session.client.familyIncidents || (fresh.familyAt || "") !== (session.client.familyAt || "") || (fresh.pronouns || "") !== (session.client.pronouns || "")) {
     // Carers or shifts changed elsewhere (e.g. an administrator assigned someone): pick that up.
-    session.client = { id: fresh.id, name: fresh.name, country: fresh.country || "UK", consent: fresh.consent, carers: fresh.carers || [], family: fresh.family || [], familyIncidents: !!fresh.familyIncidents, familyAt: fresh.familyAt || "", pronouns: fresh.pronouns || "" };
+    session.client = clientFromServer(fresh);
     saveSession(); loadUser(); render();
   }
 }
+// The client as the app keeps it in session.client, from the relay's record (one place, so a refresh
+// never drops a field).
+const clientFromServer = (c) => ({ id: c.id, name: c.name, country: c.country || "UK", consent: c.consent, carers: c.carers || [], family: c.family || [], familyIncidents: !!c.familyIncidents, familyAt: c.familyAt || "", pronouns: c.pronouns || "", shared: c.shared || [] });
 function chooseClient(client) {
-  session.client = { id: client.id, name: client.name, country: client.country || "UK", consent: client.consent, carers: client.carers || [], family: client.family || [], familyIncidents: !!client.familyIncidents, familyAt: client.familyAt || "", pronouns: client.pronouns || "", shared: client.shared || [] };
+  session.client = clientFromServer(client);
   saveSession(); loadUser(); $("#fullRoot").innerHTML = ""; go("today");
 }
 // manual = opened from Settings; otherwise a single client is picked automatically.
