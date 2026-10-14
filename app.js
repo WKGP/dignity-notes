@@ -1428,7 +1428,7 @@ function openFind() {
   const head = (t, n) => `<h4 class="small muted" style="margin:6px 0 0">${t}${n ? ` (${n})` : ""}</h4>`;
   const when = (ts) => `${esc(dayLabel(ts))} ${fmtTime(ts)}`;
   const links = () => {
-    out.innerHTML = `${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency care plan</button>` : ""}
+    out.innerHTML = `${emergForm() ? `<button class="btn ${emergHasForm(emergForm()) ? "primary" : "secondary"} block" data-go="emerg">${esc(emergText(emergForm()))}</button>` : ""}${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency care plan</button>` : ""}
       <div class="list">
         <button class="btn secondary block fd-link" data-go="plan"><div class="body"><strong>Care plan</strong><div class="muted small">Needs, routines, risks and shift tasks</div></div></button>
         ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="meds"><div class="body"><strong>Medicines chart</strong><div class="muted small">Doses, the medicine list and the monthly chart</div></div></button>' : ""}
@@ -1459,7 +1459,7 @@ function openFind() {
   out.onclick = (e) => {
     const b = e.target.closest("[data-go]"); if (!b) return;
     s.close();
-    ({ plan: openPlan, contacts: openContacts, meds: () => openMeds("today"), log: () => go("log"), handover: () => go("handover") })[b.dataset.go]();
+    ({ emerg: openEmergency, plan: openPlan, contacts: openContacts, meds: () => openMeds("today"), log: () => go("log"), handover: () => go("handover") })[b.dataset.go]();
   };
   links();
 }
@@ -1540,7 +1540,12 @@ const WHO_TO_TELL = `<details class="small" style="margin-top:6px"><summary>Who 
     <li>Tell the family member or attorney, and your agency, as agreed for this client.</li>
     <li>Then add who you told to the note, so the record is complete.</li>
   </ul></details>`;
-const whoToTell = () => { const w = clientCountry() === "AU" ? WHO_TO_TELL_AU : WHO_TO_TELL; return respectDoc() ? w.replace("<ul", `<button class="btn secondary" data-opendoc="${esc(respectDoc().id)}" style="margin-top:6px;min-height:38px;padding:6px 12px;font-size:14px">Open the emergency care plan</button><ul`) : w; };
+const whoToTell = () => {
+  const w = clientCountry() === "AU" ? WHO_TO_TELL_AU : WHO_TO_TELL, e = emergForm();
+  const line = e && e.form !== "unknown" ? `<p style="margin:6px 0 0"><strong>${esc(emergText(e))}</strong></p>` : "";
+  const btn = respectDoc() ? `<button class="btn secondary" data-opendoc="${esc(respectDoc().id)}" style="margin-top:6px;min-height:38px;padding:6px 12px;font-size:14px">Open the emergency care plan</button>` : "";
+  return line || btn ? w.replace("<ul", line + btn + "<ul") : w;
+};
 function flagHTML(f, actions = true) {
   return `<div class="flag ${f.kind === "incident" ? "incident" : ""}">
     <div class="body"><span class="tiny muted" style="font-weight:600">${f.kind === "incident" ? "Incident" : "To note"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}${f.raisedBy && roster().some((c) => c.id === f.raisedBy) ? " · " + esc(carer(f.raisedBy).name) : ""}</span>
@@ -1624,7 +1629,7 @@ async function loadPlan() {
     const out = await syncJSON("/plan/get", { client: session.client.id });
     if (KEY !== key) return false;
     const before = JSON.stringify(S.plan || null);
-    S.plan = { sections: (out.plan && out.plan.sections) || [], tasks: (out.plan && out.plan.tasks) || [], updatedAt: (out.plan && out.plan.updatedAt) || 0, updatedBy: out.plan && out.plan.updatedBy, docs: out.docs || [] };
+    S.plan = { sections: (out.plan && out.plan.sections) || [], tasks: (out.plan && out.plan.tasks) || [], updatedAt: (out.plan && out.plan.updatedAt) || 0, updatedBy: out.plan && out.plan.updatedBy, docs: out.docs || [], emergency: out.emergency || null };
     // Documents taken out of the care plan are removed from this phone too.
     const keep = new Set(S.plan.docs.map((d) => d.id)), gone = (S.docCache || []).filter((id) => !keep.has(id));
     if (gone.length) { audioDB.del(gone.map((id) => "doc_" + id)); S.docCache = (S.docCache || []).filter((id) => keep.has(id)); }
@@ -2024,6 +2029,68 @@ async function openPlanFromDoc(docId) {
     catch (err) { busy = false; toast(err.message || "Couldn't save the care plan"); const b = $("#fdSave", box); if (b) b.disabled = false; }
   };
 }
+/* ---------- emergency form ----------
+ * A paramedic or doctor called to the home first asks whether there's a ReSPECT or DNR form (Sam,
+ * 2026-10-12). Each client records which form there is and where the paper form is kept; shown on
+ * Today, in Find, under Who to tell and on the handover. The paper form is the real one: the app only
+ * says where to find it. Asked for when a client is added and after a hospital stay (a new ReSPECT
+ * form comes with each discharge). Any carer on the client can update it; every version is kept.
+ */
+const EMERG_LABEL = { respect: "ReSPECT form", dnacpr: "DNACPR (DNR) form", acd: "Advance Care Directive", none: "No emergency form known", unknown: "Not known yet" };
+const emergForm = () => (S.plan && S.plan.emergency) || null;
+const emergHasForm = (e) => !!(e && ["respect", "dnacpr", "acd"].includes(e.form));
+const emergText = (e) => (emergHasForm(e) ? `${EMERG_LABEL[e.form]}: kept ${e.where}` : EMERG_LABEL[e && e.form] || "Not recorded");
+const emergChecked = (e) => (e ? `Checked ${fmtDay(e.at)}${e.by ? " by " + esc(e.by) : ""}` : "");
+// Today: the red emergency button when there's a form; a reminder when nobody has recorded it yet.
+function emergTodayHTML() {
+  const e = emergForm(), r = respectDoc();
+  if (emergHasForm(e)) return `<button class="emerg" id="emBtn" style="flex-direction:column;gap:2px"><span style="display:flex;gap:8px;align-items:center">${ICON.alert}${esc(EMERG_LABEL[e.form])}</span><span style="font-weight:600;font-size:14px">Kept ${esc(e.where)}</span><span style="font-weight:400;font-size:12px">${emergChecked(e)}</span></button>`;
+  if (e && e.form === "none") return `<button class="link small" id="emBtn" style="justify-self:center;min-height:40px">No emergency form (ReSPECT or DNR) · ${emergChecked(e)}</button>`;
+  const ask = canEditPlan() && S.plan && Array.isArray(S.plan.sections) ? `<button class="warn small" id="emBtn" style="text-align:left;width:100%">Is there a ReSPECT or DNR form? Record where it's kept, for paramedics. <strong>Record it</strong></button>` : "";
+  return (r ? `<button class="emerg" data-opendoc="${esc(r.id)}">${ICON.alert}Emergency care plan</button>` : "") + ask;
+}
+function openEmergency() {
+  refreshContacts().catch(() => {}); // the cached list is shown now; the latest next time
+  const e = emergForm(), r = respectDoc();
+  const em = ((S.contacts && S.contacts.list) || []).filter((c) => c.group === "emergency" && c.phone);
+  const s = sheet(`${sheetHead("Emergency form")}
+    <div class="card" style="box-shadow:none;display:grid;gap:6px"><strong style="font-size:18px">${esc(EMERG_LABEL[e && e.form] || "Not recorded")}</strong>
+      ${emergHasForm(e) ? `<div>Where the paper form is kept: <strong>${esc(e.where)}</strong></div>` : ""}
+      ${e ? `<div class="tiny muted">${emergChecked(e)}</div>` : ""}</div>
+    <p class="small muted" style="margin:0">The paper form is the real one: show it to the paramedic or doctor. This only says where to find it.</p>
+    ${r ? `<button class="btn secondary block" data-opendoc="${esc(r.id)}">Open the copy in the care plan</button>` : ""}
+    ${em.map((c) => `<a class="btn secondary block" href="${esc(telHref(c.phone))}">Call ${esc(c.name)}${c.role ? " (" + esc(c.role) + ")" : ""}</a>`).join("")}
+    ${canEditPlan() ? `<button class="btn ${e ? "ghost" : "primary"} block" id="emEdit">${e ? "Change it" : "Record it"}</button>` : ""}`);
+  if ($("#emEdit", s.root)) $("#emEdit", s.root).onclick = () => { s.close(); openEmergencyEdit(); };
+}
+// then: what to open next (after adding a client: the care plan set-up). why: a line explaining why it's asked.
+function openEmergencyEdit({ then, why } = {}) {
+  const e = emergForm() || {};
+  const s = sheet(`${sheetHead("Emergency form")}
+    ${why ? `<p class="small" style="margin:0">${why}</p>` : ""}
+    <p class="small muted" style="margin:0">A paramedic or doctor will first ask if ${esc(S.client.name)} has ${clientCountry() === "AU" ? "an Advance Care Directive (in WA an Advance Health Directive; in Queensland a Statement of Choices) or a not-for-resuscitation order" : "a ReSPECT or DNR form"}. Record which form there is and where the paper form is kept. The paper form is the real one. Pilot: made-up details only.</p>
+    <fieldset class="f" style="border:0;padding:0;margin:0;display:grid;gap:6px"><legend class="small" style="font-weight:700;margin-bottom:4px">Which form is there?</legend>
+      ${Object.entries(EMERG_LABEL).map(([k, l]) => `<label class="small" style="display:flex;gap:8px;align-items:center;min-height:36px"><input type="radio" name="emF" value="${k}" ${e.form === k ? "checked" : ""}> ${l}</label>`).join("")}</fieldset>
+    <label class="f" id="emWhereL">Where is the paper form kept?<input type="text" id="emWhere" maxlength="200" value="${esc(e.where || "")}" placeholder="e.g. on the fridge door, behind the front door" autocomplete="off"></label>
+    <div class="small" id="emMsg" role="status"></div>
+    <button class="btn primary block" id="emSave">Save</button>
+    ${then ? '<button class="btn ghost block" id="emLater">Later</button>' : ""}`, { onClose: () => { if (then && !s.done) then(); } });
+  const sync = () => { const f = (s.root.querySelector("[name=emF]:checked") || {}).value; $("#emWhereL", s.root).hidden = !emergHasForm({ form: f }); };
+  s.root.querySelectorAll("[name=emF]").forEach((x) => (x.onchange = sync)); sync();
+  if ($("#emLater", s.root)) $("#emLater", s.root).onclick = () => s.close();
+  $("#emSave", s.root).onclick = async (ev) => {
+    const form = (s.root.querySelector("[name=emF]:checked") || {}).value, where = $("#emWhere", s.root).value.trim();
+    if (!form) return ($("#emMsg", s.root).textContent = "Choose which form there is.");
+    if (emergHasForm({ form }) && !where) { $("#emWhere", s.root).focus(); return ($("#emMsg", s.root).textContent = "Say where the paper form is kept."); }
+    if (!navigator.onLine) return ($("#emMsg", s.root).textContent = "Connect to the internet to save it, so every carer sees the same.");
+    ev.currentTarget.disabled = true;
+    try {
+      const out = await syncJSON("/plan/emergency", { client: session.client.id, form, where: emergHasForm({ form }) ? where : "" });
+      S.plan = { ...plan(), docs: planDocs(), emergency: out.emergency }; saveLocal(); s.done = true; s.close(); render(); toast("Emergency form saved");
+      if (then) then();
+    } catch (err) { $("#emMsg", s.root).textContent = err.message || "Couldn't save it. Try again."; const b = $("#emSave", s.root); if (b) b.disabled = false; }
+  };
+}
 // Urgent and important care plan sections with no notes this shift (only once something has been noted).
 function planGaps() {
   const titles = plan().sections.filter((x) => x.urgency === "urgent" || x.urgency === "important").map((x) => x.title); const notes = shiftNotes();
@@ -2218,7 +2285,7 @@ function renderToday() {
       <button class="tile" id="qPlan">${ICON.plan}Care plan</button>
       ${activeTransfer() ? `<button class="tile on" id="ctaBack">${ICON.out}Back in care</button>` : `<button class="tile" id="ctaOut">${ICON.out}Out with someone</button>`}
     </div>
-    ${respectDoc() ? `<button class="emerg" data-opendoc="${esc(respectDoc().id)}">${ICON.alert}Emergency care plan</button>` : ""}
+    ${emergTodayHTML()}
     ${fbQuestionsHTML()}
     ${planProgressHTML()}
     ${familyReadyHTML()}
@@ -2246,6 +2313,7 @@ function renderToday() {
   if ($("#recentLog")) $("#recentLog").onclick = () => go("log");
   $("#qPlan").onclick = () => openPlan();
   if ($("#plGuideGo")) $("#plGuideGo").onclick = () => openPlanGuide();
+  if ($("#emBtn")) $("#emBtn").onclick = () => (emergForm() ? openEmergency() : openEmergencyEdit());
   bindStorageBanner(v);
   $("#addEvent").onclick = () => openEventSheet();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
@@ -2380,6 +2448,7 @@ function renderHandover() {
   const past = [...S.handovers].sort((a, b) => b.ts - a.ts).slice(0, 5);
   const others = roster().filter((c) => c.id !== S.onDuty);
   v.innerHTML = `<div class="hello"><h2>End-of-shift handover</h2><p>Built from your saved notes and open flags. Nothing to write twice.</p></div>
+    ${emergForm() && emergForm().form !== "unknown" ? `<p class="small" style="margin:0"><strong>${esc(emergText(emergForm()))}</strong> <span class="muted">· ${emergChecked(emergForm())}</span></p>` : ""}
     <div class="card">
       <div class="card-h"><h3>This shift</h3><span class="muted small">${shiftNotes().length} notes · ${openFlags().length} open flags</span></div>
       ${handoverDraft ? `
@@ -2547,8 +2616,12 @@ function openReturnSheet() {
   const s = sheet(`${sheetHead("Back in your care")}
     <p class="small" style="margin:0">${esc(S.client.name)} went out with <strong>${esc(t.withWhom)}</strong> at ${fmtTime(t.outTs)}.</p>
     <label class="f">Anything to note on return? (optional)<input type="text" id="bkNote" placeholder="e.g. Had lunch out, seemed tired" autocomplete="off"></label>
+    ${canEditPlan() ? `<label class="small" style="display:flex;gap:8px;align-items:center;min-height:40px"><input type="checkbox" id="bkHosp" ${/hospital|a ?& ?e|\bED\b|emergency department|ambulance|\bward\b|discharge/i.test(t.purpose || "") ? "checked" : ""}> Back from hospital (there may be a new ReSPECT form)</label>` : ""}
     <button class="btn primary block" id="bkSave">Confirm back at ${fmtTime(Date.now())}</button>`);
-  $("#bkSave").onclick = () => { t.backTs = Date.now(); t.backNote = $("#bkNote").value.trim(); t.backCarerId = stampId(); touch(t); save(); s.close(); render(); toast("Back in your care"); };
+  $("#bkSave").onclick = () => {
+    t.backTs = Date.now(); t.backNote = $("#bkNote").value.trim(); t.backCarerId = stampId(); touch(t); save(); s.close(); render(); toast("Back in your care");
+    if ($("#bkHosp", s.root) && $("#bkHosp", s.root).checked) openEmergencyEdit({ why: "<strong>Back from hospital:</strong> a new ReSPECT form is usually given on discharge. Check which form there is now and where it's kept." });
+  };
 }
 function openEventSheet() {
   const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1);
@@ -4238,7 +4311,7 @@ async function showClients(manual) {
     try {
       chooseClient(await clientsApi.add($("#clName").value.trim(), { name: $("#cnName").value.trim(), role: $("#cnRole").value, agreed: true }, $("#clCountry").value));
       toast("Client added");
-      if (canEditPlan()) offerPlanSetup();
+      if (canEditPlan()) openEmergencyEdit({ then: offerPlanSetup });
     } catch (err) { $("#clMsg").textContent = err.message; b.textContent = "Add client and start"; check(); }
   };
   let clients, offline = false;
