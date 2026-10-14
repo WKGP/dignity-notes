@@ -216,8 +216,8 @@ let syncTimer = null;
 function scheduleSync(ms = 1500) { if (!cloudOn()) return; clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms); }
 // Background requests: errors are reported in the cloud status, never acted on mid-task.
 async function syncFetch(path, init) {
-  const { signal: outer, ...rest } = init; init = rest;
-  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 60000);
+  const { signal: outer, timeout = 60000, ...rest } = init; init = rest;
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), timeout);
   if (outer) { if (outer.aborted) ctl.abort(); else outer.addEventListener("abort", () => ctl.abort(), { once: true }); }
   try {
     const r = await fetch(relayBase() + path, { method: "POST", ...init, signal: ctl.signal, headers: { "Content-Type": "application/json", ...(init.headers || {}), Authorization: "Bearer " + session.token } });
@@ -227,7 +227,7 @@ async function syncFetch(path, init) {
   } catch (e) { if (e.name === "AbortError") throw new Error("The cloud took too long to answer"); throw e; }
   finally { clearTimeout(timer); }
 }
-const syncJSON = (path, body) => syncFetch(path, { body: JSON.stringify(body) }).then((r) => r.json());
+const syncJSON = (path, body, timeout) => syncFetch(path, { body: JSON.stringify(body), timeout }).then((r) => r.json());
 // Something is open (recording, a sheet such as "Check before saving", or a full screen): don't
 // interrupt it with a reload, a sign-out or the privacy notice; wait until it's closed.
 const appBusy = () => !!(rec.on || rec.starting || $("#sheetRoot").innerHTML.trim() || $("#fullRoot").innerHTML.trim());
@@ -1523,9 +1523,11 @@ function bindStorageBanner(root) {
 /* ---------- care plan ----------
  * Each client's care plan (sections such as Personal care or Skin care, each with an urgency) and
  * key documents (an emergency care plan such as ReSPECT, DNACPR or an Advance Care Directive; risk assessments). Kept on the relay; a copy is kept with the
- * client's notes on this phone so carers can read it without signal. Administrators change it.
+ * client's notes on this phone so carers can read it without signal. Any carer on the client can write
+ * it (each save keeps the previous version); administrators manage the shift tasks and remove documents.
  */
-const PLAN_DEFAULTS = ["Mobility", "Night time support", "Nutrition and hydration", "Oral care", "Personal care", "Skin care", "Continence", "Medication", "Communication", "Social interests and activities", "Relationships"];
+// The standard sections, in the order the guided set-up asks about them (Sam checks the wording).
+const PLAN_DEFAULTS = ["About me and what matters to me", "Health conditions", "Medication", "Mobility", "Personal care", "Oral care", "Skin care", "Continence", "Nutrition and hydration", "Night time support", "Communication", "Social interests and activities", "Relationships", "Risks", "Decisions and consent", "Scope of work"];
 const URGENCY_LABEL = { urgent: "Urgent", important: "Important", non_urgent: "Non urgent" };
 const DOC_KIND_LABEL = { respect: "Emergency care plan (ReSPECT, DNACPR, Advance Care Directive)", risk: "Risk assessment", care_plan: "Care plan", other: "Other document" };
 const plan = () => (S.plan && Array.isArray(S.plan.sections) ? S.plan : { sections: [], docs: [] });
@@ -1712,10 +1714,13 @@ function openPlan() {
       ${planTasks().length ? planTasks().map((t) => `<div class="small"><strong>${esc(t.title)}</strong> <span class="muted">· ${esc(periodLabel(t.period))}${t.days.length ? " · " + t.days.map((d) => DAY_NAMES[d]).join(", ") : ""}</span></div>`).join("") : '<div class="small muted">No tasks yet.</div>'}
       ${isAdminHere() ? '<button class="link small" id="tkEdit" style="justify-self:start">Edit shift tasks</button>' : ""}</div>
     <div class="card" style="box-shadow:none;display:grid;gap:8px"><h3 style="font-size:17px;margin:0">Documents</h3>
-      ${docs.length ? docs.map((d) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><button class="link" data-opendoc="${esc(d.id)}" style="text-align:left">${esc(d.name)}</button><span class="tiny muted">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</span>${isAdminHere() ? `<button class="link small" data-deldoc="${esc(d.id)}" style="color:var(--incident)">Remove</button>` : ""}</div>`).join("") : '<p class="small muted" style="margin:0">No documents yet.</p>'}
+      ${docs.length ? docs.map((d) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><button class="link" data-opendoc="${esc(d.id)}" style="text-align:left">${esc(d.name)}</button><span class="tiny muted">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</span>${canEditPlan() && d.kind === "care_plan" ? `<button class="link small" data-filldoc="${esc(d.id)}">Fill the care plan from this</button>` : ""}${isAdminHere() ? `<button class="link small" data-deldoc="${esc(d.id)}" style="color:var(--incident)">Remove</button>` : ""}</div>`).join("") : '<p class="small muted" style="margin:0">No documents yet.</p>'}
     </div>
     ${p.updatedAt ? `<p class="tiny muted" style="margin:0">Last changed ${fmtDay(p.updatedAt)} ${fmtTime(p.updatedAt)}${p.updatedBy ? " by " + esc(p.updatedBy) : ""}.</p>` : ""}
-    ${isAdminHere() ? `<div class="row"><button class="btn secondary" id="plEdit">${p.sections.length ? "Edit care plan" : "Set up the care plan"}</button><button class="btn secondary" id="plUpload">Add a document</button></div>` : `<p class="tiny muted" style="margin:0">An administrator keeps the care plan up to date.</p>`}`);
+    ${canEditPlan() ? `${planDoneCount() < PLAN_DEFAULTS.length ? `<button class="btn primary block" id="plGuide">${planDoneCount() ? "Finish it step by step" : "Set it up step by step"} (${planDoneCount()} of ${PLAN_DEFAULTS.length} done)</button>` : ""}
+      <div class="row"><button class="btn secondary" id="plEdit">${p.sections.length ? "Edit care plan" : "Write it all at once"}</button><button class="btn secondary" id="plUpload">Add a document</button></div>` : ""}`);
+  if ($("#plGuide", s.root)) $("#plGuide", s.root).onclick = () => { s.close(); openPlanGuide(); };
+  s.root.querySelectorAll("[data-filldoc]").forEach((b) => (b.onclick = () => { s.close(); openPlanFromDoc(b.dataset.filldoc); }));
   if ($("#plEdit", s.root)) $("#plEdit", s.root).onclick = () => { s.close(); openPlanEdit(); };
   if ($("#tkEdit", s.root)) $("#tkEdit", s.root).onclick = () => { s.close(); openTasksEdit(); };
   if ($("#plUpload", s.root)) $("#plUpload", s.root).onclick = () => { s.close(); openDocUpload(); };
@@ -1728,7 +1733,8 @@ async function openPlanEdit() {
   // Start from the latest saved plan, so a phone that hadn't loaded it never overwrites it.
   if (!navigator.onLine || !(await loadPlan())) return toast("Connect to the internet to edit the care plan, so you start from the latest version");
   const base = plan().updatedAt || 0;
-  let rows = plan().sections.length ? plan().sections.map((x) => ({ ...x })) : PLAN_DEFAULTS.map((t) => ({ title: t, urgency: "non_urgent", text: "" }));
+  let rows = plan().sections.map((x) => ({ ...x }));
+  for (const t of PLAN_DEFAULTS) if (!rows.some((r) => r.title === t)) rows.push({ title: t, urgency: "non_urgent", text: "" }); // empty ones aren't kept
   const s = sheet(`${sheetHead("Edit care plan")}<p class="small muted" style="margin:0">One section for each area of care. Write what carers need to know and do. Pilot: use made-up details only.</p><div id="plRows" style="display:grid;gap:12px"></div>
     <button class="link" id="plAdd" style="justify-self:start">+ Add a section</button>
     <button class="btn primary block" id="plSave">Save care plan</button>`, { guard: () => true });
@@ -1748,16 +1754,16 @@ async function openPlanEdit() {
     read();
     const untitled = rows.findIndex((r) => !r.title && r.text.trim());
     if (untitled >= 0) { box.querySelectorAll(".plT")[untitled].focus(); return toast("Give this section a name, or remove it"); }
-    const sections = rows.filter((r) => r.title);
+    const sections = rows.filter((r) => r.title && (r.text.trim() || !PLAN_DEFAULTS.includes(r.title)));
     e.currentTarget.disabled = true;
-    try { const out = await syncJSON("/plan/save", { client: session.client.id, sections, tasks: planTasks(), baseUpdatedAt: base }); S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal(); s.close(); render(); toast("Care plan saved"); }
+    try { const out = await syncJSON("/plan/save", { client: session.client.id, sections, baseUpdatedAt: base }); S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal(); s.close(); render(); toast("Care plan saved"); }
     catch (err) { toast(err.message || "Couldn't save the care plan"); $("#plSave", s.root).disabled = false; }
   };
 }
-function openDocUpload() {
+function openDocUpload(kindPreset) {
   const s = sheet(`${sheetHead("Add a document")}
     <div class="warn small">Pilot: upload made-up documents only, never a real person's emergency care plan or assessments.</div>
-    <label class="f">Type<select id="duKind">${Object.entries(DOC_KIND_LABEL).map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
+    <label class="f">Type<select id="duKind">${Object.entries(DOC_KIND_LABEL).map(([k, l]) => `<option value="${k}" ${k === kindPreset ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label class="f">Name<input type="text" id="duName" maxlength="80" placeholder="e.g. Moving and handling risk assessment"></label>
     <label class="f">File (PDF, JPG or PNG, up to 10 MB)<input type="file" id="duFile" accept="application/pdf,image/jpeg,image/png"></label>
     <button class="btn primary block" id="duGo">Upload</button>`);
@@ -1772,7 +1778,169 @@ function openDocUpload() {
       const r = await syncFetch(`/plan/doc/put?client=${encodeURIComponent(session.client.id)}&kind=${encodeURIComponent(kind)}&name=${encodeURIComponent(name)}`, { headers: { "Content-Type": f.type }, body: f });
       const { doc } = await r.json();
       S.plan = { ...plan(), docs: [doc, ...planDocs()] }; saveLocal(); s.close(); render(); toast("Document added");
+      if (kind === "care_plan" && canEditPlan()) {
+        const q = sheet(`${sheetHead("Fill the care plan from this?")}<p class="small" style="margin:0">The AI can read <strong>${esc(doc.name)}</strong> and copy what it says into the care plan sections, for you to check before anything is saved. The document is sent to our AI provider to be read.</p>
+          <button class="btn primary block" id="fqYes">Fill the care plan from this</button><button class="btn ghost block" id="fqNo">Not now</button>`);
+        $("#fqYes", q.root).onclick = () => { q.close(); openPlanFromDoc(doc.id); };
+        $("#fqNo", q.root).onclick = () => q.close();
+      }
     } catch (err) { toast(err.message || "Couldn't upload the document"); const b = $("#duGo", s.root); if (b) { b.disabled = false; b.textContent = "Upload"; } }
+  };
+}
+/* ---------- guided care plan ----------
+ * Private live-in care often starts with no care plan (Sam, 2026-10-14). The carer goes through the
+ * standard sections one at a time: says what they know, the AI writes it up in care-plan wording, and
+ * the carer checks and changes it before saving. Each section is saved as it's done, so stopping part
+ * way loses nothing. An existing care plan document can fill the sections instead, as a draft to check.
+ */
+const PLAN_ASK = {
+  "About me and what matters to me": "Tell me about them: their life, what matters to them, what makes a good day, and what they like to be called.",
+  "Health conditions": "What health conditions do they have, and what should carers look out for?",
+  Medication: "How are medicines handled? Who orders and collects them, and what help is needed to take them? (Each medicine goes in the medicines chart.)",
+  Mobility: "How do they move about? Any walking aids, equipment, help to stand, or falls?",
+  "Personal care": "What help do they need to wash, dress and use the toilet, and how do they like it done?",
+  "Oral care": "How are their teeth or dentures looked after?",
+  "Skin care": "Any skin problems, pressure areas, creams, or changes of position?",
+  Continence: "Any help needed with continence? Pads, a catheter, or times to offer the toilet?",
+  "Nutrition and hydration": "What do they like to eat and drink? Any special diet, allergies, softer food, or help needed?",
+  "Night time support": "What happens at night? Bedtime routine, waking, and any help needed?",
+  Communication: "How do they communicate best? Hearing, sight, memory, language?",
+  "Social interests and activities": "What do they enjoy doing? Hobbies, outings, routines?",
+  Relationships: "Who are the important people in their life, and how do they keep in touch?",
+  Risks: "What risks should carers know about, and what keeps them safe?",
+  "Decisions and consent": "Which decisions do they make themselves? Is there a Lasting Power of Attorney, or someone who helps them decide?",
+  "Scope of work": "What is the carer there to do, and what is not part of the role?",
+};
+const canEditPlan = () => !!(session && !session.local && !isFamily());
+const planHas = (title) => plan().sections.some((x) => x.title === title && x.text.trim());
+const planDoneCount = () => PLAN_DEFAULTS.filter(planHas).length;
+// On Today until every standard section has something in it (only once the plan has been fetched).
+function planProgressHTML() {
+  if (!canEditPlan() || !S.plan || !Array.isArray(S.plan.sections)) return "";
+  const done = planDoneCount(); if (done >= PLAN_DEFAULTS.length) return "";
+  return `<div class="card" style="display:flex;gap:10px;align-items:center;justify-content:space-between"><span class="small"><strong>Care plan:</strong> ${done} of ${PLAN_DEFAULTS.length} sections done</span><button class="btn secondary" id="plGuideGo" style="flex:0 0 auto">${done ? "Finish it" : "Start it"}</button></div>`;
+}
+// Saves one section (adding it if new) over the latest version. Returns the new updatedAt.
+async function savePlanSection(title, text, urgency, base) {
+  const sections = plan().sections.map((x) => ({ ...x })), i = sections.findIndex((x) => x.title === title);
+  if (i >= 0) sections[i] = { ...sections[i], text, urgency }; else sections.push({ title, text, urgency });
+  const out = await syncJSON("/plan/save", { client: session.client.id, sections, baseUpdatedAt: base });
+  S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal();
+  return out.plan.updatedAt;
+}
+// Offered straight after a client is added.
+function offerPlanSetup() {
+  const s = sheet(`${sheetHead("Set up the care plan?")}
+    <p class="small" style="margin:0">A care plan tells every carer what ${esc(S.client.name)} needs and how they like things done. It takes about 20 minutes, and you can stop at any time: each part is saved as you go.</p>
+    <button class="btn primary block" id="ofGuide">Go through it step by step</button>
+    <button class="btn secondary block" id="ofDoc">Copy it from a care plan document</button>
+    <button class="btn ghost block" id="ofLater">Later</button>`);
+  $("#ofGuide", s.root).onclick = () => { s.close(); openPlanGuide(); };
+  $("#ofDoc", s.root).onclick = () => { s.close(); openDocUpload("care_plan"); };
+  $("#ofLater", s.root).onclick = () => s.close();
+}
+async function openPlanGuide() {
+  if (!navigator.onLine || !(await loadPlan())) return toast("Connect to the internet to write the care plan, so you start from the latest version");
+  let base = plan().updatedAt || 0, i = Math.max(0, PLAN_DEFAULTS.findIndex((t) => !planHas(t))), dict = null, busy = false;
+  const s = sheet(`${sheetHead("Care plan step by step")}<div id="pgStep" style="display:grid;gap:10px"></div>`, { guard: () => busy || (dict && dict.busy()) || !!($("#pgWords", s.root) && $("#pgWords", s.root).value.trim()) || !!($("#pgText", s.root) && $("#pgText", s.root).dataset.changed), onClose: () => dict && dict.cancel() });
+  const box = $("#pgStep", s.root);
+  const draw = () => {
+    if (dict) dict.cancel(); dict = null;
+    if (i >= PLAN_DEFAULTS.length) {
+      const left = PLAN_DEFAULTS.length - planDoneCount();
+      box.innerHTML = `<p style="margin:0"><strong>${left ? `That's the end. ${left} section${left === 1 ? " is" : "s are"} still empty` : "All done"}.</strong></p>
+        <p class="small muted" style="margin:0">${left ? "You can come back to them any time from Today or the care plan." : "Every carer on " + esc(S.client.name) + " can now read the care plan."} Keep it up to date as things change.</p>
+        <button class="btn primary block" id="pgClose">Close</button>`;
+      $("#pgClose", box).onclick = () => s.close(); return;
+    }
+    const title = PLAN_DEFAULTS[i], cur = plan().sections.find((x) => x.title === title) || { text: "", urgency: "non_urgent" };
+    box.innerHTML = `<p class="tiny muted" style="margin:0">Section ${i + 1} of ${PLAN_DEFAULTS.length}</p>
+      <h3 style="margin:0">${esc(title)}</h3>
+      <p class="small" style="margin:0">${esc(PLAN_ASK[title] || "What do carers need to know and do?")}</p>
+      <div class="warn small">Pilot: use made-up details only.</div>
+      <textarea id="pgWords" rows="3" style="min-height:84px" placeholder="Tap Speak and say what you know, or type it" aria-label="What you know"></textarea>
+      <div class="row"><button class="btn ghost" id="pgMic" style="flex:0 0 auto"></button><button class="btn secondary" id="pgWrite">Write it up</button></div>
+      <div class="small" id="pgMsg" role="status"></div>
+      <label class="f">Care plan wording (check and change it)<textarea id="pgText" class="grow" maxlength="4000" style="min-height:90px" placeholder="What carers need to know and do">${esc(cur.text)}</textarea></label>
+      <label class="f">How important is it<select id="pgUrg">${Object.entries(URGENCY_LABEL).map(([k, l]) => `<option value="${k}" ${cur.urgency === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <button class="btn primary block" id="pgSave">Save and next</button>
+      <div class="row"><button class="btn ghost" id="pgBack" ${i ? "" : "disabled"}>Back</button><button class="btn ghost" id="pgSkip">Skip for now</button></div>`;
+    const words = $("#pgWords", box), text = $("#pgText", box), msg = $("#pgMsg", box);
+    autoGrow(text); text.oninput = () => (text.dataset.changed = "1");
+    dict = dictation(words, $("#pgMic", box), (t) => (msg.textContent = t), { hint: "Check the words, then tap Write it up.", max: 6000 });
+    $("#pgWrite", box).onclick = async (e) => {
+      if (dict.busy()) await dict.finish();
+      if (!words.value.trim()) return (msg.textContent = "Say or type what you know first.");
+      busy = true; e.currentTarget.disabled = true; e.currentTarget.textContent = "Writing…"; msg.textContent = "";
+      try {
+        const out = await syncJSON("/plan/draft", { client: session.client.id, clientName: S.client.name, section: title, words: words.value.trim(), existing: text.value }, 120000);
+        if (!text.isConnected) { busy = false; return; } // closed meanwhile
+        text.value = out.text; text.dataset.changed = "1"; autoGrow(text); $("#pgUrg", box).value = out.urgency;
+        words.value = ""; msg.textContent = "Written up below. Check it is right and nothing has been added, then Save and next.";
+      } catch (err) { msg.textContent = err.message || "Couldn't write it up. You can type it below instead."; }
+      busy = false; const b = $("#pgWrite", box); if (b) { b.disabled = false; b.textContent = "Write it up"; }
+    };
+    const doSave = async () => {
+      const t = text.value.trim(), u = $("#pgUrg", box).value;
+      if (!t || (t === cur.text.trim() && u === cur.urgency)) { i++; return draw(); } // nothing new to save
+      busy = true; $("#pgSave", box).disabled = true;
+      try {
+        try { base = await savePlanSection(title, t, u, base); }
+        catch (err) {
+          // Someone saved another part meanwhile: save over the new version if this section is as it was.
+          if (err.status !== 409 || !(await loadPlan())) throw err;
+          const now = plan().sections.find((x) => x.title === title) || { text: "", urgency: "non_urgent" };
+          if (now.text !== cur.text) throw new Error("Someone else changed this section meanwhile. Copy your wording, then go Back and Forward to see theirs.");
+          base = await savePlanSection(title, t, u, plan().updatedAt || 0);
+        }
+        busy = false; i++; draw(); toast(`${title} saved`);
+      } catch (err) { busy = false; toast(err.message || "Couldn't save this section"); const b = $("#pgSave", box); if (b) b.disabled = false; }
+    };
+    // Words said but not written up yet: a second tap saves without them.
+    $("#pgSave", box).onclick = (e) => busy ? null : (words.value.trim() && !dict.busy() ? confirmInline(e.currentTarget, doSave, "Not written up yet. Tap again to save without it") : dict.busy() ? (msg.textContent = "Tap Stop, then Write it up.") : doSave());
+    // Moving on keeps nothing unsaved: a second tap is needed if words or wording would be lost.
+    const leave = (e, step) => { if (busy) return; const lose = words.value.trim() || text.value.trim() !== cur.text.trim(); if (lose) return confirmInline(e.currentTarget, () => { i += step; draw(); }, "Not saved. Tap again"); i += step; draw(); };
+    $("#pgSkip", box).onclick = (e) => leave(e, 1);
+    $("#pgBack", box).onclick = (e) => leave(e, -1);
+  };
+  draw();
+}
+// Fills the standard sections from a care plan document, for the carer to check section by section.
+async function openPlanFromDoc(docId) {
+  if (!navigator.onLine || !(await loadPlan())) return toast("Connect to the internet to fill the care plan, so you start from the latest version");
+  const doc = planDocs().find((d) => d.id === docId); if (!doc) return toast("That document isn't there any more");
+  const base = plan().updatedAt || 0; let busy = true;
+  const s = sheet(`${sheetHead("Fill the care plan from a document")}<div id="fdBox" style="display:grid;gap:12px"><p class="small" style="margin:0">Reading <strong>${esc(doc.name)}</strong>… This can take a minute.</p></div>`, { guard: () => busy || !!$("#fdSave", s.root) });
+  const box = $("#fdBox", s.root);
+  let out;
+  try { out = await syncJSON("/plan/fromdoc", { client: session.client.id, clientName: S.client.name, id: docId }, 240000); }
+  catch (err) { busy = false; box.innerHTML = `<p class="small" style="margin:0">${esc(err.message || "Couldn't read the document.")}</p><button class="btn secondary block" id="fdClose">Close</button>`; $("#fdClose", box).onclick = () => s.close(); return; }
+  busy = false;
+  const found = (out.sections || []).filter((x) => PLAN_DEFAULTS.includes(x.title) && x.text.trim());
+  if (out.other && out.other.trim()) found.push({ title: "Other information", text: out.other.trim(), urgency: "non_urgent", other: true });
+  if (!found.length) { box.innerHTML = `<p class="small" style="margin:0">Nothing in the document matched the care plan sections. You can write it step by step instead.</p><button class="btn secondary block" id="fdClose">Close</button>`; $("#fdClose", box).onclick = () => s.close(); return; }
+  const curOf = (t) => plan().sections.find((x) => x.title === t);
+  box.innerHTML = `<p class="small" style="margin:0">The AI copied these from the document. <strong>Check each one against the document</strong> and change anything that's wrong before saving. The AI can miss things, and anything it missed isn't shown here, so look through the document for it too. The document stays in the care plan.</p>
+    ${found.map((x, k) => { const cur = curOf(x.title); return `<div class="card" data-fd="${k}" style="box-shadow:none;display:grid;gap:8px">
+      <div class="row" style="justify-content:space-between;gap:8px"><strong>${esc(x.title)}</strong><select class="fdU" aria-label="How important">${Object.entries(URGENCY_LABEL).map(([u, l]) => `<option value="${u}" ${x.urgency === u ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <textarea class="fdX grow" maxlength="4000" style="min-height:80px" aria-label="${esc(x.title)}">${esc(x.text)}</textarea>
+      ${cur && cur.text.trim() ? `<details><summary class="small">What the care plan says now</summary><p class="small muted" style="white-space:pre-line;margin:6px 0 0">${esc(cur.text)}</p></details>
+        <label class="small" style="display:flex;gap:6px;align-items:center"><input type="radio" name="fd${k}" value="use"> Use the document's</label><label class="small" style="display:flex;gap:6px;align-items:center"><input type="radio" name="fd${k}" value="keep" checked> Keep what's there now</label>`
+        : `<label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" class="fdUse" checked> Add to the care plan</label>`}</div>`; }).join("")}
+    <button class="btn primary block" id="fdSave">Save to the care plan</button>`;
+  box.querySelectorAll("textarea.grow").forEach(autoGrow);
+  $("#fdSave", box).onclick = async (e) => {
+    const sections = plan().sections.map((x) => ({ ...x }));
+    box.querySelectorAll("[data-fd]").forEach((el) => {
+      const x = found[+el.dataset.fd], radio = el.querySelector("input[type=radio]:checked"), tick = el.querySelector(".fdUse");
+      if ((radio && radio.value === "keep") || (tick && !tick.checked)) return;
+      const text = $(".fdX", el).value.trim(); if (!text) return;
+      const j = sections.findIndex((y) => y.title === x.title), row = { title: x.title, text, urgency: $(".fdU", el).value };
+      if (j >= 0) sections[j] = row; else sections.push(row);
+    });
+    busy = true; e.currentTarget.disabled = true;
+    try { const o = await syncJSON("/plan/save", { client: session.client.id, sections, baseUpdatedAt: base }); S.plan = { ...plan(), ...o.plan, docs: planDocs() }; saveLocal(); busy = false; $("#fdSave", box).remove(); s.close(); render(); toast("Care plan saved"); }
+    catch (err) { busy = false; toast(err.message || "Couldn't save the care plan"); const b = $("#fdSave", box); if (b) b.disabled = false; }
   };
 }
 // Urgent and important care plan sections with no notes this shift (only once something has been noted).
@@ -1971,6 +2139,7 @@ function renderToday() {
     </div>
     ${respectDoc() ? `<button class="emerg" data-opendoc="${esc(respectDoc().id)}">${ICON.alert}Emergency care plan</button>` : ""}
     ${fbQuestionsHTML()}
+    ${planProgressHTML()}
     ${familyReadyHTML()}
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="count ${flags.length ? "" : "calm"}">${flags.length}</span></div>
       ${flags.length ? `<div class="attn">${(attnAll ? flags : flags.slice(0, 3)).map(attnRowHTML).join("")}</div>
@@ -1995,6 +2164,7 @@ function renderToday() {
   if (raiseMissedTimeSensitive()) setTimeout(() => { if (tab === "today" && !appBusy()) render(); }, 0);
   if ($("#recentLog")) $("#recentLog").onclick = () => go("log");
   $("#qPlan").onclick = () => openPlan();
+  if ($("#plGuideGo")) $("#plGuideGo").onclick = () => openPlanGuide();
   bindStorageBanner(v);
   $("#addEvent").onclick = () => openEventSheet();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
@@ -3062,9 +3232,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-13.16";
+const PRIVACY_VERSION = "2026-10-14.17";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 16 · 13 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 17 · 14 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -3087,13 +3257,14 @@ const PRIVACY_HTML = `
 <p><strong>Family accounts.</strong> An administrator can give an authorised family member their own sign-in, linked to a client. They see only the daily updates carers choose to share, coming appointments, messages with the carers, and incidents if that has been switched on for the client as agreed with the client or their representative. They never see care notes, recordings, the care plan, contacts or handovers. Messages and shared updates are kept in our cloud storage in the European Union with the client's record, and carers on the client see family messages.</p>
 <p><strong>Medicines chart.</strong> If carers help with a client's medicines, the client's medicine list (names, strengths, doses, times, prescriber, where each detail came from), their date of birth, NHS or Medicare number if given, GP practice and allergies, every dose recorded (given, prompted, refused or not given, with reasons, amounts, whether a when-required dose helped, who recorded it and when), and each new supply received (how much, from where, and whether the label matched) are kept in our cloud storage in the European Union with the client's record. Carers on the client and the pilot administrators can see and add to it; family members cannot. Every change to the list is kept with who made it and who checked it, and dose entries are never changed (a correction is a new entry). The app records what carers did; it does not give medical advice.</p>
 <p>Each client's <strong>contacts</strong> (names, roles, phone numbers, email and postal addresses of people and services involved in their care, such as the GP, pharmacy and family) are kept in our cloud storage in the European Union, shared with the client's carers and the pilot administrators, and can be added or changed by any of them; every change is kept with who made it. The last list seen is kept on the carer's device so it can be read without signal, and is removed if the carer is taken off the client.</p>
-<p>Each client's <strong>care plan and documents</strong> (such as an emergency care plan or risk assessments) are kept in our cloud storage, added by pilot administrators, and shown to the client's carers. A copy of the care plan, and of any document a carer opens, is kept on their device so it can be read without signal; document copies are removed when the document is taken out of the care plan, when the carer signs out, or when the client is removed.</p>
+<p>Each client's <strong>care plan and documents</strong> (such as an emergency care plan or risk assessments) are kept in our cloud storage, written by the client's carers and administrators, and shown to the client's carers. A copy of the care plan, and of any document a carer opens, is kept on their device so it can be read without signal; document copies are removed when the document is taken out of the care plan, when the carer signs out, or when the client is removed.</p>
 <p>Care notes (with the words you spoke), voice recordings, flags, handovers and outings are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Your settings stay on your device only.</p>
 <h3>AI note writing</h3>
 <p>When you ask the user manual a question, your question (nothing else) is sent through our relay to Anthropic so the AI can answer it from the manual. It isn't stored.</p>
 <p>When you use the feedback helper, your messages and any screenshot are also sent to Anthropic, so the helper can ask questions and write a summary for the developer. Email addresses and phone numbers are removed automatically before a report is stored.</p>
 <p><strong>Turning speech into words.</strong> While you record, your phone's own speech recognition may show your words as you speak: on an iPhone this may send your voice to <strong>Apple</strong>, and on Android to <strong>Google</strong>, under their own terms (Apple says it may use it to improve its speech recognition; you can turn this off in your phone's settings). If your phone can't turn your speech into words, the recording, with the client's first name as a spelling hint, is sent through our relay to <strong>Cloudflare</strong>'s speech-to-text service, which returns the words. This may happen outside the European Union. Our relay doesn't keep that copy; the recording is kept only as described under Care notes and recordings.</p>
 <p>When you ask the app to write a note, handover or summary, the <strong>words</strong> of your note (never the recording), the client's first name, the names of the carers involved, the names of the client's care plan sections, and your saved word fixes ("My words"), are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text it sends for tidying; the note you save is stored as described under Care notes and recordings. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
+<p><strong>Writing the care plan.</strong> When you ask the app to write up a care plan section, the words you said or typed for it, the section's current wording, the client's name, and the names and pronouns of the client and their carers are sent to Anthropic in the same way. When you ask it to fill the care plan from a care plan document, a copy of that document is sent to Anthropic to be read. You check and can change everything before it's saved, and each saved version of the care plan is kept with who changed it.</p>
 <h3>Who else handles data for us</h3>
 <ul>
 <li><strong>Cloudflare:</strong> runs our relay, turns recordings into words when your phone can't (possibly outside the EU), and stores accounts, sign-in records, clients, who cares for each client and their shifts, feedback reports, and the care records and recordings described above (in the European Union).</li>
@@ -3675,10 +3846,10 @@ function applyVoiceCommands(text) {
 
 // Speak instead of typing (used for feedback). Words appear live when the phone can; otherwise, when
 // you stop, the recording is turned into words by the relay. The recording itself isn't kept.
-function dictation(textarea, btn, status) {
-  const d = { on: false, final: "", base: "" };
+function dictation(textarea, btn, status, opts = {}) {
+  const d = { on: false, final: "", base: "" }, max = opts.max || 2000;
   const label = () => { btn.innerHTML = d.on ? `${ICON.stop} Stop` : `${ICON.mic} Speak`; btn.setAttribute("aria-pressed", String(d.on)); };
-  const put = (words) => { words = applyVoiceCommands(words); textarea.value = (d.base + (d.base && words ? " " : "") + words).slice(0, 2000); textarea.dispatchEvent(new Event("input")); };
+  const put = (words) => { words = applyVoiceCommands(words); textarea.value = (d.base + (d.base && words ? " " : "") + words).slice(0, max); textarea.dispatchEvent(new Event("input")); };
   const onHide = () => { if (document.visibilityState === "hidden" && d.on) stop(); };
   async function start() {
     btn.disabled = true;
@@ -3721,7 +3892,7 @@ function dictation(textarea, btn, status) {
       catch (e) { status(e.message || "Couldn't turn that into words. Please type it."); btn.disabled = false; return; }
       btn.disabled = false;
     } else if (d.final.trim()) put(d.final.trim());
-    status(textarea.value.trim() ? "Check the words, then tap Send." : "Nothing was picked up. Try again, or type.");
+    status(textarea.value.trim() ? opts.hint || "Check the words, then tap Send." : "Nothing was picked up. Try again, or type.");
   }
   label();
   btn.onclick = () => (d.on ? stop() : start());
@@ -3985,6 +4156,7 @@ async function showClients(manual) {
     try {
       chooseClient(await clientsApi.add($("#clName").value.trim(), { name: $("#cnName").value.trim(), role: $("#cnRole").value, agreed: true }, $("#clCountry").value));
       toast("Client added");
+      if (canEditPlan()) offerPlanSetup();
     } catch (err) { $("#clMsg").textContent = err.message; b.textContent = "Add client and start"; check(); }
   };
   let clients, offline = false;
