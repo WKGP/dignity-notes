@@ -3291,7 +3291,7 @@ const PRIVACY_HTML = `
 <h3>Your rights</h3>
 <p>You can ask to see, correct or delete the information we hold about you, or object to how we use it. Ask the administrator who invited you, who will pass your request to Workgroup (WA) Pty Ltd. If you're unhappy, you can complain to the UK Information Commissioner's Office (ico.org.uk) or, in Australia, the Office of the Australian Information Commissioner (oaic.gov.au).</p>
 <h3>Changes</h3>
-<p>If we change this notice, the app will ask you to read and accept the new version.</p>
+<p>During this test pilot you accept this notice once. If we change it, the latest version is always in Settings, under Privacy notice.</p>
 <p class="small muted">© 2026 Workgroup (WA) Pty Ltd. All rights reserved. Dignity Notes, its design, logo and software are the property of Workgroup (WA) Pty Ltd.</p>
 `;
 const COPYRIGHT = "© 2026 Workgroup (WA) Pty Ltd. All rights reserved.";
