@@ -1613,7 +1613,12 @@ function bindStorageBanner(root) {
  * it (each save keeps the previous version); administrators manage the shift tasks and remove documents.
  */
 // The standard sections, in the order the guided set-up asks about them (Sam checks the wording).
-const PLAN_DEFAULTS = ["About me and what matters to me", "Health conditions", "Medication", "Mobility", "Personal care", "Oral care", "Skin care", "Continence", "Nutrition and hydration", "Night time support", "Communication", "Social interests and activities", "Relationships", "Risks", "Decisions and consent", "Scope of work"];
+const PLAN_DEFAULTS = ["About me and what matters to me", "Health conditions", "Medication", "Mobility", "Personal care", "Oral care", "Skin care", "Continence", "Nutrition and hydration", "Night time support", "Communication", "Emotional wellbeing", "Social interests and activities", "Relationships", "Beliefs, culture and faith", "Risks", "Decisions and consent", "Scope of work"];
+// Who agreed to a section's wording, kept with each version (Sam: only with the agreement of the client
+// or their attorney). "Not yet" never blocks a carer; the section shows "To check with them" until confirmed.
+const AGREED_LABEL = { client: "Agreed with the client", attorney: "Agreed with their attorney (LPA)", pending: "Not yet: to check with them" };
+let lastAgreed = "";
+const agreedSelectHTML = (id, v) => `<label class="f">Who agreed to this?<select id="${id}"><option value="" ${v ? "" : "selected"}>Choose…</option>${Object.entries(AGREED_LABEL).map(([k, l]) => `<option value="${k}" ${v === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>`;
 const URGENCY_LABEL = { urgent: "Urgent", important: "Important", non_urgent: "Non urgent" };
 const DOC_KIND_LABEL = { respect: "Emergency care plan (ReSPECT, DNACPR, Advance Care Directive)", risk: "Risk assessment", care_plan: "Care plan", other: "Other document" };
 const plan = () => (S.plan && Array.isArray(S.plan.sections) ? S.plan : { sections: [], docs: [] });
@@ -1794,7 +1799,7 @@ function openPlan() {
   const p = plan(), docs = planDocs(), r = respectDoc();
   const s = sheet(`${sheetHead(`Care plan · ${esc(S.client.name)}`)}
     ${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency care plan</button>` : ""}
-    ${p.sections.length ? [...p.sections].sort((a, b) => ({ urgent: 0, important: 1 }[a.urgency] ?? 2) - ({ urgent: 0, important: 1 }[b.urgency] ?? 2)).map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}</summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "No details written yet.")}</p></details>`).join("")
+    ${p.sections.length ? [...p.sections].sort((a, b) => ({ urgent: 0, important: 1 }[a.urgency] ?? 2) - ({ urgent: 0, important: 1 }[b.urgency] ?? 2)).map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}${x.agreed === "pending" ? ' <span class="chip follow">To check with them</span>' : ""}</summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "No details written yet.")}</p>${x.agreed ? `<p class="tiny muted" style="margin:6px 0 0">${esc(AGREED_LABEL[x.agreed])}${x.agreed !== "pending" && x.agreedAt ? " · " + fmtDay(x.agreedAt) : ""}</p>` : ""}</details>`).join("")
       : '<div class="empty">No sections yet.</div>'}
     <div class="card" style="box-shadow:none;display:grid;gap:6px"><h3 style="font-size:17px;margin:0">Shift tasks</h3>
       ${planTasks().length ? planTasks().map((t) => `<div class="small"><strong>${esc(t.title)}</strong> <span class="muted">· ${esc(periodLabel(t.period))}${t.days.length ? " · " + t.days.map((d) => DAY_NAMES[d]).join(", ") : ""}</span></div>`).join("") : '<div class="small muted">No tasks yet.</div>'}
@@ -1823,9 +1828,10 @@ async function openPlanEdit() {
   for (const t of PLAN_DEFAULTS) if (!rows.some((r) => r.title === t)) rows.push({ title: t, urgency: "non_urgent", text: "" }); // empty ones aren't kept
   const s = sheet(`${sheetHead("Edit care plan")}<p class="small muted" style="margin:0">One section for each area of care. Write what carers need to know and do. Pilot: use made-up details only.</p><div id="plRows" style="display:grid;gap:12px"></div>
     <button class="link" id="plAdd" style="justify-self:start">+ Add a section</button>
+    ${agreedSelectHTML("plAgree", lastAgreed)}
     <button class="btn primary block" id="plSave">Save care plan</button>`, { guard: () => true });
   const box = $("#plRows", s.root);
-  const read = () => { rows = [...box.querySelectorAll("[data-row]")].map((el) => ({ title: $(".plT", el).value.trim(), urgency: $(".plU", el).value, text: $(".plX", el).value })); };
+  const read = () => { rows = [...box.querySelectorAll("[data-row]")].map((el) => ({ ...rows[+el.dataset.row], title: $(".plT", el).value.trim(), urgency: $(".plU", el).value, text: $(".plX", el).value })); };
   const draw = () => {
     box.innerHTML = rows.map((r, i) => `<div class="card" data-row="${i}" style="box-shadow:none;display:grid;gap:8px">
       <div class="row" style="gap:8px"><input class="plT" type="text" value="${esc(r.title)}" maxlength="60" aria-label="Section name" style="flex:1 1 160px"><select class="plU" aria-label="Urgency">${Object.entries(URGENCY_LABEL).map(([k, l]) => `<option value="${k}" ${r.urgency === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
@@ -1840,7 +1846,11 @@ async function openPlanEdit() {
     read();
     const untitled = rows.findIndex((r) => !r.title && r.text.trim());
     if (untitled >= 0) { box.querySelectorAll(".plT")[untitled].focus(); return toast("Give this section a name, or remove it"); }
-    const sections = rows.filter((r) => r.title && (r.text.trim() || !PLAN_DEFAULTS.includes(r.title)));
+    const before = new Map(plan().sections.map((x) => [x.title, x])), ag = $("#plAgree", s.root).value;
+    const sections = rows.filter((r) => r.title && (r.text.trim() || !PLAN_DEFAULTS.includes(r.title)))
+      .map((r) => { const o = before.get(r.title); return !o || o.text !== r.text || o.urgency !== r.urgency || (r.agreed === "pending" && ag && ag !== "pending") ? { ...r, agreed: ag, agreedAt: Date.now() } : r; }); // a "to check" section is confirmed too
+    if (!ag && sections.some((r) => r.agreed === "")) { $("#plAgree", s.root).focus(); return toast("Say who agreed to these changes, or choose Not yet"); }
+    lastAgreed = ag || lastAgreed;
     e.currentTarget.disabled = true;
     try { const out = await syncJSON("/plan/save", { client: session.client.id, sections, baseUpdatedAt: base }); S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal(); s.close(); render(); toast("Care plan saved"); }
     catch (err) { toast(err.message || "Couldn't save the care plan"); $("#plSave", s.root).disabled = false; }
@@ -1880,7 +1890,7 @@ function openDocUpload(kindPreset) {
  * way loses nothing. An existing care plan document can fill the sections instead, as a draft to check.
  */
 const PLAN_ASK = {
-  "About me and what matters to me": "Tell me about them: their life, what matters to them, what makes a good day, and what they like to be called.",
+  "About me and what matters to me": "Tell me about them: their life, what matters to them, what makes a good day, what they like to be called, their routines, and what they can do on their own.",
   "Health conditions": "What health conditions do they have, and what should carers look out for?",
   Medication: "How are medicines handled? Who orders and collects them, and what help is needed to take them? (Each medicine goes in the medicines chart.)",
   Mobility: "How do they move about? Any walking aids, equipment, help to stand, or falls?",
@@ -1890,9 +1900,11 @@ const PLAN_ASK = {
   Continence: "Any help needed with continence? Pads, a catheter, or times to offer the toilet?",
   "Nutrition and hydration": "What do they like to eat and drink? Any special diet, allergies, softer food, or help needed?",
   "Night time support": "What happens at night? Bedtime routine, waking, and any help needed?",
-  Communication: "How do they communicate best? Hearing, sight, memory, language?",
+  Communication: "How do they communicate best? Hearing, sight, memory, language, aids? How do they show pain or distress, and what helps?",
+  "Emotional wellbeing": "What worries or upsets them? What comforts them, and how is it best to reassure them?",
   "Social interests and activities": "What do they enjoy doing? Hobbies, outings, routines?",
   Relationships: "Who are the important people in their life, and how do they keep in touch?",
+  "Beliefs, culture and faith": "Optional: only what they want to share. Any faith, culture or beliefs that matter to them, for example food, prayer, privacy or who gives personal care?",
   Risks: "What risks should carers know about, and what keeps them safe?",
   "Decisions and consent": "Which decisions do they make themselves? Is there a Lasting Power of Attorney, or someone who helps them decide?",
   "Scope of work": "What is the carer there to do, and what is not part of the role?",
@@ -1907,9 +1919,9 @@ function planProgressHTML() {
   return `<div class="card" style="display:flex;gap:10px;align-items:center;justify-content:space-between"><span class="small"><strong>Care plan:</strong> ${done} of ${PLAN_DEFAULTS.length} sections done</span><button class="btn secondary" id="plGuideGo" style="flex:0 0 auto">${done ? "Finish it" : "Start it"}</button></div>`;
 }
 // Saves one section (adding it if new) over the latest version. Returns the new updatedAt.
-async function savePlanSection(title, text, urgency, base) {
-  const sections = plan().sections.map((x) => ({ ...x })), i = sections.findIndex((x) => x.title === title);
-  if (i >= 0) sections[i] = { ...sections[i], text, urgency }; else sections.push({ title, text, urgency });
+async function savePlanSection(title, text, urgency, base, agreed) {
+  const sections = plan().sections.map((x) => ({ ...x })), i = sections.findIndex((x) => x.title === title), row = { text, urgency, agreed, agreedAt: Date.now() };
+  if (i >= 0) sections[i] = { ...sections[i], ...row }; else sections.push({ title, ...row });
   const out = await syncJSON("/plan/save", { client: session.client.id, sections, baseUpdatedAt: base });
   S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal();
   return out.plan.updatedAt;
@@ -1949,6 +1961,7 @@ async function openPlanGuide() {
       <div class="small" id="pgMsg" role="status"></div>
       <label class="f">Care plan wording (check and change it)<textarea id="pgText" class="grow" maxlength="4000" style="min-height:90px" placeholder="What carers need to know and do">${esc(cur.text)}</textarea></label>
       <label class="f">How important is it<select id="pgUrg">${Object.entries(URGENCY_LABEL).map(([k, l]) => `<option value="${k}" ${cur.urgency === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      ${agreedSelectHTML("pgAgree", cur.agreed || lastAgreed)}
       <button class="btn primary block" id="pgSave">Save and next</button>
       <div class="row"><button class="btn ghost" id="pgBack" ${i ? "" : "disabled"}>Back</button><button class="btn ghost" id="pgSkip">Skip for now</button></div>`;
     const words = $("#pgWords", box), text = $("#pgText", box), msg = $("#pgMsg", box);
@@ -1967,17 +1980,19 @@ async function openPlanGuide() {
       busy = false; const b = $("#pgWrite", box); if (b) { b.disabled = false; b.textContent = "Write it up"; }
     };
     const doSave = async () => {
-      const t = text.value.trim(), u = $("#pgUrg", box).value;
-      if (!t || (t === cur.text.trim() && u === cur.urgency)) { i++; return draw(); } // nothing new to save
+      const t = text.value.trim(), u = $("#pgUrg", box).value, ag = $("#pgAgree", box).value;
+      if (!t || (t === cur.text.trim() && u === cur.urgency && ag === (cur.agreed || ag))) { i++; return draw(); } // nothing new to save
+      if (!ag) { $("#pgAgree", box).focus(); return toast("Say who agreed to this, or choose Not yet"); }
+      lastAgreed = ag;
       busy = true; $("#pgSave", box).disabled = true;
       try {
-        try { base = await savePlanSection(title, t, u, base); }
+        try { base = await savePlanSection(title, t, u, base, ag); }
         catch (err) {
           // Someone saved another part meanwhile: save over the new version if this section is as it was.
           if (err.status !== 409 || !(await loadPlan())) throw err;
           const now = plan().sections.find((x) => x.title === title) || { text: "", urgency: "non_urgent" };
           if (now.text !== cur.text) throw new Error("Someone else changed this section meanwhile. Copy your wording, then go Back and Forward to see theirs.");
-          base = await savePlanSection(title, t, u, plan().updatedAt || 0);
+          base = await savePlanSection(title, t, u, plan().updatedAt || 0, ag);
         }
         busy = false; i++; draw(); toast(`${title} saved`);
       } catch (err) { busy = false; toast(err.message || "Couldn't save this section"); const b = $("#pgSave", box); if (b) b.disabled = false; }
@@ -2013,15 +2028,18 @@ async function openPlanFromDoc(docId) {
       ${cur && cur.text.trim() ? `<details><summary class="small">What the care plan says now</summary><p class="small muted" style="white-space:pre-line;margin:6px 0 0">${esc(cur.text)}</p></details>
         <label class="small" style="display:flex;gap:6px;align-items:center"><input type="radio" name="fd${k}" value="use"> Use the document's</label><label class="small" style="display:flex;gap:6px;align-items:center"><input type="radio" name="fd${k}" value="keep" checked> Keep what's there now</label>`
         : `<label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" class="fdUse" checked> Add to the care plan</label>`}</div>`; }).join("")}
+    ${agreedSelectHTML("fdAgree", lastAgreed)}
     <button class="btn primary block" id="fdSave">Save to the care plan</button>`;
   box.querySelectorAll("textarea.grow").forEach(autoGrow);
   $("#fdSave", box).onclick = async (e) => {
+    const ag = $("#fdAgree", box).value; if (!ag) { $("#fdAgree", box).focus(); return toast("Say who agreed to these, or choose Not yet"); }
+    lastAgreed = ag;
     const sections = plan().sections.map((x) => ({ ...x }));
     box.querySelectorAll("[data-fd]").forEach((el) => {
       const x = found[+el.dataset.fd], radio = el.querySelector("input[type=radio]:checked"), tick = el.querySelector(".fdUse");
       if ((radio && radio.value === "keep") || (tick && !tick.checked)) return;
       const text = $(".fdX", el).value.trim(); if (!text) return;
-      const j = sections.findIndex((y) => y.title === x.title), row = { title: x.title, text, urgency: $(".fdU", el).value };
+      const j = sections.findIndex((y) => y.title === x.title), row = { title: x.title, text, urgency: $(".fdU", el).value, agreed: ag, agreedAt: Date.now() };
       if (j >= 0) sections[j] = row; else sections.push(row);
     });
     busy = true; e.currentTarget.disabled = true;
