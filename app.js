@@ -919,7 +919,8 @@ function openMeds(tabName = "today") {
         <div class="tiny muted">From: ${esc(medSourceLabel(m.source))}${m.sourceDetail ? " (" + esc(m.sourceDetail) + ")" : ""}${m.source === "verbal" ? ` · asked by ${esc(m.verbalFrom)} at ${esc(m.verbalAt)}, read back${m.verbalRepeatedTo ? ", repeated to " + esc(m.verbalRepeatedTo) : ""}${m.writtenConfirmation ? " · in writing: " + esc(m.writtenConfirmation) : ""}` : ""} · ${m.stoppedAt ? "stopped" : "changed"} by ${esc(m.updatedBy)} ${esc(dayLabel(m.updatedAt).toLowerCase())} ${fmtTime(m.updatedAt)}${m.changeReason && !m.stoppedAt ? " · " + esc(m.changeReason) : ""}${m.stopReason ? " · " + esc(m.stopReason) : ""}${m.checkedAt ? ` · checked by ${esc(m.checkedBy)}` : ""}</div>
         ${m.stoppedAt && m.stopCheck ? `<div class="tiny ${m.stopCheck === "unchecked" ? "" : "muted"}" ${m.stopCheck === "unchecked" ? 'style="color:var(--incident)"' : ""}>Stopped: ${esc(m.stopReason || "")} · ${m.stopCheck === "now" ? "pharmacist or doctor said it can stop now" : m.stopCheck === "gradual" ? "pharmacist or doctor said to reduce it gradually" : "how to stop it not yet checked with a pharmacist or doctor"}${m.stopCheckWith ? " (" + esc(m.stopCheckWith) + ")" : ""}</div>` : ""}
         ${lastSupply(m.id) ? `<div class="tiny muted">Last supply: ${esc(lastSupply(m.id).qty)}${lastSupply(m.id).from ? " from " + esc(lastSupply(m.id).from) : ""}, ${esc(dayLabel(lastSupply(m.id).ts).toLowerCase())} · ${lastSupply(m.id).matches === "yes" ? "label matched" : "<strong>label didn't match</strong>"} · ${esc(doseBy(lastSupply(m.id)))}</div>` : ""}
-        ${m.stoppedAt ? "" : `<button class="btn ghost" data-msup="${esc(m.id)}">Record a new supply</button>`}
+        ${m.photoId && planDocs().some((d) => d.id === m.photoId) ? `<button class="link small" data-opendoc="${esc(m.photoId)}" style="justify-self:start;min-height:40px">Photo it was copied from</button>` : ""}
+        ${m.stoppedAt ? "" : `<div class="row" style="gap:8px"><button class="btn ghost" data-msup="${esc(m.id)}" style="flex:1">Record a new supply</button><button class="btn ghost" data-mbox="${esc(m.id)}" style="flex:1">Check the box with a photo</button></div>`}
         ${m.stoppedAt || !medsSignedOff() ? "" : `<div class="row" style="gap:8px">${!m.checkedAt ? (m.mine ? (medSelfChecked(m) ? '<span class="tiny muted" style="align-self:center">You double-checked this. The next carer checks it against the label at handover.</span>' : `<span class="tiny muted" style="align-self:center;flex:1 1 100%">Someone who didn't change it should check this against the label. If you're the only carer here:</span><button class="btn primary" data-mself="${esc(m.id)}" style="flex:1 1 100%">Double-check it myself</button>`) : `<button class="btn primary" data-mcheck="${esc(m.id)}" style="flex:1 1 100%">${m.source === "verbal" && !m.writtenConfirmation ? "Written confirmation received" : "I've checked it against the label"}</button>`) : ""}
           <button class="btn secondary" data-medit="${esc(m.id)}" style="flex:1">Change</button><button class="btn ghost" data-mstop="${esc(m.id)}" style="flex:1">Stop</button></div>`}
         <button class="link small" data-mhist="${esc(m.id)}" style="justify-self:start;min-height:44px">Earlier versions</button></div>`;
@@ -928,6 +929,7 @@ function openMeds(tabName = "today") {
         ${stopped.length ? `<details><summary class="small">Stopped recently (${stopped.length})</summary>${stopped.map(card).join("")}</details>` : ""}`;
       if ($("#mdAdd", s.root)) $("#mdAdd", s.root).onclick = () => openMedEdit(null, back("list"));
       body.querySelectorAll("[data-msup]").forEach((b) => (b.onclick = () => openSupplySheet(ms.list.find((m) => m.id === b.dataset.msup), back("list"))));
+      body.querySelectorAll("[data-mbox]").forEach((b) => (b.onclick = () => openBoxCheck(ms.list.find((m) => m.id === b.dataset.mbox), back("list"))));
       body.querySelectorAll("[data-medit]").forEach((b) => (b.onclick = () => openMedEdit(ms.list.find((m) => m.id === b.dataset.medit), back("list"))));
       body.querySelectorAll("[data-mself]").forEach((b) => (b.onclick = async () => {
         const m = ms.list.find((x) => x.id === b.dataset.mself);
@@ -1059,6 +1061,8 @@ function openMedEdit(m, after) {
   const v = m ? { ...m, source: "", sourceDetail: "", verbalFrom: "", verbalAt: "", readBack: false, verbalRepeatedTo: "" } : { times: [], route: "By mouth" };
   const s = sheet(`${sheetHead(m ? "Change " + esc(m.name) : "Add a medicine")}
     <p class="small muted" style="margin:0">Copy it exactly from the pharmacy label or prescription. ${m ? "The change" : "It"} shows as not yet checked until someone else confirms it against the label. If you're the only carer, double-check it yourself afterwards; the next carer checks it at handover. Pilot: made-up details only.</p>
+    <button class="btn secondary block" id="mePhoto" type="button">Fill in from a photo of the label or prescription</button>${photoInputHTML("mePhotoFile")}
+    <div id="mePhotoMsg" style="display:grid;gap:8px" role="status"></div>
     <form id="meForm" style="display:grid;gap:12px">
       <label class="f">Medicine name<input type="text" id="meName" maxlength="80" value="${esc(v.name || "")}" placeholder="e.g. Amlodipine" autocomplete="off"></label>
       <div class="row" style="gap:8px"><label class="f" style="flex:1">Strength<input type="text" id="meStr" maxlength="60" value="${esc(v.strength || "")}" placeholder="e.g. 5 mg"></label><label class="f" style="flex:1">Form<input type="text" id="meForm2" maxlength="60" value="${esc(v.form || "")}" placeholder="e.g. tablets"></label></div>
@@ -1084,6 +1088,7 @@ function openMedEdit(m, after) {
         <label class="f">Also repeated to (optional)<input type="text" id="meVRep" maxlength="80" placeholder="e.g. Peter (son)"></label>
         <label class="check"><input type="checkbox" id="meVRb"><span>I read it back to them and they confirmed it</span></label></div>
       ${m ? '<label class="f">Why is it changing?<input type="text" id="meWhy" maxlength="300" placeholder="e.g. GP increased the dose, letter 9 Oct"></label>' : ""}
+      <label class="check" id="meAiOk" hidden><input type="checkbox" id="meAiChk"><span>I've checked every field against the label or prescription</span></label>
       <button class="btn primary block">${m ? "Save the change" : "Add to the list"}</button></form>`, { guard: () => true });
   const $s = (q) => $(q, s.root);
   const sync = () => {
@@ -1091,8 +1096,45 @@ function openMedEdit(m, after) {
     const t = parseMedTimes($s("#meTimes").value); $s("#meTimesSee").textContent = !$s("#meTimes").value.trim() ? "" : t ? `Doses at: ${t.join(", ")}` : "Type times like 08:00, 18:00";
   };
   $s("#mePrn").onchange = sync; $s("#meSrc").onchange = sync; $s("#meTimes").oninput = sync; sync();
+  // Filled in from a photo: every field shown for checking; the ones the AI wasn't sure of are marked.
+  let photoId = ""; // set only when this version is filled from a photo (a typed change isn't from the old photo)
+  const FIELD_INPUT = { name: "#meName", strength: "#meStr", form: "#meForm2", dose: "#meDose", route: "#meRoute", times: "#meTimes", prnFor: "#mePrnFor", prnMinHours: "#meMin", prnMax24: "#meMax", instructions: "#meIns", prescriber: "#mePre", prn: "#mePrn" };
+  const fill = (x, kind, docId) => {
+    const set = (id, v) => { const el = $s(id); el.value = v; el.style.outline = "2px solid var(--follow, #d98a00)"; };
+    const was = m ? norm2(m.name) + "|" + norm2(m.strength) : "", now = norm2(x.name) + "|" + norm2(x.strength);
+    photoId = docId;
+    set("#meName", x.name); set("#meStr", x.strength); set("#meForm2", x.form); set("#meDose", x.dose); set("#meRoute", x.route);
+    $s("#mePrn").checked = !!x.prn; $s("#mePrn").closest("label").style.outline = "2px solid var(--follow, #d98a00)"; set("#meTimes", (x.times || []).join(", ")); set("#mePrnFor", x.prnFor || ""); set("#meMin", x.prnMinHours || ""); set("#meMax", x.prnMax24 || "");
+    set("#meIns", x.instructions); set("#mePre", x.prescriber);
+    for (const f of x.unsure || []) { const el = FIELD_INPUT[f] && $s(FIELD_INPUT[f]); if (el) { (el.type === "checkbox" ? el.closest("label") : el).style.outline = "3px solid var(--incident)"; el.closest("label").dataset.unsure = "1"; } }
+    if (kind === "label" || kind === "prescription") $s("#meSrc").value = kind;
+    if (!$s("#meSrcD").value) $s("#meSrcD").value = `Photo, ${fmtDay(Date.now())}`;
+    $s("#meAiOk").hidden = false; $s("#meAiChk").checked = false; sync();
+    const unsure = (x.unsure || []).map((f) => ({ name: "name", strength: "strength", form: "form", dose: "dose", route: "how it's taken", times: "times", prn: "when required", prnFor: "what it's for", prnMinHours: "hours apart", prnMax24: "most doses in 24 hours", instructions: "instructions", prescriber: "prescriber" })[f]).filter(Boolean);
+    $s("#mePhotoMsg").innerHTML = `<div class="warn small"><strong>Filled in from the photo by AI.</strong> Check every field against the label before saving${unsure.length ? `; it wasn't sure about: <strong>${esc(unsure.join(", "))}</strong> (outlined in red)` : ""}. ${(x.times || []).length || x.prn ? "" : "Add the times it's given, as agreed with the pharmacist or GP: the label doesn't say."} ${x.prn && !x.prnMax24 ? "Add the most doses in 24 hours (doses, not tablets), as agreed with the pharmacist or GP." : ""} ${m && was !== now ? `<strong>This photo shows ${esc([x.name, x.strength].filter(Boolean).join(" "))}, not ${esc(medName(m))}.</strong> If it's a different medicine, close this and add it as a new one.` : ""} The other fields (time-sensitive, dates) aren't filled from the photo: check them too.</div>`;
+  };
+  $s("#mePhoto").onclick = () => $s("#mePhotoFile").click();
+  $s("#mePhotoFile").onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const msg = $s("#mePhotoMsg"), b = $s("#mePhoto"); b.disabled = true;
+    msg.innerHTML = '<p class="small" style="margin:0">Uploading and reading the photo… This can take a minute.</p>';
+    try {
+      const doc = await uploadMedPhoto(file, `Medicine label ${fmtDay(Date.now())}`);
+      const r = await syncJSON("/plan/meds/read", { client: session.client.id, id: doc.id }, 180000);
+      if (!msg.isConnected) return;
+      const list = r.readable ? r.medicines || [] : [];
+      if (!list.length) msg.innerHTML = `<div class="warn small">The photo couldn't be read as a medicine label or prescription. Try again in good light, with the label flat and in focus, or type it in.</div>`;
+      else if (list.length === 1) fill(list[0], r.kind, doc.id);
+      else {
+        msg.innerHTML = `<p class="small" style="margin:0">This lists ${list.length} medicines. Choose the one to add now (add the others one at a time):</p>${list.map((x, i) => `<button class="btn secondary block" type="button" data-pick="${i}">${esc([x.name, x.strength].filter(Boolean).join(" ") || "Medicine " + (i + 1))}</button>`).join("")}`;
+        msg.querySelectorAll("[data-pick]").forEach((p) => (p.onclick = () => fill(list[+p.dataset.pick], r.kind, doc.id)));
+      }
+    } catch (err) { if (msg.isConnected) msg.innerHTML = `<div class="warn small">${esc(err.message || "Couldn't read the photo. Try again, or type it in.")}</div>`; }
+    b.disabled = false; e.target.value = "";
+  };
   $s("#meForm").onsubmit = async (e) => {
     e.preventDefault();
+    if (!$s("#meAiOk").hidden && !$s("#meAiChk").checked) { $s("#meAiChk").focus(); return toast("Check every field against the label, then tick the box"); }
     const prn = $s("#mePrn").checked, times = prn ? [] : parseMedTimes($s("#meTimes").value);
     if (!times) return toast("Times look wrong: type them like 08:00, 18:00");
     if (!$s("#meSrc").value) return toast("Choose where these details came from");
@@ -1100,12 +1142,79 @@ function openMedEdit(m, after) {
       prnFor: $s("#mePrnFor").value, prnMinHours: +$s("#meMin").value || 0, prnMax24: +$s("#meMax").value || 0, timeSensitive: $s("#meTs").checked,
       instructions: $s("#meIns").value, prescriber: $s("#mePre").value, startDate: $s("#meStart").value, endDate: $s("#meEnd").value, reviewDate: $s("#meRev").value,
       source: $s("#meSrc").value, sourceDetail: $s("#meSrcD").value, verbalFrom: $s("#meVFrom").value, verbalAt: $s("#meVAt").value, verbalRepeatedTo: $s("#meVRep").value, readBack: $s("#meVRb").checked,
-      changeReason: m ? $s("#meWhy").value : "" };
+      changeReason: m ? $s("#meWhy").value : "", photoId };
     const btn = e.submitter || $("#meForm button.primary", s.root); btn.disabled = true;
     const out = await syncJSON("/plan/meds/save", { client: session.client.id, id: m ? m.id : undefined, baseUpdatedAt: m ? m.updatedAt : undefined, med }).catch(() => ({ error: "No connection. Try again when you have signal." }));
     btn.disabled = false;
     if (out.error) return toast(out.error);
     medsState().at = 0; await loadMeds(true); s.close(); render(); toast(m ? "Changed. Ask someone else to check it against the label." : "Added. Ask someone else to check it against the label."); if (after) after();
+  };
+}
+/* ---------- medicines from a photo (Sam, 2026-10-12) ----------
+ * The AI copies what's printed on a label or prescription into the form, and compares a box with the
+ * chart. It only reports what it read: the carer checks every field against the label and ticks that
+ * they have, the medicine stays "not yet checked" until the usual check, and a box check never
+ * replaces it. The photos are kept with the client's documents (kind "medicine").
+ */
+// Phone photos are made smaller (longest side 2000 px, JPEG) so they upload quickly and the AI can read them.
+const norm2 = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9.]/g, "");
+async function shrinkPhoto(file) {
+  if (!/^image\//.test(file.type)) return file;
+  try {
+    const bmp = await createImageBitmap(file), k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    return await new Promise((res) => c.toBlob((b) => res(b || file), "image/jpeg", 0.85));
+  } catch { return file; }
+}
+async function uploadMedPhoto(file, name) {
+  const f = await shrinkPhoto(file), type = f.type || file.type;
+  if (!/^(application\/pdf|image\/jpeg|image\/png)$/.test(type)) throw new Error("Use a photo (JPG or PNG) or a PDF");
+  if (f.size > 10 * 1024 * 1024) throw new Error("That file is too big (over 10 MB)");
+  const r = await syncFetch(`/plan/doc/put?client=${encodeURIComponent(session.client.id)}&kind=medicine&name=${encodeURIComponent(name.slice(0, 80))}`, { headers: { "Content-Type": type }, body: f, timeout: 120000 });
+  const { doc } = await r.json(); S.plan = { ...plan(), docs: [doc, ...planDocs()] }; saveLocal();
+  return doc;
+}
+const photoInputHTML = (id) => `<input type="file" id="${id}" accept="image/jpeg,image/png,application/pdf" capture="environment" hidden>`;
+// Compare a photo of the box with the chart entry. A difference is added to Needs attention.
+function openBoxCheck(m, after) {
+  const s = sheet(`${sheetHead("Check the box: " + esc(medName(m)))}
+    <p class="small" style="margin:0">Take a photo of the box or pharmacy label, showing the name, strength and directions. The AI compares it with the chart and lists any differences.</p>
+    <div class="warn small">This helps you spot a mistake. It doesn't replace checking the label yourself, and it never counts as the check. Pilot: made-up medicines only.</div>
+    <button class="btn primary block" id="bxGo">Take or choose a photo</button>${photoInputHTML("bxFile")}
+    <div id="bxOut" style="display:grid;gap:10px" role="status"></div>`, { onClose: after });
+  const out = $("#bxOut", s.root), go = $("#bxGo", s.root);
+  go.onclick = () => $("#bxFile", s.root).click();
+  $("#bxFile", s.root).onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    go.disabled = true; out.innerHTML = '<p class="small" style="margin:0">Uploading and comparing… This can take a minute.</p>';
+    try {
+      const doc = await uploadMedPhoto(file, `Box check: ${medName(m)} ${fmtDay(Date.now())}`);
+      const cid = session.client.id, r = await syncJSON("/plan/meds/compare", { client: cid, id: doc.id, medId: m.id }, 180000);
+      const diffs = r.differences || [], wrong = r.readable && (r.sameMedicine === "no" || diffs.length > 0);
+      // Raised even if this sheet was closed meanwhile (same client); once while it's still open.
+      let flagged = false;
+      if (wrong && session && session.client && session.client.id === cid) {
+        const title = `Medicine box doesn't match the chart: ${medName(m)}`.slice(0, 190);
+        if (!S.flags.some((x) => x.status === "open" && x.title === title)) {
+          const detail = (r.sameMedicine === "no" ? "The box looks like a different medicine or strength. " : "") + diffs.map((d) => `${d.what}: box says "${d.box}", chart says "${d.chart}"`).join("; ");
+          const f = { id: uid(), ts: Date.now(), kind: "follow_up", title, detail: (detail.slice(0, 1800) + ". Checked with a photo; check with the pharmacist or GP."), status: "open", noteId: null };
+          touch(f); S.flags.push(f); save(); if (!out.isConnected) render();
+        }
+        flagged = true;
+      }
+      if (!out.isConnected) return;
+      if (!r.readable) out.innerHTML = '<div class="warn small">The photo couldn\'t be read. Try again in good light, with the label flat and in focus.</div>';
+      else {
+        out.innerHTML = `${wrong ? `<div class="small" style="padding:10px 12px;border-radius:12px;background:var(--incident-soft);color:var(--incident);border:1px solid var(--incident)"><strong>${r.sameMedicine === "no" ? "This box looks like a different medicine or strength." : "The box and the chart don't match."}</strong> Don't give it from this box until it's been checked with the pharmacist or GP.</div>` : r.sameMedicine === "unsure" ? '<div class="warn small">The AI couldn\'t tell if this is the same medicine. Check the label yourself.</div>' : '<div class="small" style="padding:10px 12px;border-radius:12px;background:var(--done-soft, #e6f4ea)"><strong>No differences found.</strong> Still check the box yourself: the AI can miss things.</div>'}
+          ${diffs.length ? `<div class="card" style="box-shadow:none;display:grid;gap:6px">${diffs.map((d) => `<div class="small"><strong>${esc(d.what)}</strong>: box says "${esc(d.box)}", chart says "${esc(d.chart)}"</div>`).join("")}</div>` : ""}
+          ${(r.notOnBox || []).length ? `<p class="tiny muted" style="margin:0">Not on the box, so not compared: ${esc(r.notOnBox.join(", "))}.</p>` : ""}`;
+        if (flagged) {
+          out.insertAdjacentHTML("beforeend", '<p class="small" style="margin:0">Added to <strong>Needs attention</strong> on Today.</p>');
+        }
+      }
+    } catch (err) { if (out.isConnected) out.innerHTML = `<div class="warn small">${esc(err.message || "Couldn't check the photo. Try again.")}</div>`; }
+    go.disabled = false; go.textContent = "Take another photo"; e.target.value = "";
   };
 }
 // The monthly chart, laid out like the paper MAR, to read or print (Print → Save as PDF).
@@ -1620,7 +1729,7 @@ const AGREED_LABEL = { client: "Agreed with the client", attorney: "Agreed with 
 let lastAgreed = "";
 const agreedSelectHTML = (id, v) => `<label class="f">Who agreed to this?<select id="${id}"><option value="" ${v ? "" : "selected"}>Choose…</option>${Object.entries(AGREED_LABEL).map(([k, l]) => `<option value="${k}" ${v === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>`;
 const URGENCY_LABEL = { urgent: "Urgent", important: "Important", non_urgent: "Non urgent" };
-const DOC_KIND_LABEL = { respect: "Emergency care plan (ReSPECT, DNACPR, Advance Care Directive)", risk: "Risk assessment", care_plan: "Care plan", other: "Other document" };
+const DOC_KIND_LABEL = { respect: "Emergency care plan (ReSPECT, DNACPR, Advance Care Directive)", risk: "Risk assessment", care_plan: "Care plan", medicine: "Medicine label, prescription or box photo", other: "Other document" };
 const plan = () => (S.plan && Array.isArray(S.plan.sections) ? S.plan : { sections: [], docs: [] });
 const planDocs = () => (S.plan && Array.isArray(S.plan.docs) ? S.plan.docs : []);
 const respectDoc = () => planDocs().find((d) => d.kind === "respect");
@@ -3405,9 +3514,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-14.17";
+const PRIVACY_VERSION = "2026-10-14.18";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 17 · 14 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 18 · 14 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -3437,7 +3546,8 @@ const PRIVACY_HTML = `
 <p>When you use the feedback helper, your messages and any screenshot are also sent to Anthropic, so the helper can ask questions and write a summary for the developer. Email addresses and phone numbers are removed automatically before a report is stored.</p>
 <p><strong>Turning speech into words.</strong> While you record, your phone's own speech recognition may show your words as you speak: on an iPhone this may send your voice to <strong>Apple</strong>, and on Android to <strong>Google</strong>, under their own terms (Apple says it may use it to improve its speech recognition; you can turn this off in your phone's settings). If your phone can't turn your speech into words, the recording, with the client's first name as a spelling hint, is sent through our relay to <strong>Cloudflare</strong>'s speech-to-text service, which returns the words. This may happen outside the European Union. Our relay doesn't keep that copy; the recording is kept only as described under Care notes and recordings.</p>
 <p>When you ask the app to write a note, handover or summary, the <strong>words</strong> of your note (never the recording), the client's first name, the names of the carers involved, the names of the client's care plan sections, and your saved word fixes ("My words"), are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text it sends for tidying; the note you save is stored as described under Care notes and recordings. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
-<p><strong>Writing the care plan.</strong> When you ask the app to write up a care plan section, the words you said or typed for it, the section's current wording, the client's name, and the names and pronouns of the client and their carers are sent to Anthropic in the same way. When you ask it to fill the care plan from a care plan document, a copy of that document is sent to Anthropic to be read. You check and can change everything before it's saved, and each saved version of the care plan is kept with who changed it.</p>
+<p><strong>Writing the care plan.</strong> When you ask the app to write up a care plan section, the words you said or typed for it, the section's current wording, the client's name, and the names and pronouns of the client and their carers are sent to Anthropic in the same way. When you ask it to fill the care plan from a care plan document, a copy of that document is sent to Anthropic to be read. You check and can change everything before it's saved, and each saved version of the care plan is kept with who changed it, and who agreed to it (the client, their attorney, or not yet).</p>
+<p><strong>Medicine photos.</strong> If you take a photo of a medicine label, prescription or box to fill in or check the medicines chart, the photo is kept with the client's documents in our cloud storage in the European Union, and sent to Anthropic in the same way to be read. A prescription may show the client's name, address and date of birth. You check every detail before it's saved.</p>
 <h3>Who else handles data for us</h3>
 <ul>
 <li><strong>Cloudflare:</strong> runs our relay, turns recordings into words when your phone can't (possibly outside the EU), and stores accounts, sign-in records, clients, who cares for each client and their shifts, feedback reports, and the care records and recordings described above (in the European Union).</li>
