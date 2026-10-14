@@ -68,11 +68,92 @@ function seed() {
     settings: { relayUrl: "", accessCode: "", familyAlerts: false },
   };
 }
-function load() { try { const raw = localStorage.getItem(KEY); if (raw) return JSON.parse(raw); } catch {} return null; }
+/* ---------- records store ----------
+ * Each person's records for each client ("nanacare.v3.<username>.<client>") are kept in the phone's
+ * database (IndexedDB). Browser storage, used before 1.2.21, holds only about 5 MB, which daily notes
+ * fill in about two months. A copy is held in memory, read once when the app opens, so reading stays
+ * instant; each save is written through, always the latest version, and if the phone closed the
+ * database (iPhones do this in the background) it's reopened and the save tried again. Records in
+ * browser storage move across the first time (merged entry by entry if both copies exist). Once they
+ * have moved, browser storage is never used for them again: if the database can't be opened, the app
+ * says so rather than starting an empty record. A phone that never moved them (no database at all)
+ * carries on with browser storage as before.
+ */
+const REC_PREFIX = "nanacare.v3.", REC_MOVED = "dignitynotes.recordsInDB";
+// Two copies of one record: keep every entry from both (the newer change of each), the rest from the database copy.
+function mergeRecords(a, b) {
+  const out = { ...a };
+  for (const arr of [...Object.values(SYNC_KINDS), "pending"]) {
+    const byId = new Map();
+    for (const r of [...(a[arr] || []), ...(b[arr] || [])]) { if (!r || !r.id) continue; const c = byId.get(r.id); if (!c || mtOf(r) > mtOf(c)) byId.set(r.id, r); }
+    if (byId.size) out[arr] = [...byId.values()];
+  }
+  return out;
+}
+const recStore = (() => {
+  const mem = new Map(); let db = null, mode = "starting"; // then "db", "browser" or "failed"
+  const wanted = new Map(), running = new Map(); // key -> latest JSON still to write (null = delete); key -> write in progress
+  const lsKeys = () => { const out = []; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(REC_PREFIX)) out.push(k); } } catch {} return out; };
+  const open = () => Promise.race([
+    new Promise((res, rej) => { const r = indexedDB.open("dignitynotes-records", 1); r.onupgradeneeded = () => r.result.createObjectStore("records"); r.onsuccess = () => { const d = r.result; d.onclose = () => { if (db === d) db = null; }; res(d); }; r.onerror = () => rej(r.error); r.onblocked = () => rej(new Error("blocked")); }),
+    new Promise((res, rej) => setTimeout(() => rej(new Error("timeout")), 5000)),
+  ]);
+  const req = async (rw, fn) => { if (!db) db = await open(); const d = db; return new Promise((res, rej) => { const t = d.transaction("records", rw); const r = fn(t.objectStore("records")); t.oncomplete = () => res(r && r.result); t.onerror = t.onabort = () => rej(t.error || new Error("Storage failed")); }); };
+  let warned = 0;
+  // Writes the key's latest value; a failed write reopens the database and tries the latest value again.
+  const flushKey = (k) => {
+    if (running.has(k)) return running.get(k);
+    const p = (async () => {
+      let tries = 0;
+      while (wanted.has(k)) {
+        const json = wanted.get(k);
+        try { await req("readwrite", (st) => (json === null ? st.delete(k) : st.put(json, k))); if (wanted.get(k) === json) wanted.delete(k); tries = 0; }
+        catch { db = null; if (++tries >= 3) { if (Date.now() - warned > 60000) { warned = Date.now(); toast("Couldn't save on this phone. Close the app fully, open it again, and check your last note."); } return false; } await new Promise((r) => setTimeout(r, 400 * tries)); }
+      }
+      return true;
+    })();
+    running.set(k, p);
+    p.then((ok) => { running.delete(k); if (ok && wanted.has(k)) flushKey(k); }); // changed while finishing
+    return p;
+  };
+  const ready = (async () => {
+    let moved = false; try { moved = localStorage.getItem(REC_MOVED) === "1"; } catch {}
+    for (let i = 0; i < (moved ? 3 : 1) && mode !== "db"; i++) {
+      try { const [keys, vals] = await Promise.all([req("readonly", (st) => st.getAllKeys()), req("readonly", (st) => st.getAll())]); keys.forEach((k, j) => { try { mem.set(k, JSON.parse(vals[j])); } catch {} }); mode = "db"; }
+      catch { db = null; }
+    }
+    if (mode !== "db") { mode = moved ? "failed" : "browser"; return; }
+    // Move records from browser storage (older versions); removed there only once written here.
+    for (const k of lsKeys()) {
+      let v = null; try { v = JSON.parse(localStorage.getItem(k)); } catch {}
+      if (v) { const merged = mem.has(k) ? mergeRecords(mem.get(k), v) : v; wanted.set(k, JSON.stringify(merged)); if (!(await flushKey(k))) continue; mem.set(k, merged); }
+      try { localStorage.removeItem(k); } catch {}
+    }
+    try { localStorage.setItem(REC_MOVED, "1"); } catch {}
+  })();
+  return {
+    ready,
+    failed: () => mode === "failed",
+    usingDB: () => mode === "db",
+    get: (k) => { if (mode === "db") return mem.has(k) ? mem.get(k) : null; if (mode !== "browser") return null; try { const raw = localStorage.getItem(k); return raw ? JSON.parse(raw) : null; } catch { return null; } },
+    // True once kept in memory and queued for the database (see flush), or stored in browser storage.
+    set: (k, v) => {
+      if (mode === "db") { mem.set(k, v); wanted.set(k, JSON.stringify(v)); flushKey(k); return true; }
+      if (mode !== "browser") return false;
+      try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; }
+    },
+    del: (k) => { if (mode === "db") { mem.delete(k); wanted.set(k, null); flushKey(k); } try { localStorage.removeItem(k); } catch {} },
+    keys: () => (mode === "db" ? [...mem.keys()] : mode === "browser" ? lsKeys() : []),
+    // Resolves true once the key's latest version is in the database (false if it couldn't be written).
+    flush: (k) => (mode !== "db" ? Promise.resolve(mode === "browser") : !wanted.has(k) && !running.has(k) ? Promise.resolve(true)
+      : Promise.race([flushKey(k), new Promise((r) => setTimeout(() => r(false), 10000))])),
+  };
+})();
+function load() { return recStore.get(KEY); }
 function saveLocal() {
   if (!KEY) return false;
-  try { localStorage.setItem(KEY, JSON.stringify(S)); return true; }
-  catch { toast("Couldn't save on this phone. Storage may be full."); return false; }
+  if (recStore.set(KEY, S)) return true;
+  toast("Couldn't save on this phone. Storage may be full."); return false;
 }
 // Save on this phone, then copy anything new to the cloud shortly after.
 function save() { const ok = saveLocal(); if (ok) scheduleSync(); return ok; }
@@ -85,12 +166,12 @@ function loadUser() {
   S = load();
   if (!S) { // first time with this client: carry over notes from before clients existed, once
     let old = null;
-    try { old = JSON.parse(localStorage.getItem(legacy) || "null"); } catch {}
+    old = recStore.get(legacy);
     S = old && old.client && old.client.name === session.client.name ? old : seed();
     // A real client starts with an empty record; the example day is only for trying the app locally.
     if (S !== old && !session.local) Object.assign(S, { notes: [], flags: [], handovers: [], schedule: [], messages: [] });
     S.client = { name: session.client.name }; S.consent = session.client.consent;
-    if (save() && S === old) try { localStorage.removeItem(legacy); } catch {}
+    if (save() && S === old) recStore.del(legacy);
   }
   // Kept with the notes too, so the client list can be shown from this phone when offline.
   S.client = { name: session.client.name, carers: session.client.carers || [] }; S.consent = session.client.consent;
@@ -243,7 +324,7 @@ function handleSyncBlocked() {
 }
 
 async function syncNow() {
-  if (!cloudOn() || !navigator.onLine) return;
+  if (!KEY || !cloudOn() || !navigator.onLine) return; // no KEY: records not loaded yet
   if (syncState.blocked && handleSyncBlocked()) return;
   if (syncState.busy) { syncState.again = true; return; }
   syncState.busy = true; syncState.again = false;
@@ -1560,7 +1641,7 @@ function detachClient() {
   for (const [kind, arr] of Object.entries(SYNC_KINDS)) kept[arr] = (S[arr] || []).filter((r) => pend.has(kind + ":" + r.id) || (kind === "note" && r.audioId && si.sent["note:" + r.id] && !si.audio[r.audioId]));
   const keptAudio = new Set(kept.notes.map((n) => n.audioId).filter(Boolean));
   audioDB.del([...S.notes.map((n) => n.audioId), ...(S.pending || []).map((p) => p.audioId)].filter((a) => a && !keptAudio.has(a)));
-  if (!Object.values(kept).some((a) => a.length)) { try { localStorage.removeItem(KEY); } catch {} return; }
+  if (!Object.values(kept).some((a) => a.length)) { recStore.del(KEY); return; }
   Object.assign(S, kept, { detached: true, plan: null, messages: [], contacts: null, meds: null }); saveLocal();
 }
 // Remove every document copy kept on this phone for the open client (sign-out, reset, client removed).
@@ -3157,14 +3238,15 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       const extra = extraAssistanceNow();
       S.notes.push({ id, ts, approvedTs: Date.now(), carerId: (pending && pending.by) || stampId(), ...(amends ? { amends } : {}), ...(autoSave ? { auto: 1 } : {}), ...(extra ? { extra: 1 } : {}), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard, ...(byRelay ? { heardBy: "relay" } : {}) } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
       draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
-      if (!save()) {
+      // Copied to the cloud only once it's safely stored on this phone.
+      if (!saveLocal() || !(await recStore.flush(KEY))) {
         // Not saved on this phone: take it back out so it isn't sent to the cloud half-saved.
-        S.notes = S.notes.filter((n) => n.id !== id); S.flags = S.flags.filter((f) => f.noteId !== id);
+        S.notes = S.notes.filter((n) => n.id !== id); S.flags = S.flags.filter((f) => f.noteId !== id); saveLocal(); // a slow write that lands later is replaced too
         if (audioId && !(pending && pending.audioId === audioId)) audioDB.del([audioId]); // the kept recording stays for the next try
         saving = false; const b = $("#rvSave"); if (b) { b.disabled = false; b.textContent = "Save to record"; }
         return;
       }
-      dropPending(pending);
+      scheduleSync(); dropPending(pending);
       s.close(); render();
       if (autoSave) openSavedNote(id, { unclear: draft.unclear || [], gaps: draft.record_gaps || [], lostAt, lockedAt, tasksDone: draft.tasks_done || [] });
       const inc = draft.flags.filter((f) => f.kind === "incident").length;
@@ -3435,6 +3517,7 @@ async function switchCarer() {
   try {
     const mineKey = (k) => (!keepFor && k === "nanacare.v3." + who) || (keepFor ? ["dignitynotes.fbdraft."] : ["nanacare.v3.", "dignitynotes.dict.", "dignitynotes.speechlang.", "dignitynotes.fbdraft."]).some((p) => k === p + who || k.startsWith(p + who + "."));
     for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && mineKey(k)) localStorage.removeItem(k); }
+    recStore.keys().filter(mineKey).forEach(recStore.del);
   } catch {}
   if (!keepFor) audioDB.keys().then((ks) => audioDB.del((ks || []).filter((k) => !String(k).startsWith("doc_")))).catch(() => {}); // recordings already sent
 }
@@ -4069,13 +4152,12 @@ const clientsApi = {
 };
 // Clients already used on this phone, for when there's no connection.
 function savedClients() {
-  const prefix = "nanacare.v3." + session.username + ".";
+  const prefix = REC_PREFIX + session.username + ".";
   const out = [];
   try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
+    for (const k of recStore.keys()) {
       if (!k.startsWith(prefix) || k.slice(prefix.length).includes(".")) continue;
-      const d = JSON.parse(localStorage.getItem(k));
+      const d = recStore.get(k);
       if (d && d.client && d.consent && !d.detached) out.push({ id: k.slice(prefix.length), name: d.client.name, consent: d.consent, carers: d.client.carers || [] });
     }
   } catch {}
@@ -4204,6 +4286,12 @@ setInterval(() => {
 const userIsReading = () => { const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || [...document.querySelectorAll("audio")].some((x) => !x.paused); };
 
 /* ---------- boot ---------- */
+// Starts once this phone's records have been read (normally a fraction of a second).
+recStore.ready.then(() => {
+if (recStore.failed()) { // records moved to the phone's database, which won't open: never start an empty record
+  $("#fullRoot").innerHTML = `<div class="full" role="dialog" aria-modal="true"><div class="wrap" style="display:grid;gap:14px"><h2>Your notes couldn't be opened</h2><p>This phone's storage didn't open. Your notes are still on the phone. Close Dignity Notes fully (swipe it away), then open it again.</p><button class="btn primary block" id="stoRetry">Try again</button></div></div>`;
+  $("#stoRetry").onclick = () => location.reload(); return;
+}
 setTimeout(() => { try { openFromHash(); checkPush(); } catch {} }, 300); // opened from a notification; notifications still signed up
 checkStorage().then(() => { if (session && session.client && tab === "today") render(); });
 if (session && (session.token || session.local)) {
@@ -4219,6 +4307,7 @@ if (session && (session.token || session.local)) {
   });
 }
 else { render(); showLogin(); }
+});
 if ("serviceWorker" in navigator && location.protocol === "https:") {
   // When a new version of the app is published, reload once so nobody keeps running an old copy.
   const hadController = !!navigator.serviceWorker.controller;
