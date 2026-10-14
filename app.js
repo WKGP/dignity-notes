@@ -167,7 +167,7 @@ const cloudOn = () => !!(session && session.token && !session.local && session.r
 // records from other phones are displayed here.
 const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SYNC_SHAPES = {
-  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", heardBy: "str:10", amends: "id", auto: "num", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
+  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", heardBy: "str:10", amends: "id", auto: "num", extra: "num", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
   flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", raisedBy: "id", resolvedNote: "str:200", resolvedTs: "num", resolvedBy: "id" } },
   task: { req: ["ts", "taskId", "day", "status"], f: { ts: "num", taskId: "str:40", title: "str:120", day: "str:10", period: ["morning", "afternoon", "evening", "night", "any"], status: ["done", "not_done"], reason: "str:300", by: "id", noteId: "id" } },
   dose: { req: ["ts", "medId", "day", "slot", "code"], f: { ts: "num", medId: "id", med: "str:200", day: "str:10", slot: "str:8", code: ["T", "P", "R", "NT", "NR", "D", "C", "M", "E", "O", "V"], amount: "str:40", reason: "str:300", prnFor: "str:200", note: "str:500", corrects: "id", outcomeOf: "id", outcome: "str:200", by: "id", byName: "str:60" } },
@@ -428,6 +428,18 @@ function shiftStart() {
   const last = S.handovers.filter((h) => !isExample(h) && h.ts <= Date.now()).reduce((m, h) => Math.max(m, h.ts), 0);
   return Math.max(Date.now() - 12 * 36e5, last);
 }
+// Extra assistance (Sam, 2026-10-12): a carer who signs in outside their own shift times, while
+// someone else's shift covers now (e.g. called in after a fall). Their notes are marked "Extra
+// assistance"; the shift and handover stay with the carer on duty. Only when both shifts have clear
+// times: a wrong label is worse than none. The first and last such note give the visit time later.
+const inShift = (text, d = new Date()) => { const r = shiftRange(text); if (!r) return null; const m = d.getHours() * 60 + d.getMinutes(); return r.from < r.to ? m >= r.from && m < r.to : m >= r.from || m < r.to; };
+function extraAssistanceNow() {
+  if (!session || session.local) return false;
+  const all = roster(), me = all.find((c) => c.id === myId());
+  if (!me || inShift(me.shift) !== false) return false; // no clear times, or on shift
+  return all.some((c) => c.id !== me.id && inShift(c.shift) === true);
+}
+const extraChip = (n) => (n && n.extra ? ' <span class="chip follow">Extra assistance</span>' : "");
 // A shift's start and end in minutes from midnight, from text like "Day · 04:00–13:30" (or 4-13.30,
 // 4am-1:30pm). null when there are no clear times. Used to tell who is on shift.
 function shiftRange(text) {
@@ -447,7 +459,7 @@ const familyIncidentsOn = () => (session && !session.local && session.client ? !
 function summaryPayload(mode, toId) {
   return {
     mode, country: clientCountry(), clientId: session && session.client ? session.client.id : "", client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
-    notes: (mode === "family" ? familyNotes() : shiftNotes()).map((n) => { const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name, note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
+    notes: (mode === "family" ? familyNotes() : shiftNotes()).map((n) => { const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name + (n.extra && mode !== "family" ? ", extra assistance" : ""), note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
     flags: openFlags().filter((f) => !isExample(f) && !(mode === "family" && f.kind === "incident" && !familyIncidentsOn()) && !(mode === "family" && (f.ts < Date.now() - 24 * 36e5 || MEDS_SAFETY_FLAG.test(f.title)))).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
     transfers: S.transfers.filter((t) => t.outTs >= (mode === "family" ? Date.now() - 24 * 36e5 : shiftStart()) || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
     planGaps: mode === "handover" ? planGaps() : [],
@@ -1900,7 +1912,7 @@ function recentNotesHTML(latest) {
   const since = new Date(); since.setHours(0, 0, 0, 0); since.setDate(since.getDate() - 1);
   const recent = S.notes.filter((n) => !isExample(n) && n.ts >= since.getTime() && n.id !== latest.id && !isNested(n)).sort((a, b) => b.ts - a.ts);
   const first = (t) => { const m = String(t || "").match(/^[^.!?]+[.!?]?/); return m ? m[0] : ""; };
-  return `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId, latest.carerName).name)} · ${esc(dayLabel(latest.ts))} ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p>
+  return `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId, latest.carerName).name)}${latest.extra ? " · extra assistance" : ""} · ${esc(dayLabel(latest.ts))} ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p>
     ${recent.length ? `<details style="margin-top:10px"><summary class="small"><strong>Yesterday and today: ${recent.length} more note${recent.length > 1 ? "s" : ""}</strong></summary>
       ${recent.slice(0, 15).map((n) => `<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px"><div class="tiny muted">${esc(dayLabel(n.ts))} ${fmtTime(n.ts)} · ${esc(carer(n.carerId, n.carerName).name)}</div><p class="small" style="margin:4px 0 0">${esc(first(n.note))}</p></div>`).join("")}
       <button class="link small" id="recentLog" style="margin-top:8px">Open the Record log for everything</button></details>` : ""}</div>`;
@@ -2077,7 +2089,7 @@ function renderLog() {
     if (it.type === "note") {
       const n = it.n; const fl = S.flags.filter((f) => f.noteId === n.id);
       return head + `<article class="card entry">
-        <div class="entry-top"><span class="t">${fmtTime(n.ts)}</span><span class="muted">${esc(carer(n.carerId, n.carerName).name)}</span>${n.approvedTs && n.approvedTs - n.ts > 30 * 60 * 1000 ? `<span class="chip" title="Recorded ${esc(fmtTime(n.ts))}, saved ${esc(fmtTime(n.approvedTs))}">Saved later</span>` : ""}${n.serverAt && n.serverAt - (n.approvedTs || n.ts) > 30 * 60 * 1000 ? `<span class="chip">Added later: ${dayLabel(n.serverAt)} ${fmtTime(n.serverAt)}</span>` : ""}${n.source === "example" ? '<span class="chip">Example</span>' : ""}</div>
+        <div class="entry-top"><span class="t">${fmtTime(n.ts)}</span><span class="muted">${esc(carer(n.carerId, n.carerName).name)}</span>${extraChip(n)}${n.approvedTs && n.approvedTs - n.ts > 30 * 60 * 1000 ? `<span class="chip" title="Recorded ${esc(fmtTime(n.ts))}, saved ${esc(fmtTime(n.approvedTs))}">Saved later</span>` : ""}${n.serverAt && n.serverAt - (n.approvedTs || n.ts) > 30 * 60 * 1000 ? `<span class="chip">Added later: ${dayLabel(n.serverAt)} ${fmtTime(n.serverAt)}</span>` : ""}${n.source === "example" ? '<span class="chip">Example</span>' : ""}</div>
         ${fl.length ? `<div class="chips">${fl.map((f) => `<span class="chip ${f.kind === "incident" ? "incident" : "follow"}">${esc(f.title)}</span>`).join("")}</div>` : ""}
         <p class="note-text">${esc(n.note)}</p>
         <div class="chips">${n.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>
@@ -2972,7 +2984,8 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
         }
       }
       const ts = (pending && pending.recordedAt) || Date.now();
-      S.notes.push({ id, ts, approvedTs: Date.now(), carerId: (pending && pending.by) || stampId(), ...(amends ? { amends } : {}), ...(autoSave ? { auto: 1 } : {}), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard, ...(byRelay ? { heardBy: "relay" } : {}) } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
+      const extra = extraAssistanceNow();
+      S.notes.push({ id, ts, approvedTs: Date.now(), carerId: (pending && pending.by) || stampId(), ...(amends ? { amends } : {}), ...(autoSave ? { auto: 1 } : {}), ...(extra ? { extra: 1 } : {}), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard, ...(byRelay ? { heardBy: "relay" } : {}) } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
       draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
       if (!save()) {
         // Not saved on this phone: take it back out so it isn't sent to the cloud half-saved.
@@ -2986,7 +2999,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       if (autoSave) openSavedNote(id, { unclear: draft.unclear || [], gaps: draft.record_gaps || [], lostAt, lockedAt, tasksDone: draft.tasks_done || [] });
       const inc = draft.flags.filter((f) => f.kind === "incident").length;
       // The carer's first note of this shift: remind them to hand over at the end of it.
-      const firstOfShift = shiftNotes().filter((n) => n.carerId === stampId()).length === 1;
+      const firstOfShift = !extra && shiftNotes().filter((n) => n.carerId === stampId()).length === 1;
       toast((inc ? "Saved. Incident report added to Needs attention." : "Saved to the record.") + (firstOfShift ? " Don't forget to do a handover at the end of your shift." : "") + (keep.length ? ` Remembered ${keep.length} word fix${keep.length > 1 ? "es" : ""}.` : ""));
     };
   };
