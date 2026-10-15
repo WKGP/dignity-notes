@@ -746,7 +746,11 @@ function dosesForToday() {
 }
 function medsCardHTML() {
   const ms = medsState(), p = medsProfile(), active = ms.list.filter((m) => !m.stoppedAt);
-  if (!cloudOn() || (!active.length && p.mode !== "self")) return "";
+  if (!cloudOn()) return "";
+  // No medicines yet: still shown, so the chart is easy to find (Sam, 2026-10-15: "can't find it").
+  if (!active.length && p.mode !== "self") return ms.at ? `<div class="card"><div class="card-h"><h3>Medicines</h3><button class="link small" data-openmeds="list" style="min-height:44px">Open chart</button></div>
+    <p class="small muted" style="margin:0 0 10px">No medicines on the chart yet. Add each one from the pharmacy label or prescription, or take a photo of it.</p>
+    <button class="btn secondary block" data-maddfirst>Add the first medicine</button></div>` : "";
   const head = `<div class="card-h"><h3>Medicines</h3><button class="link small" data-openmeds style="min-height:44px">Open chart</button></div>`;
   const pcheck = profileUnchecked() ? `<button class="warn small" data-openmeds="details" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">Medicines details changed by ${esc(p.updatedBy || "someone")} (who gives them${p.allergies ? ", allergies" : ""}): ${profileSelfChecked() ? `double-checked by ${esc(p.selfCheck.by)}; the next carer checks them at handover.` : "not yet checked."} Tap to ${p.mine && !profileSelfChecked() ? "double-check" : "check"}.</button>` : "";
   if (medsSelf()) return `<div class="card">${head}${pcheck}<p class="small muted" style="margin:0">${esc(S.client.name)} manages their own medicines. Nothing to record here.</p></div>`;
@@ -767,6 +771,7 @@ function bindMeds(root, after) {
   root.querySelectorAll("[data-mdose]").forEach((b) => (b.onclick = () => { const [id, day, slot] = b.dataset.mdose.split("|"); openDoseSheet(id, day, slot, after); }));
   root.querySelectorAll("[data-mprn]").forEach((b) => (b.onclick = () => openPrnSheet(after)));
   root.querySelectorAll("[data-openmeds]").forEach((b) => (b.onclick = () => openMeds(b.dataset.openmeds || "today")));
+  root.querySelectorAll("[data-maddfirst]").forEach((b) => (b.onclick = () => (medsSignedOff() ? openMedEdit(null, () => openMeds("list")) : openMeds("list")))); // the list explains a missing sign-off
 }
 function pushDose(rec) {
   S.doses = S.doses || [];

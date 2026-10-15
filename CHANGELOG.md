@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.3.0 - 2026-10-15
+
+
 ## 1.2.0 - 2026-10-10
 
 - 1.2.6: Fresh look for phones: the Dignity Notes logo at the top of every screen, tap the client's name to switch client; Today has a big Record a note button, four shortcuts (Find, Contacts, Care plan, Going out), an Emergency care plan button, and Needs attention as short lines you tap to open (Mark as resolved); long handovers show a few lines with Read all; Log has a search bar; Settings sections open with a tap; warmer colours.
