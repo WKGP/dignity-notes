@@ -1546,6 +1546,7 @@ function openFind() {
       <div class="list">
         <button class="btn secondary block fd-link" data-go="plan"><div class="body"><strong>Care plan</strong><div class="muted small">Needs, routines, risks and shift tasks</div></div></button>
         ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="meds"><div class="body"><strong>Medicines chart</strong><div class="muted small">Doses, the medicine list and the monthly chart</div></div></button>' : ""}
+        ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="reports"><div class="body"><strong>Reports</strong><div class="muted small">Falls and mobility, made from the notes</div></div></button>' : ""}
         <button class="btn secondary block fd-link" data-go="contacts"><div class="body"><strong>Contacts</strong><div class="muted small">GP, pharmacy, family and others</div></div></button>
         <button class="btn secondary block fd-link" data-go="log"><div class="body"><strong>Record log</strong><div class="muted small">Every note, flag and handover</div></div></button>
         <button class="btn secondary block fd-link" data-go="handover"><div class="body"><strong>Handover</strong><div class="muted small">The latest handover</div></div></button>
@@ -1573,7 +1574,7 @@ function openFind() {
   out.onclick = (e) => {
     const b = e.target.closest("[data-go]"); if (!b) return;
     s.close();
-    ({ emerg: openEmergency, plan: openPlan, contacts: openContacts, meds: () => openMeds("today"), log: () => go("log"), handover: () => go("handover") })[b.dataset.go]();
+    ({ emerg: openEmergency, reports: openReports, plan: openPlan, contacts: openContacts, meds: () => openMeds("today"), log: () => go("log"), handover: () => go("handover") })[b.dataset.go]();
   };
   links();
 }
@@ -1923,8 +1924,10 @@ function openPlan() {
     </div>
     ${p.updatedAt ? `<p class="tiny muted" style="margin:0">Last changed ${fmtDay(p.updatedAt)} ${fmtTime(p.updatedAt)}${p.updatedBy ? " by " + esc(p.updatedBy) : ""}.</p>` : ""}
     ${canEditPlan() ? `${planDoneCount() < PLAN_DEFAULTS.length ? `<button class="btn primary block" id="plGuide">${planDoneCount() ? "Finish it step by step" : "Set it up step by step"} (${planDoneCount()} of ${PLAN_DEFAULTS.length} done)</button>` : ""}
+      <button class="btn secondary block" id="plReports">Reports (falls and mobility)</button>
       <div class="row"><button class="btn secondary" id="plEdit">${p.sections.length ? "Edit care plan" : "Write it all at once"}</button><button class="btn secondary" id="plUpload">Add a document</button></div>` : ""}`);
   if ($("#plGuide", s.root)) $("#plGuide", s.root).onclick = () => { s.close(); openPlanGuide(); };
+  if ($("#plReports", s.root)) $("#plReports", s.root).onclick = () => { s.close(); openReports(); };
   s.root.querySelectorAll("[data-filldoc]").forEach((b) => (b.onclick = () => { s.close(); openPlanFromDoc(b.dataset.filldoc); }));
   if ($("#plEdit", s.root)) $("#plEdit", s.root).onclick = () => { s.close(); openPlanEdit(); };
   if ($("#tkEdit", s.root)) $("#tkEdit", s.root).onclick = () => { s.close(); openTasksEdit(); };
@@ -2160,6 +2163,131 @@ async function openPlanFromDoc(docId) {
     try { const o = await syncJSON("/plan/save", { client: session.client.id, sections, baseUpdatedAt: base }); S.plan = { ...plan(), ...o.plan, docs: planDocs() }; saveLocal(); busy = false; $("#fdSave", box).remove(); s.close(); render(); toast("Care plan saved"); }
     catch (err) { busy = false; toast(err.message || "Couldn't save the care plan"); const b = $("#fdSave", box); if (b) b.disabled = false; }
   };
+}
+/* ---------- specialist reports ----------
+ * Record once: reports are made from carers' ordinary notes and incidents, only when someone opens one,
+ * for a chosen period. Every point links to the notes it came from; days with no notes are shown as
+ * "no notes", never as "no problems". Falls and mobility is the first (Sam's briefs, 2026-10-19);
+ * fluids, food, bowels, urinary, pain, sleep, behaviour and skin follow the same pattern.
+ */
+const REPORTS = {
+  falls: {
+    title: "Falls and mobility",
+    pick: (n) => (n.categories || []).includes("Mobility") || /\b(fall\w*|fell|floor|ground|slip\w*|trip\w*|tumbl\w*|unsteady|balance|wobbl\w*|walk(ed|ing)?|frame|zimmer|stick|wheelchair|hoist|transfer\w*|stand(ing)?|stood|weak(ness)?|legs?)\b/i.test(n.note || ""),
+    pickFlag: (f) => f.kind === "incident" && /\b(fall\w*|fell|floor|ground|slip\w*|trip\w*|tumbl\w*|found down)\b/i.test(`${f.title} ${f.detail}`),
+    groups: [["Fall", ["fall"], "var(--incident)"], ["Near fall", ["near_fall"], "#d98a00"], ["Harder than usual", ["unsteady", "standing", "transfer", "more_help", "weakness"], "#b5651d"], ["Better", ["improvement", "less_help"], "#2e7d32"], ["Other", ["walking_aid", "other"], "#7a7085"]],
+    labels: { fall: "Fall", near_fall: "Near fall", unsteady: "Unsteady or loss of balance", standing: "Standing up or sitting down", transfer: "Transfers", more_help: "More help needed", less_help: "Less help needed", walking_aid: "Walking aid", weakness: "Weakness", improvement: "Improvement", other: "Other" },
+    about: (au) => `<h3>What is it?</h3><p>A record of what carers wrote about ${au ? "mobility" : "mobility"}, balance and falls over a period: falls and near falls, unsteadiness, getting up and sitting down, moving between bed, chair and toilet, how much help was needed, walking aids, and any improvement. It's made from the ordinary notes and incident records, so nobody fills in anything extra.</p>
+      <h3>Why is it used?</h3><p>Changes in mobility often build up slowly over days or weeks and are easy to miss from one shift to the next. The report puts them in date order, with each point linked to the note it came from.</p>
+      <h3>Who might ask for it?</h3><p>A GP, ${au ? "community nurse" : "district nurse"}, physiotherapist or occupational therapist, the falls service, the family or an agency, for example after a fall or when someone seems less steady.</p>
+      <h3>When is it useful?</h3><p>When asked "has their walking changed this month?", before a GP or therapist visit, after a fall, or when a new carer starts.</p>
+      <h3>Who completes it?</h3><p>Nobody: Dignity Notes writes it from carers' notes when it's opened, using AI. Check it against the notes before sharing it. <strong>It is not a falls risk assessment</strong>, which is done by a trained professional. If a professional has done one, upload it to the care plan as a risk assessment and it's listed at the end of the report.</p>
+      <p><strong>Days with no notes</strong> aren't evidence that all was well, only that nothing was written.</p>
+      <h3>Further information</h3><p>${au ? `<a href="https://www.safetyandquality.gov.au/our-work/comprehensive-care/related-topics/falls-prevention" target="_blank" rel="noopener">Australian Commission on Safety and Quality in Health Care: falls prevention</a>` : `<a href="https://www.nice.org.uk/guidance/ng249" target="_blank" rel="noopener">NICE guideline NG249: falls in older people</a>`}</p>
+      <p><strong>Something urgent?</strong> Follow the care plan and get help straight away; don't wait for a report.</p>`,
+  },
+};
+function openReports() {
+  const s = sheet(`${sheetHead("Reports · " + esc(S.client.name))}
+    <p class="small muted" style="margin:0">Made from the notes carers already write, for any period. Nothing extra to fill in.</p>
+    ${Object.entries(REPORTS).map(([k, r]) => `<button class="btn secondary block fd-link" data-report="${k}"><div class="body"><strong>${esc(r.title)}</strong><div class="muted small">Last 7, 14 or 30 days, or choose dates</div></div></button>`).join("")}
+    <p class="tiny muted" style="margin:0">Coming next: fluids, food and nutrition, bowels, urinary, and pain.</p>`);
+  s.root.querySelectorAll("[data-report]").forEach((b) => (b.onclick = () => { s.close(); openReport(b.dataset.report); }));
+}
+const reportRange = (days, from, to) => { if (from && to) { const a = new Date(from + "T00:00:00"), b = new Date(to + "T23:59:59"); return { from: a.getTime(), to: b.getTime(), label: `${fmtDay(a.getTime())} to ${fmtDay(b.getTime())}` }; } const t = new Date(); t.setHours(23, 59, 59, 999); const f = new Date(t); f.setDate(f.getDate() - days + 1); f.setHours(0, 0, 0, 0); return { from: f.getTime(), to: t.getTime(), label: `Last ${days} days (${fmtDay(f.getTime())} to ${fmtDay(t.getTime())})` }; };
+async function openReport(kind, { days = 14, from = "", to = "", graph = false } = {}) {
+  const R = REPORTS[kind], range = reportRange(days, from, to), au = clientCountry() === "AU";
+  const inRange = (ts) => ts >= range.from && ts <= range.to;
+  const NOTE_CAP = 120, allNotes = S.notes.filter((n) => !isExample(n) && inRange(n.ts) && R.pick(n)).sort((a, b) => a.ts - b.ts);
+  const notes = allNotes.slice(-NOTE_CAP), leftOut = allNotes.length - notes.length; // the most recent; the report says how many earlier ones weren't used
+  const flags = S.flags.filter((f) => !DEMO_IDS.has(f.id) && inRange(f.ts) && R.pickFlag(f)).sort((a, b) => a.ts - b.ts);
+  const entries = [...flags.map((f, i) => ({ id: "f" + (i + 1), ref: f })), ...notes.map((n, i) => ({ id: "n" + (i + 1), ref: n, isNote: true }))];
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const when = (ts) => `${esc(dayLabel(ts))} ${fmtTime(ts)}`;
+  const daysWithNotes = new Set(S.notes.filter((n) => !isExample(n) && inRange(n.ts)).map((n) => dayKey(new Date(n.ts))));
+  const docs = planDocs().filter((d) => d.kind === "risk");
+  const root = $("#fullRoot");
+  root.innerHTML = `<div class="full" role="dialog" aria-modal="true" aria-label="${esc(R.title)} report"><div class="wrap" style="gap:0;min-width:0">
+    <div class="noprint" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn ghost" id="rpClose">Close</button><button class="btn ghost" id="rpAbout">About this report</button><button class="btn primary" id="rpPrint" style="grid-column:1/-1">Print or save as PDF</button></div>
+    <div class="noprint" style="display:grid;gap:8px;margin:12px 0">
+      <div class="seg" role="group" aria-label="Period">${[7, 14, 30].map((d) => `<button data-days="${d}" aria-pressed="${!from && days === d}">${d}</button>`).join("")}<button data-days="custom" aria-pressed="${!!from}">Dates</button></div><span class="tiny muted" style="margin-top:-4px">Days, or choose dates</span>
+      <div class="row" id="rpDates" style="gap:8px" ${from ? "" : "hidden"}><label class="f" style="flex:1">From<input type="date" id="rpFrom" value="${esc(from)}"></label><label class="f" style="flex:1">To<input type="date" id="rpTo" value="${esc(to)}"></label><button class="btn secondary" id="rpGo" style="align-self:end">Show</button></div>
+      <label class="check"><input type="checkbox" id="rpGraph" ${graph ? "checked" : ""}><span>Show a graph</span></label>
+      <div class="card noprint" id="rpAboutBox" hidden style="box-shadow:none;display:grid;gap:4px"><div class="small" style="display:grid;gap:4px">${R.about(au)}</div><button class="btn ghost" id="rpAboutClose">Close this</button></div></div>
+    <h2 style="font-size:22px;margin:0">${esc(R.title)} report</h2>
+    <p class="small" style="margin:4px 0 0"><strong>${esc(S.client.name)}</strong> · ${esc(range.label)}</p>
+    <p class="tiny muted" style="margin:2px 0 12px">Made ${esc(fmtDay(Date.now()))} ${fmtTime(Date.now())} from ${notes.length} note${notes.length === 1 ? "" : "s"} and ${flags.length} incident${flags.length === 1 ? "" : "s"} · written by AI from carers' notes · check it against the notes before sharing</p>
+    ${leftOut ? `<div class="warn small" style="margin-bottom:10px">This period has ${allNotes.length} notes about mobility; the report uses the latest ${notes.length}. Choose a shorter period to include the ${leftOut} earlier one${leftOut === 1 ? "" : "s"}.</div>` : ""}
+    <div id="rpBody" style="display:grid;gap:14px"><p class="small">${entries.length ? "Writing the report…" : ""}</p></div>
+    <div class="tiny muted" style="margin-top:16px;display:grid;gap:4px">
+      <div>Made only from what carers wrote. Days with no notes are not evidence that all was well.</div>
+      <div>This records carers' observations. It is not a falls risk assessment, which is done by a trained professional.</div>
+      ${docs.length ? `<div>Professional assessments in the care plan: ${docs.map((d) => `<button class="link tiny" data-opendoc="${esc(d.id)}">${esc(d.name)}</button>`).join(", ")}</div>` : ""}
+      <div>Dignity Notes · pilot, made-up data only</div></div>
+    ${canEditPlan() ? '<button class="btn secondary block noprint" id="rpShare" style="margin-top:12px" hidden>Share with the family</button>' : ""}
+  </div></div>`;
+  document.body.classList.add("printing-mar", "report-open");
+  const again = (o) => openReport(kind, { days, from, to, graph: $("#rpGraph").checked, ...o });
+  $("#rpClose").onclick = () => { root.innerHTML = ""; };
+  $("#rpPrint").onclick = () => window.print();
+  $("#rpAbout").onclick = () => { $("#rpAboutBox").hidden = !$("#rpAboutBox").hidden; if (!$("#rpAboutBox").hidden) $("#rpAboutBox").scrollIntoView({ block: "start" }); };
+  $("#rpAboutClose").onclick = () => { $("#rpAboutBox").hidden = true; };
+  root.querySelectorAll("[data-days]").forEach((b) => (b.onclick = () => (b.dataset.days === "custom" ? ($("#rpDates").hidden = false) : again({ days: +b.dataset.days, from: "", to: "" }))));
+  $("#rpGo").onclick = () => { const f = $("#rpFrom").value, t = $("#rpTo").value; if (!f || !t || f > t) return toast("Choose a start date before the end date"); again({ from: f, to: t }); };
+  $("#rpGraph").onchange = () => again({});
+  const body = $("#rpBody");
+  if (!entries.length) { body.innerHTML = `<p class="small" style="margin:0">Nothing about mobility or falls was written in this period. That doesn't mean all was well: only that nothing was recorded.</p>`; return; }
+  // The same notes give the same report: kept on this phone until a note in the period changes.
+  const sig = kind + "|" + range.from + "|" + range.to + "|" + entries.map((e) => e.ref.id + ":" + mtOf(e.ref)).join(",");
+  const cache = Array.isArray(S.reportCache) ? S.reportCache : [];
+  let out = (cache.find((c) => c.sig === sig) || {}).out || null;
+  if (!out) {
+    try {
+      out = await syncJSON("/plan/report", { client: session.client.id, clientName: S.client.name, kind, period: range.label,
+        entries: entries.map((e) => ({ id: e.id, time: `${fmtDay(e.ref.ts)} ${new Date(e.ref.ts).getFullYear()} ${fmtTime(e.ref.ts)}`, by: e.isNote ? carer(e.ref.carerId, e.ref.carerName).name : "Incident record",
+          text: e.isNote ? (e.ref.amends ? "(Added to an earlier note; not a separate event.) " : "") + e.ref.note : `${e.ref.title}. ${e.ref.detail || ""}` })) }, 180000);
+      S.reportCache = [{ sig, out }, ...cache.filter((c) => c.sig !== sig)].slice(0, 6); saveLocal();
+    } catch (err) { out = null; if (body.isConnected) body.innerHTML = `<div class="warn small">${esc(err.message || "Couldn't write the report.")} The notes it would use are listed below.</div>`; }
+  }
+  if (!body.isConnected) return;
+  const src = (ids) => ids.map((id) => byId.get(id)).filter(Boolean).map((e) => `<button class="link tiny" data-src="${e.id}">${when(e.ref.ts)}</button>`).join(" · ");
+  const obs = out ? out.observations.filter((o) => byId.has(o.entry)) : [];
+  // Every fall incident is listed, even one the AI didn't mention.
+  if (out) for (const e of entries) if (!e.isNote && !obs.some((o) => o.entry === e.id)) obs.push({ entry: e.id, type: "fall", words: `${e.ref.title}${e.ref.detail ? ": " + e.ref.detail : ""}` });
+  obs.sort((a, b) => byId.get(a.entry).ref.ts - byId.get(b.entry).ref.ts);
+  // Graph: one column a day; marks only from what was written; a day with no notes at all is marked as such.
+  const graphHTML = () => {
+    const ds = []; for (const d = new Date(range.from); d.getTime() <= range.to && ds.length < 92; d.setDate(d.getDate() + 1)) ds.push(dayKey(d));
+    const cnt = (d, types) => obs.filter((o) => types.includes(o.type) && dayKey(new Date(byId.get(o.entry).ref.ts)) === d).length;
+    return `<div class="card" style="box-shadow:none;overflow-x:auto"><table style="border-collapse:collapse;font-size:12px"><thead><tr><th></th>${ds.map((d) => `<th style="padding:2px 3px;font-weight:600">${+d.slice(8)}</th>`).join("")}</tr></thead><tbody>
+      ${R.groups.map(([label, types, colour]) => `<tr><th style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;font-weight:600">${esc(label)}</th>${ds.map((d) => { const c = cnt(d, types); return `<td style="text-align:center;padding:2px 3px;${daysWithNotes.has(d) ? "" : "background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(0,0,0,.08) 3px,rgba(0,0,0,.08) 5px)"}">${c ? `<span style="display:inline-block;min-width:16px;border-radius:8px;background:${colour};color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact">${c}</span>` : ""}</td>`; }).join("")}</tr>`).join("")}
+      </tbody></table><p class="tiny muted" style="margin:6px 0 0">Numbers are how many times it was written that day. Shaded days had no notes at all.</p></div>`;
+  };
+  body.innerHTML = `${out && graph ? graphHTML() : ""}
+    ${out ? (out.sections.length || obs.length ? out.sections.map((x) => `<div><h3 style="font-size:17px;margin:0 0 4px">${esc(x.heading)}</h3><p class="small" style="margin:0;white-space:pre-line">${esc(x.text)}</p>${x.entries.length ? `<div class="tiny" style="margin-top:2px">From: ${src(x.entries)}</div>` : ""}</div>`).join("") : '<p class="small" style="margin:0">The notes in this period don\'t record anything about mobility.</p>') : ""}
+    <div><h3 style="font-size:17px;margin:0 0 6px">${out ? "Each observation, in date order" : "Notes and incidents in this period"}</h3>
+      <div style="display:grid;gap:8px">
+      ${(out ? obs.map((o) => ({ e: byId.get(o.entry), what: R.labels[o.type] || "Other", words: o.words })) : entries.map((e) => ({ e, words: e.isNote ? e.ref.note : e.ref.title }))).map((r) => `<div class="card" style="box-shadow:none;padding:10px 12px;display:grid;gap:2px;break-inside:avoid"><div class="tiny"><button class="link tiny" data-src="${r.e.id}">${when(r.e.ref.ts)}</button> · ${esc(r.e.isNote ? carer(r.e.ref.carerId, r.e.ref.carerName).name : "Incident record")}</div>${out ? `<strong class="small">${esc(r.what)}</strong>` : ""}<div class="small">${esc(r.words)}</div></div>`).join("") || '<p class="small" style="margin:0">Nothing about mobility was found in these notes.</p>'}
+      </div></div>`;
+  body.querySelectorAll("[data-src]").forEach((b) => (b.onclick = () => { const e = byId.get(b.dataset.src); if (e.isNote) openSavedNote(e.ref.id); else openFlag(e.ref.id); }));
+  const share = $("#rpShare");
+  if (share && out && out.sections.length) {
+    share.hidden = false;
+    // Incident details go to the family only if that's been agreed for this client (as with daily updates).
+    if (flags.length && !(session.client && session.client.familyIncidents)) { share.disabled = true; share.textContent = "Can't share: it includes incidents, which this family doesn't see"; }
+    else share.onclick = () => {
+      const draft = `${REPORT_SHARE_PREFIX}${R.title}, ${range.label}\n\n${out.sections.map((x) => `${x.heading}\n${x.text}`).join("\n\n")}\n\nMade from carers' notes. Not a falls risk assessment.`.slice(0, 4000);
+      const q = sheet(`${sheetHead("Share with the family")}<p class="small" style="margin:0">Read it and change anything that shouldn't go to the family. They'll see it with the daily updates.</p>
+        <textarea id="rsText" class="grow" maxlength="4000" style="min-height:220px">${esc(draft)}</textarea><button class="btn primary block" id="rsGo">Share with the family</button>`, { guard: () => true });
+      autoGrow($("#rsText", q.root));
+      $("#rsGo", q.root).onclick = () => {
+        let text = $("#rsText", q.root).value.trim(); if (!text) return toast("Nothing to share");
+        if (!text.startsWith(REPORT_SHARE_PREFIX)) text = (REPORT_SHARE_PREFIX + text).slice(0, 4000);
+        S.summaries = S.summaries || []; S.summaries.push({ id: uid(), ts: Date.now(), day: new Date().toLocaleDateString("en-CA"), text }); save();
+        q.close(); share.hidden = true; toast("Shared with the family");
+      };
+    };
+  }
 }
 /* ---------- emergency form ----------
  * A paramedic or doctor called to the home first asks whether there's a ReSPECT or DNR form (Sam,
@@ -2613,7 +2741,9 @@ const familyAt = () => (session && !session.local && session.client && session.c
 // The most recent time the update was due (today's, or yesterday's before today's time comes round),
 // so an unshared draft written late in the evening is still offered after midnight.
 const familyDueAt = () => { const t = familyAt(); if (!t) return 0; const [h, m] = t.split(":").map(Number); const d = new Date(); d.setHours(h, m, 0, 0); if (d.getTime() > Date.now()) d.setDate(d.getDate() - 1); return d.getTime(); };
-const familySharedSince = (ts) => (S.summaries || []).some((x) => x.ts >= ts);
+// A shared report isn't the daily update: it doesn't stop today's update being written or shared.
+const REPORT_SHARE_PREFIX = "Report: ";
+const familySharedSince = (ts) => (S.summaries || []).some((x) => x.ts >= ts && !String(x.text || "").startsWith(REPORT_SHARE_PREFIX));
 let familyAuto = { busy: false, retryAt: 0 };
 async function autoFamilyUpdate() {
   const due = familyDueAt();
@@ -3550,7 +3680,7 @@ const PRIVACY_HTML = `
 <p>When you ask the user manual a question, your question (nothing else) is sent through our relay to Anthropic so the AI can answer it from the manual. It isn't stored.</p>
 <p>When you use the feedback helper, your messages and any screenshot are also sent to Anthropic, so the helper can ask questions and write a summary for the developer. Email addresses and phone numbers are removed automatically before a report is stored.</p>
 <p><strong>Turning speech into words.</strong> While you record, your phone's own speech recognition may show your words as you speak: on an iPhone this may send your voice to <strong>Apple</strong>, and on Android to <strong>Google</strong>, under their own terms (Apple says it may use it to improve its speech recognition; you can turn this off in your phone's settings). If your phone can't turn your speech into words, the recording, with the client's first name as a spelling hint, is sent through our relay to <strong>Cloudflare</strong>'s speech-to-text service, which returns the words. This may happen outside the European Union. Our relay doesn't keep that copy; the recording is kept only as described under Care notes and recordings.</p>
-<p>When you ask the app to write a note, handover or summary, the <strong>words</strong> of your note (never the recording), the client's first name, the names of the carers involved, the names of the client's care plan sections, and your saved word fixes ("My words"), are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text it sends for tidying; the note you save is stored as described under Care notes and recordings. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
+<p>When you ask the app to write a note, handover, summary or report (such as the falls and mobility report), the <strong>words</strong> of your note (never the recording), the client's first name, the names of the carers involved, the names of the client's care plan sections, and your saved word fixes ("My words"), are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text it sends for tidying; the note you save is stored as described under Care notes and recordings. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
 <p><strong>Writing the care plan.</strong> When you ask the app to write up a care plan section, the words you said or typed for it, the section's current wording, the client's name, and the names and pronouns of the client and their carers are sent to Anthropic in the same way. When you ask it to fill the care plan from a care plan document, a copy of that document is sent to Anthropic to be read. You check and can change everything before it's saved, and each saved version of the care plan is kept with who changed it, and who agreed to it (the client, their attorney, or not yet).</p>
 <p><strong>Medicine photos.</strong> If you take a photo of a medicine label, prescription or box to fill in or check the medicines chart, the photo is kept with the client's documents in our cloud storage in the European Union, and sent to Anthropic in the same way to be read. A prescription may show the client's name, address and date of birth. You check every detail before it's saved.</p>
 <h3>Who else handles data for us</h3>
@@ -4492,6 +4622,8 @@ setInterval(() => {
 const userIsReading = () => { const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || [...document.querySelectorAll("audio")].some((x) => !x.paused); };
 
 /* ---------- boot ---------- */
+// Whatever empties the full-screen area (Close, sign-out, switching client), print and report modes end with it.
+new MutationObserver(() => { if (!$("#fullRoot").innerHTML.trim()) document.body.classList.remove("printing-mar", "report-open"); }).observe($("#fullRoot"), { childList: true });
 // Starts once this phone's records have been read (normally a fraction of a second).
 recStore.ready.then(() => {
 if (recStore.failed()) { // records moved to the phone's database, which won't open: never start an empty record
