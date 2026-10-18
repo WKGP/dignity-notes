@@ -2340,7 +2340,7 @@ function openObsReport(kind, R, range, opts) {
   const day = (o) => dayKey(new Date(o.ts));
   const notesDays = new Set(S.notes.filter((n) => !isExample(n) && inRange(n.ts)).map((n) => dayKey(new Date(n.ts))));
   const recDays = new Set(all.map(day)), first = (S.observations || []).reduce((m, o) => Math.min(m, o.ts), Infinity);
-  const startNote = first === Infinity ? `These reports count from notes saved from version 1.4 onwards; earlier notes aren't included.` : first > range.from ? `Recording for these reports started ${fmtDay(first)}; notes before then aren't included.` : "";
+  const startNote = first === Infinity ? `These reports count from notes saved since this update; earlier notes aren't included.` : first > range.from ? `Recording for these reports started ${fmtDay(first)}; notes before then aren't included.` : "";
   const dLabel = (k) => fmtDay(new Date(k + "T12:00:00").getTime());
   const when = (ts) => `${esc(dayLabel(ts))} ${fmtTime(ts)}`;
   const byNote = (o) => S.notes.find((n) => n.id === o.noteId);
