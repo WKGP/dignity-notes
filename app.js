@@ -182,6 +182,7 @@ function loadUser() {
     for (const m of S.messages) si.sent["message:" + m.id] = mtOf(m);
   }
   if (!S.tasks) { S.tasks = []; if (S.sync) S.sync.seq = 0; }
+  if (!S.observations) { S.observations = []; if (S.sync) S.sync.seq = 0; } // observations for the reports: pull them once
   if (!S.supplies) { S.supplies = []; if (S.sync) S.sync.seq = 0; } // medicine supplies received: pull them once
   if (!S.doses) { S.doses = []; if (S.sync) S.sync.seq = 0; } // medicines chart entries: pull them once
   else { const keep = Date.now() - 70 * 864e5; S.doses = S.doses.filter((d) => d.ts > keep); } // this and last month's chart; older entries stay in the cloud // ticks for this client; an older app skipped them, so pull everything once (duplicates are ignored)
@@ -233,7 +234,7 @@ const audioDB = (() => {
  * Sync runs in the background, so it never signs anyone out or opens a screen in the middle of
  * something: if the sign-in has ended it pauses, and asks once nothing is open.
  */
-const SYNC_KINDS = { note: "notes", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule", task: "tasks", message: "messages", summary: "summaries", dose: "doses", supply: "supplies" };
+const SYNC_KINDS = { note: "notes", obs: "observations", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule", task: "tasks", message: "messages", summary: "summaries", dose: "doses", supply: "supplies" };
 const DEMO_IDS = new Set(["n0", "f0", "h0", "s1", "s2", "s3", "m0"]);
 const SYNC_RECORD_MAX = 58000, SYNC_BATCH_MAX = 400000; // the relay allows 60,000 a record, 1,000,000 a request
 // When a record last changed (older records have no mt, so use their latest time).
@@ -256,6 +257,9 @@ const SYNC_SHAPES = {
   message: { req: ["ts", "text", "from"], f: { ts: "num", text: "str:2000", from: ["family", "carer"], name: "str:60", by: "id" } },
   summary: { req: ["ts", "text"], f: { ts: "num", day: "str:10", text: "str:4000", by: "id", byName: "str:60" } },
   handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", fromName: "str:60", toId: "id", text: "str:10000", source: "str:20" } },
+  // One observation taken from a note for the specialist reports (a drink, a meal, a bowel or urinary
+  // event, pain, sleep, behaviour, skin, a weight). Can be corrected later; the note itself never changes.
+  obs: { req: ["ts", "noteId", "topic"], f: { ts: "num", noteId: "id", topic: ["mobility", "fluids", "food", "bowels", "urinary", "pain", "sleep", "behaviour", "skin", "weight"], words: "str:300", drink: "str:60", offeredMl: "num", drankMl: "num", portion: ["all", "most", "half", "little", "none", "unknown"], outcome: ["taken", "partly", "refused", "opened", "not_opened", "accident", "passed", "incontinent", "pad_wet", "pad_dry", "catheter"], bristol: "num", painScore: "num", where: "str:80", kg: "num", cm: "num", carerId: "id", fixedBy: "str:60", fixedAt: "num", removed: "num" } },
   event: { req: ["ts", "when", "label"], f: { ts: "num", when: "num", label: "str:120", detail: "str:300", by: "id" } },
   transfer: { req: ["outTs", "withWhom"], f: { outTs: "num", withWhom: "str:100", relationship: "str:100", purpose: "str:200", carerId: "id", backTs: "num", backNote: "str:2000", backCarerId: "id" } },
 };
@@ -494,11 +498,11 @@ function basicTidy(transcript) {
   return { note, categories, flags, unclear: [], record_gaps: flags.some((f) => f.kind === "incident") ? ["when", "seen", "done", "told"] : [] };
 }
 const validTidy = (o) => o && typeof o.note === "string" && o.note.trim() && Array.isArray(o.categories) && Array.isArray(o.flags);
-async function tidy(transcript) {
+async function tidy(transcript, addition) { // addition: an addition to an earlier note (not a new event)
   try {
-    const out = await relay("/tidy", { transcript, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary(), country: clientCountry(), clientId: session && session.client ? session.client.id : "", tasks: tasksNow().due.filter((x) => !x.tick).map((x) => x.t.title), planSections: plan().sections.map((x) => x.title) });
+    const out = await relay("/tidy", { transcript, addition: !!addition, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary(), country: clientCountry(), containers: CUPS(), clientId: session && session.client ? session.client.id : "", tasks: tasksNow().due.filter((x) => !x.tick).map((x) => x.t.title), planSections: plan().sections.map((x) => x.title) });
     if (!validTidy(out)) throw new Error("Unexpected reply from the relay");
-    return { unclear: [], record_gaps: [], plan_sections: [], tasks_done: [], ...out, source: "ai" };
+    return { unclear: [], record_gaps: [], plan_sections: [], tasks_done: [], observations: [], ...out, source: "ai" };
   } catch (e) {
     return { ...basicTidy(transcript), source: "basic", reason: e.message };
   }
@@ -1546,7 +1550,7 @@ function openFind() {
       <div class="list">
         <button class="btn secondary block fd-link" data-go="plan"><div class="body"><strong>Care plan</strong><div class="muted small">Needs, routines, risks and shift tasks</div></div></button>
         ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="meds"><div class="body"><strong>Medicines chart</strong><div class="muted small">Doses, the medicine list and the monthly chart</div></div></button>' : ""}
-        ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="reports"><div class="body"><strong>Reports</strong><div class="muted small">Falls and mobility, made from the notes</div></div></button>' : ""}
+        ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="reports"><div class="body"><strong>Reports</strong><div class="muted small">Falls, fluids, food, bowels, urine and pain, made from the notes</div></div></button>' : ""}
         <button class="btn secondary block fd-link" data-go="contacts"><div class="body"><strong>Contacts</strong><div class="muted small">GP, pharmacy, family and others</div></div></button>
         <button class="btn secondary block fd-link" data-go="log"><div class="body"><strong>Record log</strong><div class="muted small">Every note, flag and handover</div></div></button>
         <button class="btn secondary block fd-link" data-go="handover"><div class="body"><strong>Handover</strong><div class="muted small">The latest handover</div></div></button>
@@ -1748,6 +1752,7 @@ async function loadPlan() {
   try {
     const out = await syncJSON("/plan/get", { client: session.client.id });
     if (KEY !== key) return false;
+    loadCups();
     const before = JSON.stringify(S.plan || null);
     S.plan = { sections: (out.plan && out.plan.sections) || [], tasks: (out.plan && out.plan.tasks) || [], updatedAt: (out.plan && out.plan.updatedAt) || 0, updatedBy: out.plan && out.plan.updatedBy, docs: out.docs || [], emergency: out.emergency || null };
     // Documents taken out of the care plan are removed from this phone too.
@@ -1924,7 +1929,7 @@ function openPlan() {
     </div>
     ${p.updatedAt ? `<p class="tiny muted" style="margin:0">Last changed ${fmtDay(p.updatedAt)} ${fmtTime(p.updatedAt)}${p.updatedBy ? " by " + esc(p.updatedBy) : ""}.</p>` : ""}
     ${canEditPlan() ? `${planDoneCount() < PLAN_DEFAULTS.length ? `<button class="btn primary block" id="plGuide">${planDoneCount() ? "Finish it step by step" : "Set it up step by step"} (${planDoneCount()} of ${PLAN_DEFAULTS.length} done)</button>` : ""}
-      <button class="btn secondary block" id="plReports">Reports (falls and mobility)</button>
+      <button class="btn secondary block" id="plReports">Reports</button>
       <div class="row"><button class="btn secondary" id="plEdit">${p.sections.length ? "Edit care plan" : "Write it all at once"}</button><button class="btn secondary" id="plUpload">Add a document</button></div>` : ""}`);
   if ($("#plGuide", s.root)) $("#plGuide", s.root).onclick = () => { s.close(); openPlanGuide(); };
   if ($("#plReports", s.root)) $("#plReports", s.root).onclick = () => { s.close(); openReports(); };
@@ -2164,12 +2169,98 @@ async function openPlanFromDoc(docId) {
     catch (err) { busy = false; toast(err.message || "Couldn't save the care plan"); const b = $("#fdSave", box); if (b) b.disabled = false; }
   };
 }
+/* ---------- observations for the reports ----------
+ * Each saved note also records what it says about drinks, meals, bowels, urine, pain, sleep, behaviour,
+ * skin, mobility and weight, as separate records the reports count from (record once). The carer can
+ * correct or remove one on the Saved screen; the note itself never changes. Amounts are only what was
+ * said, or worked out from this client's cup sizes; an unclear amount stays "not known".
+ */
+const OBS_TOPIC = { fluids: "Drink", food: "Food", bowels: "Bowels", urinary: "Urine", pain: "Pain or discomfort", sleep: "Sleep", behaviour: "Behaviour", skin: "Skin", mobility: "Mobility", weight: "Weight or height" };
+const OBS_OUTCOME = { taken: "Taken", partly: "Partly taken", refused: "Refused", opened: "Bowels opened", not_opened: "Bowels not opened (said so)", accident: "Bowel accident", passed: "Passed urine", incontinent: "Incontinent of urine", pad_wet: "Pad wet", pad_dry: "Pad dry", catheter: "Catheter" };
+const OBS_PORTION = { all: "All", most: "Most", half: "Half", little: "A little", none: "None", unknown: "Amount not known" };
+const observations = () => (S.observations || []).filter((o) => !o.removed);
+const CUPS = () => ({ cup: 200, mug: 300, glass: 250, ...(S.cups || {}) });
+// One AI item → one record, keeping only what was actually given (-1, "" and "na" mean not said).
+function obsFromDraft(o, note) {
+  const num = (v, lo, hi) => (Number.isFinite(v) && v >= lo && v <= hi ? Math.round(v * 10) / 10 : undefined);
+  const r = { id: uid(), ts: note.ts, noteId: note.id, carerId: note.carerId, topic: o.topic, words: String(o.words || "").slice(0, 300) };
+  if (o.drink) r.drink = String(o.drink).slice(0, 60);
+  if (num(o.offered_ml, 0, 3000) !== undefined) r.offeredMl = num(o.offered_ml, 0, 3000);
+  if (num(o.drank_ml, 0, 3000) !== undefined) r.drankMl = num(o.drank_ml, 0, 3000);
+  if (OBS_PORTION[o.portion]) r.portion = o.portion;
+  if (OBS_OUTCOME[o.outcome]) r.outcome = o.outcome;
+  if (num(o.bristol, 1, 7) !== undefined) r.bristol = Math.round(o.bristol);
+  if (num(o.pain_score, 0, 10) !== undefined) r.painScore = Math.round(o.pain_score);
+  if (o.where) r.where = String(o.where).slice(0, 80);
+  if (num(o.kg, 20, 300) !== undefined) r.kg = num(o.kg, 20, 300);
+  if (num(o.cm, 80, 230) !== undefined) r.cm = num(o.cm, 80, 230);
+  return OBS_TOPIC[r.topic] ? r : null;
+}
+const obsLine = (o) => {
+  if (o.topic === "fluids") return `${o.drink || "Drink"}: ${o.outcome === "refused" ? `offered${o.offeredMl ? " " + o.offeredMl + " ml" : ""}, refused` : o.drankMl != null ? `${o.drankMl} ml drunk${o.offeredMl && o.offeredMl !== o.drankMl ? ` of ${o.offeredMl} ml` : ""}` : "amount drunk not known"}`;
+  if (o.topic === "food") return `${OBS_PORTION[o.portion] || OBS_OUTCOME[o.outcome] || "Food"}: ${o.words}`;
+  if (o.topic === "bowels" || o.topic === "urinary") return `${OBS_OUTCOME[o.outcome] || OBS_TOPIC[o.topic]}${o.bristol ? ` · Bristol type ${o.bristol}` : ""}: ${o.words}`;
+  if (o.topic === "pain") return `${o.painScore != null ? `Score ${o.painScore}/10 · ` : ""}${o.where ? o.where + " · " : ""}${o.words}`;
+  if (o.topic === "weight") return `${o.kg ? o.kg + " kg" : ""}${o.kg && o.cm ? " · " : ""}${o.cm ? o.cm + " cm" : ""}${o.kg || o.cm ? "" : o.words}`;
+  return o.words;
+};
+function noteObsHTML(n) {
+  const list = observations().filter((o) => o.noteId === n.id);
+  if (!list.length) return "";
+  return `<details><summary class="small">For the reports (${list.length})</summary><div style="display:grid;gap:6px;margin-top:6px">${list.map((o) => `<div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between"><span class="small" style="flex:1;min-width:0"><strong>${esc(OBS_TOPIC[o.topic])}</strong> · ${esc(obsLine(o))}${o.fixedBy ? ` <span class="tiny muted">(corrected by ${esc(o.fixedBy)})</span>` : ""}</span><button class="link small" data-obsfix="${esc(o.id)}" style="flex:0 0 auto">Change</button></div>`).join("")}
+    <p class="tiny muted" style="margin:0">Taken from this note by AI for the reports. Check the amounts; the note itself doesn't change.</p></div></details>`;
+}
+function openObsFix(id, after) {
+  const o = (S.observations || []).find((x) => x.id === id); if (!o) return;
+  const f = o.topic;
+  const s = sheet(`${sheetHead("Change: " + esc(OBS_TOPIC[f]))}<p class="small muted" style="margin:0">From the note: "${esc(o.words)}"</p>
+    ${f === "fluids" ? `<label class="f">Drink<input type="text" id="ofDrink" maxlength="60" value="${esc(o.drink || "")}"></label>
+      <div class="row" style="gap:8px"><label class="f" style="flex:1">Offered (ml)<input type="number" id="ofOff" min="0" max="3000" value="${o.offeredMl ?? ""}"></label><label class="f" style="flex:1">Drunk (ml, blank if not known)<input type="number" id="ofDrank" min="0" max="3000" value="${o.drankMl ?? ""}"></label></div>
+      <p class="tiny muted" style="margin:-4px 0 0">This client: cup ${CUPS().cup} ml, mug ${CUPS().mug} ml, glass ${CUPS().glass} ml.</p>` : ""}
+    ${["fluids", "food", "bowels", "urinary"].includes(f) ? `<label class="f">What happened<select id="ofOut"><option value="">Not said</option>${Object.entries(OBS_OUTCOME).filter(([k]) => ({ fluids: ["taken", "partly", "refused"], food: ["taken", "partly", "refused"], bowels: ["opened", "not_opened", "accident"], urinary: ["passed", "incontinent", "pad_wet", "pad_dry", "catheter"] })[f].includes(k)).map(([k, l]) => `<option value="${k}" ${o.outcome === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : ""}
+    ${f === "food" ? `<label class="f">How much was eaten<select id="ofPor"><option value="">Not said</option>${Object.entries(OBS_PORTION).map(([k, l]) => `<option value="${k}" ${o.portion === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : ""}
+    ${f === "bowels" ? `<label class="f">Bristol stool type (only if known)<select id="ofBr"><option value="">Not said</option>${[1, 2, 3, 4, 5, 6, 7].map((k) => `<option ${o.bristol === k ? "selected" : ""}>${k}</option>`).join("")}</select></label>` : ""}
+    ${f === "pain" ? `<div class="row" style="gap:8px"><label class="f" style="flex:1">Score 0 to 10 (only if given)<input type="number" id="ofSc" min="0" max="10" value="${o.painScore ?? ""}"></label><label class="f" style="flex:1">Where<input type="text" id="ofWh" maxlength="80" value="${esc(o.where || "")}"></label></div>` : ""}
+    ${f === "weight" ? `<div class="row" style="gap:8px"><label class="f" style="flex:1">Weight (kg)<input type="number" id="ofKg" step="0.1" min="20" max="300" value="${o.kg ?? ""}"></label><label class="f" style="flex:1">Height (cm)<input type="number" id="ofCm" min="80" max="230" value="${o.cm ?? ""}"></label></div>` : ""}
+    <button class="btn primary block" id="ofSave">Save</button><button class="btn ghost block" id="ofDel">Not right: remove it from the reports</button>`);
+  const val = (sel) => { const el = $(sel, s.root); return el ? el.value.trim() : undefined; };
+  const numOr = (v, lo, hi) => (v === undefined ? "keep" : v === "" ? undefined : Number(v) >= lo && Number(v) <= hi ? Number(v) : NaN);
+  const done = () => { o.fixedBy = session.name || session.username; o.fixedAt = Date.now(); touch(o); save(); s.close(); toast("Changed for the reports"); if (after) after(); };
+  $("#ofSave", s.root).onclick = () => {
+    const set = { drink: val("#ofDrink"), offeredMl: numOr(val("#ofOff"), 0, 3000), drankMl: numOr(val("#ofDrank"), 0, 3000), outcome: val("#ofOut"), portion: val("#ofPor"), bristol: numOr(val("#ofBr"), 1, 7), painScore: numOr(val("#ofSc"), 0, 10), where: val("#ofWh"), kg: numOr(val("#ofKg"), 20, 300), cm: numOr(val("#ofCm"), 80, 230) };
+    if (Object.values(set).some((v) => Number.isNaN(v))) return toast("A number is outside the allowed range");
+    for (const [k, v] of Object.entries(set)) { if (v === "keep") continue; if (v === undefined || v === "") delete o[k]; else o[k] = v; }
+    done();
+  };
+  $("#ofDel", s.root).onclick = (e) => confirmInline(e.currentTarget, () => { o.removed = Date.now(); done(); }, "Tap again to remove");
+}
+async function loadCups() { if (!cloudOn()) return; try { const out = await syncJSON("/plan/cups", { client: session.client.id }); if (out.cups) { S.cups = out.cups; saveLocal(); } } catch {} }
+function openCups(after) {
+  const c = CUPS();
+  const s = sheet(`${sheetHead("Cup sizes and fluid target")}
+    <p class="small muted" style="margin:0">The usual sizes of ${esc(S.client.name)}'s cup, mug and glass, so "a cup of tea" is counted correctly. Measure them if you can (fill with water and pour into a jug).</p>
+    <div class="row" style="gap:8px"><label class="f" style="flex:1">Cup (ml)<input type="number" id="cuCup" min="50" max="1000" value="${c.cup}"></label><label class="f" style="flex:1">Mug (ml)<input type="number" id="cuMug" min="50" max="1000" value="${c.mug}"></label><label class="f" style="flex:1">Glass (ml)<input type="number" id="cuGlass" min="50" max="1000" value="${c.glass}"></label></div>
+    <label class="f">Daily fluid target (ml), only if the care plan or GP gives one<input type="number" id="cuTarget" min="100" max="5000" value="${c.target || ""}" placeholder="Leave blank if none"></label>
+    <p class="tiny muted" style="margin:-4px 0 0">The target is shown beside the daily totals for reference. The app doesn't raise alerts: follow the care plan.</p>
+    <button class="btn primary block" id="cuSave">Save</button>`);
+  $("#cuSave", s.root).onclick = async (e) => {
+    if (!navigator.onLine) return toast("Connect to the internet to save, so every carer sees the same");
+    e.currentTarget.disabled = true;
+    try { const out = await syncJSON("/plan/cups", { client: session.client.id, set: { cup: $("#cuCup", s.root).value, mug: $("#cuMug", s.root).value, glass: $("#cuGlass", s.root).value, target: $("#cuTarget", s.root).value } }); S.cups = out.cups; saveLocal(); s.close(); toast("Cup sizes saved"); if (after) after(); }
+    catch (err) { toast(err.message || "Couldn't save"); const b = $("#cuSave", s.root); if (b) b.disabled = false; }
+  };
+}
 /* ---------- specialist reports ----------
  * Record once: reports are made from carers' ordinary notes and incidents, only when someone opens one,
  * for a chosen period. Every point links to the notes it came from; days with no notes are shown as
  * "no notes", never as "no problems". Falls and mobility is the first (Sam's briefs, 2026-10-19);
  * fluids, food, bowels, urinary, pain, sleep, behaviour and skin follow the same pattern.
  */
+const aboutHTML = (what, why, who, when, link, extra = "") => `<h3>What is it?</h3><p>${what}</p><h3>Why is it used?</h3><p>${why}</p><h3>Who might ask for it?</h3><p>${who}</p><h3>When is it useful?</h3><p>${when}</p>
+  <h3>Who completes it?</h3><p>Nobody: Dignity Notes counts it from carers' ordinary notes. When a note is saved, the drinks, meals and other details in it are picked out (by AI) and can be checked and corrected on the Saved screen. ${extra}</p>
+  <p><strong>Days with no notes</strong> aren't evidence of anything, only that nothing was written.</p><h3>Further information</h3><p>${link}</p>
+  <p><strong>Something urgent?</strong> Follow the care plan and get help straight away; don't wait for a report.</p>`;
+const ext = (url, text) => `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
 const REPORTS = {
   falls: {
     title: "Falls and mobility",
@@ -2186,27 +2277,182 @@ const REPORTS = {
       <h3>Further information</h3><p>${au ? `<a href="https://www.safetyandquality.gov.au/our-work/comprehensive-care/related-topics/falls-prevention" target="_blank" rel="noopener">Australian Commission on Safety and Quality in Health Care: falls prevention</a>` : `<a href="https://www.nice.org.uk/guidance/ng249" target="_blank" rel="noopener">NICE guideline NG249: falls in older people</a>`}</p>
       <p><strong>Something urgent?</strong> Follow the care plan and get help straight away; don't wait for a report.</p>`,
   },
+  fluids: {
+    title: "Fluid intake", topic: "fluids", words: /\b(drink|drank|drunk|tea|coffee|water|juice|squash|milk|cup|mug|glass|sip|fluid)/i,
+    about: (au) => aboutHTML("A daily record of the drinks carers wrote down: what, how much was drunk, and drinks that were offered but refused, with an estimated total for each day.",
+      "It shows changes in drinking over days or weeks, such as drinking less or refusing more, without anyone filling in a separate fluid chart.",
+      `A GP, ${au ? "community nurse" : "district nurse"}, dietitian, the family or an agency, for example when someone seems drowsy, confused or has a urine infection.`,
+      "When someone is asked \"how much have they been drinking?\", or a new carer starts.",
+      au ? ext("https://www.healthdirect.gov.au/dehydration", "healthdirect: dehydration") : ext("https://www.nhs.uk/conditions/dehydration/", "NHS: dehydration"),
+      "Amounts are estimates, using this client's cup, mug and glass sizes (Care plan, then Cup sizes). Drinks with an unclear amount aren't counted; refused drinks count as nothing. <strong>Totals include only drinks that were written down</strong>, so the real amount may be higher. If the care plan sets fluid monitoring, follow it: this report doesn't replace it."),
+  },
+  food: {
+    title: "Food and nutrition", topic: "food", words: /\b(ate|eat|eaten|breakfast|lunch|dinner|supper|meal|snack|food|appetite|toast|porridge|soup)/i,
+    about: (au) => aboutHTML("A record of meals and snacks carers wrote about: how much was eaten, meals refused, appetite, chewing or swallowing, supplements, and any weights measured.",
+      "It shows changes in eating and weight over time, such as eating less or refusing more meals.",
+      `A GP, ${au ? "community nurse" : "district nurse"}, dietitian or speech and language therapist, the family or an agency.`,
+      "When there are worries about appetite, weight or swallowing, or before a GP or dietitian visit.",
+      au ? ext("https://www.healthdirect.gov.au/malnutrition", "healthdirect: malnutrition") : ext("https://www.bapen.org.uk/", "BAPEN (British Association for Parenteral and Enteral Nutrition)"),
+      "It isn't a nutrition assessment or a malnutrition screening (such as MUST), which a trained professional does. Difficulty swallowing or coughing when eating needs reporting straight away."),
+  },
+  bowels: {
+    title: "Bowels and continence", topic: "bowels", words: /\b(bowel|stool|poo|constipat|diarrh|soiled|motion)/i,
+    about: (au) => aboutHTML("A record of bowel movements carers wrote about: when, what was said about them, any Bristol stool type the carer gave, accidents, and help needed.",
+      "It shows the person's usual pattern and any change, so a carer starting a shift can see what has been happening without reading weeks of notes.",
+      `A GP, ${au ? "community or continence nurse" : "district or continence nurse"}, the family or an agency.`,
+      "When a new carer arrives, or there are worries about constipation, diarrhoea or accidents. The <strong>Bristol Stool Chart</strong> describes stools as types 1 (hard lumps) to 7 (watery); the report shows a type only when the carer gave one.",
+      au ? ext("https://www.continence.org.au/", "Continence Foundation of Australia") : ext("https://www.nhs.uk/conditions/constipation/", "NHS: constipation"),
+      "<strong>\"Nothing recorded\" is not the same as \"not opened\"</strong>: only a carer saying so counts as not opened. Laxatives given as when-required doses for the bowels are shown from the medicines chart; the report never says a medicine caused anything."),
+  },
+  urinary: {
+    title: "Urinary and bladder", topic: "urinary", words: /\b(urine|wee|pad|wet|catheter|toilet|bladder|incontinen)/i,
+    about: (au) => aboutHTML("A record of passing urine carers wrote about: incontinence (day or night), pads wet or dry, catheter care, and anything noticed about colour, smell or discomfort, in the carer's words.",
+      "It shows changes in urinary habits over time, separately from the bowel record.",
+      `A GP, ${au ? "community or continence nurse" : "district or continence nurse"}, the family or an agency.`,
+      "When someone is going more or less often, is wet more at night, or seems uncomfortable.",
+      au ? ext("https://www.continence.org.au/", "Continence Foundation of Australia") : ext("https://www.nhs.uk/conditions/urinary-incontinence/", "NHS: urinary incontinence"),
+      "<strong>\"Nothing recorded\" is not the same as \"didn't pass urine\".</strong> Changes in colour, smell or frequency have many causes; the report never suggests one. Drinks from the fluid report are shown for context."),
+  },
+  pain: {
+    title: "Pain and discomfort", topic: "pain", words: /\b(pain|hurt|ache|sore|grimac|discomfort|wince)/i,
+    about: (au) => aboutHTML("A record of pain or discomfort carers wrote about: what the person said, where, any score out of 10 they gave, and signs carers noticed such as grimacing or holding a body part, in the carer's words.",
+      "People living with dementia may not be able to say they're in pain. Bringing together what carers noticed helps show whether something is new, repeating or changing.",
+      `A GP, ${au ? "community nurse" : "district nurse"}, physiotherapist or palliative care team, the family or an agency.`,
+      "Before a GP visit, when complaints seem more frequent, or when a new carer starts. Recognised tools such as <strong>PAINAD</strong> (Pain Assessment in Advanced Dementia) are used by trained staff; this report doesn't score them.",
+      au ? ext("https://www.dementia.org.au/", "Dementia Australia") : ext("https://www.alzheimers.org.uk/", "Alzheimer's Society"),
+      "Signs such as restlessness are shown as written: the report never decides they mean pain. When-required pain relief from the medicines chart is shown alongside; the report never says it worked or caused anything. New, severe or worrying pain needs reporting straight away."),
+  },
 };
 function openReports() {
   const s = sheet(`${sheetHead("Reports · " + esc(S.client.name))}
     <p class="small muted" style="margin:0">Made from the notes carers already write, for any period. Nothing extra to fill in.</p>
     ${Object.entries(REPORTS).map(([k, r]) => `<button class="btn secondary block fd-link" data-report="${k}"><div class="body"><strong>${esc(r.title)}</strong><div class="muted small">Last 7, 14 or 30 days, or choose dates</div></div></button>`).join("")}
-    <p class="tiny muted" style="margin:0">Coming next: fluids, food and nutrition, bowels, urinary, and pain.</p>`);
+    ${canEditPlan() ? '<button class="link small" id="rpCups" style="justify-self:start;min-height:40px">Cup sizes and fluid target</button>' : ""}`);
+  if ($("#rpCups", s.root)) $("#rpCups", s.root).onclick = () => { s.close(); openCups(openReports); };
   s.root.querySelectorAll("[data-report]").forEach((b) => (b.onclick = () => { s.close(); openReport(b.dataset.report); }));
 }
 const reportRange = (days, from, to) => { if (from && to) { const a = new Date(from + "T00:00:00"), b = new Date(to + "T23:59:59"); return { from: a.getTime(), to: b.getTime(), label: `${fmtDay(a.getTime())} to ${fmtDay(b.getTime())}` }; } const t = new Date(); t.setHours(23, 59, 59, 999); const f = new Date(t); f.setDate(f.getDate() - days + 1); f.setHours(0, 0, 0, 0); return { from: f.getTime(), to: t.getTime(), label: `Last ${days} days (${fmtDay(f.getTime())} to ${fmtDay(t.getTime())})` }; };
-async function openReport(kind, { days = 14, from = "", to = "", graph = false } = {}) {
-  const R = REPORTS[kind], range = reportRange(days, from, to), au = clientCountry() === "AU";
+// Reports counted from the observations saved with each note (no AI when the report is opened).
+function openObsReport(kind, R, range, opts) {
   const inRange = (ts) => ts >= range.from && ts <= range.to;
-  const NOTE_CAP = 120, allNotes = S.notes.filter((n) => !isExample(n) && inRange(n.ts) && R.pick(n)).sort((a, b) => a.ts - b.ts);
-  const notes = allNotes.slice(-NOTE_CAP), leftOut = allNotes.length - notes.length; // the most recent; the report says how many earlier ones weren't used
-  const flags = S.flags.filter((f) => !DEMO_IDS.has(f.id) && inRange(f.ts) && R.pickFlag(f)).sort((a, b) => a.ts - b.ts);
-  const entries = [...flags.map((f, i) => ({ id: "f" + (i + 1), ref: f })), ...notes.map((n, i) => ({ id: "n" + (i + 1), ref: n, isNote: true }))];
-  const byId = new Map(entries.map((e) => [e.id, e]));
+  const all = observations().filter((o) => o.topic === R.topic && inRange(o.ts)).sort((a, b) => a.ts - b.ts);
+  const ds = []; for (const d = new Date(range.from); d.getTime() <= range.to && ds.length < 92; d.setDate(d.getDate() + 1)) ds.push(dayKey(d));
+  const day = (o) => dayKey(new Date(o.ts));
+  const notesDays = new Set(S.notes.filter((n) => !isExample(n) && inRange(n.ts)).map((n) => dayKey(new Date(n.ts))));
+  const recDays = new Set(all.map(day)), first = (S.observations || []).reduce((m, o) => Math.min(m, o.ts), Infinity);
+  const startNote = first === Infinity ? `These reports count from notes saved from version 1.4 onwards; earlier notes aren't included.` : first > range.from ? `Recording for these reports started ${fmtDay(first)}; notes before then aren't included.` : "";
+  const dLabel = (k) => fmtDay(new Date(k + "T12:00:00").getTime());
   const when = (ts) => `${esc(dayLabel(ts))} ${fmtTime(ts)}`;
-  const daysWithNotes = new Set(S.notes.filter((n) => !isExample(n) && inRange(n.ts)).map((n) => dayKey(new Date(n.ts))));
-  const docs = planDocs().filter((d) => d.kind === "risk");
-  const root = $("#fullRoot");
+  const byNote = (o) => S.notes.find((n) => n.id === o.noteId);
+  const who = (o) => { const n = byNote(o); return n ? carer(n.carerId, n.carerName).name : ""; };
+  const prnFor = (re) => { const all = doses().filter((d) => d.slot === "prn"); return all.filter((d) => inRange(d.ts) && GIVEN.has(d.code) && !all.some((x) => x.corrects === d.id) && re.test(((medsState().list.find((m) => m.id === d.medId) || {}).prnFor) || "")); }; // corrected entries left out, as on the chart
+  let summary = [], graphRows = [], extraHTML = "", timeline = all.map((o) => ({ ts: o.ts, html: `<strong class="small">${esc(OBS_TOPIC[o.topic])}</strong><div class="small">${esc(obsLine(o))}</div>`, o }));
+  const n = (x, one, many) => `${x} ${x === 1 ? one : many}`;
+  if (R.topic === "fluids") {
+    const c = CUPS(), byDay = new Map(ds.map((d) => [d, { ml: 0, known: 0, unknown: 0, refused: 0 }]));
+    for (const o of all) { const t = byDay.get(day(o)); if (!t) continue; if (o.outcome === "refused" || o.drankMl === 0) t.refused++; else if (o.drankMl != null) { t.ml += o.drankMl; t.known++; } else t.unknown++; }
+    const withDrinks = ds.filter((d) => { const t = byDay.get(d); return t.known || t.refused || t.unknown; });
+    const counted = ds.filter((d) => byDay.get(d).known || byDay.get(d).refused); // a day of refusals is a 0 ml day, not a missing one
+    const totals = counted.map((d) => byDay.get(d).ml);
+    const refused = [...byDay.values()].reduce((a, t) => a + t.refused, 0), unknown = [...byDay.values()].reduce((a, t) => a + t.unknown, 0);
+    summary.push(`Drinks were written down on ${withDrinks.length} of the ${ds.length} days.`);
+    if (counted.length) {
+      const lo = counted.reduce((a, d) => (byDay.get(d).ml < byDay.get(a).ml ? d : a)), hi = counted.reduce((a, d) => (byDay.get(d).ml > byDay.get(a).ml ? d : a));
+      summary.push(counted.length === 1 ? `Recorded total: ${byDay.get(lo).ml} ml on ${dLabel(lo)}.` : `On the ${counted.length} days with drinks counted, the recorded total was between ${byDay.get(lo).ml} ml (${dLabel(lo)}) and ${byDay.get(hi).ml} ml (${dLabel(hi)}), ${Math.round(totals.reduce((a, b) => a + b, 0) / totals.length)} ml a day on average.`);
+      if (c.target) summary.push(`Daily target (from the care plan or GP): ${c.target} ml. The recorded total reached it on ${counted.filter((d) => byDay.get(d).ml >= c.target).length} of ${n(counted.length, "day", "days")} with drinks counted.`);
+      const half = Math.floor(counted.length / 2);
+      if (counted.length >= 6) { const avg = (xs) => Math.round(xs.reduce((a, d) => a + byDay.get(d).ml, 0) / xs.length); summary.push(`Average recorded total: ${avg(counted.slice(0, half))} ml a day in the first half of these days, ${avg(counted.slice(half))} ml in the second half.`); }
+    }
+    if (refused) summary.push(`${n(refused, "drink was", "drinks were")} offered and refused.`);
+    if (unknown) summary.push(`${n(unknown, "drink", "drinks")} had an amount that wasn't clear, so ${unknown === 1 ? "it isn't" : "they aren't"} counted.`);
+    summary.push(`Totals include only drinks that were written down and are estimates (cup ${c.cup} ml, mug ${c.mug} ml, glass ${c.glass} ml).`);
+    const max = Math.max(c.target || 0, ...ds.map((d) => byDay.get(d).ml), 1);
+    extraHTML = `<div><h3 style="font-size:17px;margin:0 0 6px">Each day</h3><div style="display:grid;gap:4px">${ds.map((d) => { const t = byDay.get(d); return `<div class="small" style="display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line, #eee);padding:4px 0"><span>${esc(dLabel(d))}</span><span>${t.known || t.refused || t.unknown ? `<strong>${t.ml} ml</strong>${t.refused ? ` · ${t.refused} refused` : ""}${t.unknown ? ` · ${t.unknown} not known` : ""}` : notesDays.has(d) ? '<span class="muted">No drinks written down</span>' : '<span class="muted">No notes</span>'}</span></div>`; }).join("")}</div></div>`;
+    graphRows = { bars: ds.map((d) => ({ d, v: byDay.get(d).ml, has: byDay.get(d).known > 0 || byDay.get(d).refused > 0 })), max, target: c.target };
+  } else if (R.topic === "food") {
+    const cnt = (k) => all.filter((o) => o.portion === k || (k === "none" && o.outcome === "refused" && !o.portion)).length;
+    summary.push(`Meals, snacks or eating were written about on ${recDays.size} of the ${ds.length} days.`);
+    const parts = [["all", "all eaten"], ["most", "most eaten"], ["half", "half eaten"], ["little", "a little eaten"], ["none", "refused or nothing eaten"], ["unknown", "amount not known"]].map(([k, l]) => [cnt(k), l]).filter(([x]) => x);
+    if (parts.length) summary.push(`Recorded: ${parts.map(([x, l]) => `${x} ${l}`).join(", ")}.`);
+    const weights = observations().filter((o) => o.topic === "weight" && o.kg).sort((a, b) => a.ts - b.ts), height = observations().filter((o) => o.topic === "weight" && o.cm).sort((a, b) => b.ts - a.ts)[0];
+    const wIn = weights.filter((o) => inRange(o.ts));
+    if (wIn.length >= 2) { const a = wIn[0], b = wIn[wIn.length - 1], d = Math.round((b.kg - a.kg) * 10) / 10; summary.push(`Weight measured ${wIn.length} times; ${a.kg} kg on ${fmtDay(a.ts)} and ${b.kg} kg on ${fmtDay(b.ts)} (${d > 0 ? "+" : ""}${d} kg, ${d > 0 ? "+" : ""}${Math.round((d / a.kg) * 1000) / 10}%).`); }
+    else if (wIn.length === 1) summary.push(`Weight measured once: ${wIn[0].kg} kg on ${fmtDay(wIn[0].ts)}.`);
+    else summary.push(weights.length ? `No weight measured in this period; the last was ${weights[weights.length - 1].kg} kg on ${fmtDay(weights[weights.length - 1].ts)}.` : "No weight has been recorded.");
+    if (height) summary.push(`Height last recorded: ${height.cm} cm on ${fmtDay(height.ts)}.`);
+    const rows = [["Ate all or most", ["all", "most"], "#2e7d32"], ["Half or a little", ["half", "little"], "#d98a00"], ["Refused or none", ["none"], "var(--incident)"], ["Not known", ["unknown"], "#7a7085"]];
+    graphRows = rows.map(([l, ks, col]) => [l, (d) => all.filter((o) => day(o) === d && (ks.includes(o.portion) || (ks.includes("none") && o.outcome === "refused" && !o.portion) || (ks.includes("unknown") && !o.portion && o.outcome !== "refused"))).length, col]);
+    for (const w of weights.filter((o) => inRange(o.ts) && !all.includes(o))) timeline.push({ ts: w.ts, html: `<strong class="small">Weight or height</strong><div class="small">${esc(obsLine(w))}</div>`, o: w });
+  } else if (R.topic === "bowels") {
+    const opened = all.filter((o) => o.outcome === "opened"), acc = all.filter((o) => o.outcome === "accident"), not = all.filter((o) => o.outcome === "not_opened");
+    const openDays = new Set([...opened, ...acc].map(day));
+    summary.push(`Bowels were recorded as opened on ${openDays.size} of the ${ds.length} days (${n(opened.length + acc.length, "time", "times")}${acc.length ? `, including ${n(acc.length, "accident", "accidents")}` : ""}).`);
+    const silent = ds.filter((d) => notesDays.has(d) && !recDays.has(d)).length;
+    if (silent) summary.push(`On ${n(silent, "day", "days")} with notes, nothing was written about bowels. That isn't the same as not opened.`);
+    if (not.length) summary.push(`A carer wrote that the bowels were not opened on ${n(new Set(not.map(day)).size, "day", "days")}.`);
+    const sorted = [...openDays].sort(); let gap = 0, gapFrom = "", gapTo = "";
+    for (let i = 1; i < sorted.length; i++) { const g = Math.round((new Date(sorted[i]) - new Date(sorted[i - 1])) / 864e5); if (g > gap) { gap = g; gapFrom = sorted[i - 1]; gapTo = sorted[i]; } }
+    if (gap > 1) summary.push(`Longest time between recorded bowel movements: ${gap} days (${dLabel(gapFrom)} to ${dLabel(gapTo)}).`);
+    const types = all.filter((o) => o.bristol).map((o) => o.bristol);
+    summary.push(types.length ? `Bristol stool types given by carers: ${types.join(", ")}.` : "No Bristol stool type was given.");
+    graphRows = [["Opened", ["opened"], "#2e7d32"], ["Accident", ["accident"], "#d98a00"], ["Said not opened", ["not_opened"], "#7a7085"]].map(([l, ks, col]) => [l, (d) => all.filter((o) => day(o) === d && ks.includes(o.outcome)).length, col]);
+    for (const d of prnFor(/bowel|constipat|laxat|stool|motion/i)) timeline.push({ ts: d.ts, html: `<strong class="small">Medicine (from the medicines chart)</strong><div class="small">${esc(d.med || "When-required medicine")} given${d.amount ? ", " + esc(d.amount) : ""}</div>`, med: d });
+  } else if (R.topic === "urinary") {
+    const night = (o) => { const h = new Date(o.ts).getHours(); return h >= 22 || h < 6; };
+    const c = (k) => all.filter((o) => o.outcome === k);
+    summary.push(`Urine or pads were written about on ${recDays.size} of the ${ds.length} days.`);
+    const inc = [...c("incontinent"), ...c("pad_wet")];
+    if (inc.length) summary.push(`${[c("incontinent").length ? `${n(c("incontinent").length, "episode", "episodes")} of incontinence` : "", c("pad_wet").length ? n(c("pad_wet").length, "wet pad", "wet pads") : ""].filter(Boolean).join(" and ")} recorded, ${inc.filter(night).length} at night (22:00 to 06:00).`);
+    if (c("pad_dry").length) summary.push(`${n(c("pad_dry").length, "dry pad", "dry pads")} recorded.`);
+    if (c("catheter").length) summary.push(`Catheter care or observations recorded ${n(c("catheter").length, "time", "times")}.`);
+    const words = all.filter((o) => /colou?r|dark|cloudy|blood|smell|odour|odor|burn|sting|pain|uncomfortable/i.test(o.words));
+    if (words.length) summary.push(`Colour, smell or discomfort was mentioned ${n(words.length, "time", "times")}; see the entries below for the carers' words.`);
+    summary.push("Nothing recorded on a day isn't the same as not passing urine.");
+    graphRows = [["Passed", ["passed"], "#2e7d32"], ["Incontinent or wet pad", ["incontinent", "pad_wet"], "#d98a00"], ["Dry pad", ["pad_dry"], "#7a7085"], ["Catheter", ["catheter"], "#3f6fb5"]].map(([l, ks, col]) => [l, (d) => all.filter((o) => day(o) === d && ks.includes(o.outcome)).length, col]);
+    const fl = observations().filter((o) => o.topic === "fluids" && inRange(o.ts) && o.drankMl != null);
+    if (fl.length) extraHTML = `<p class="small" style="margin:0">For context, drinks counted in this period: ${fl.reduce((a, o) => a + o.drankMl, 0)} ml over ${new Set(fl.map(day)).size} days (see the Fluid intake report).</p>`;
+  } else if (R.topic === "pain") {
+    summary.push(`Pain or discomfort was written about ${n(all.length, "time", "times")}, on ${recDays.size} of the ${ds.length} days.`);
+    const scored = all.filter((o) => o.painScore != null);
+    if (scored.length) summary.push(`Scores given: ${scored.map((o) => `${o.painScore}/10 (${fmtDay(o.ts)})`).join(", ")}.`);
+    const where = new Map(); for (const o of all) if (o.where) where.set(o.where.toLowerCase(), (where.get(o.where.toLowerCase()) || 0) + 1);
+    if (where.size) summary.push(`Where: ${[...where].sort((a, b) => b[1] - a[1]).map(([w, x]) => `${w} (${x})`).join(", ")}.`);
+    const half = Math.floor(ds.length / 2), a = all.filter((o) => ds.indexOf(day(o)) < half).length, b = all.length - a;
+    if (all.length >= 4) summary.push(`Written about ${n(a, "time", "times")} in the first half of the period and ${n(b, "time", "times")} in the second half.`);
+    const prn = prnFor(/pain|ache|sore|discomfort/i);
+    if (prn.length) summary.push(`${n(prn.length, "when-required dose", "when-required doses")} for pain recorded in the medicines chart.`);
+    graphRows = [["Pain or discomfort written about", (d) => all.filter((o) => day(o) === d).length, "#b5651d"], ["Pain relief given (when required)", (d) => prn.filter((x) => x.day === d).length, "#3f6fb5"]];
+    for (const d of prn) timeline.push({ ts: d.ts, html: `<strong class="small">Pain relief (from the medicines chart)</strong><div class="small">${esc(d.med || "When-required medicine")} given${d.amount ? ", " + esc(d.amount) : ""}${outcomeFor(d.id) ? " · " + esc(outcomeFor(d.id).outcome || "") : ""}</div>`, med: d });
+  }
+  timeline.sort((x, y) => x.ts - y.ts);
+  // Notes written without the AI (no signal, or it failed) have nothing picked out: say so, so a day isn't read as "nothing happened".
+  const firstObs = (S.observations || []).reduce((m, o) => Math.min(m, o.ts), Infinity);
+  const unread = S.notes.filter((x) => !isExample(x) && inRange(x.ts) && x.ts >= firstObs && x.source !== "ai" && R.words.test(x.note || "")).length;
+  const warn = (startNote ? `<div class="warn small" style="margin-bottom:10px">${esc(startNote)}</div>` : "") + (unread ? `<div class="warn small" style="margin-bottom:10px">${n(unread, "note", "notes")} in this period mention${unread === 1 ? "s" : ""} this but couldn't be read for the report (saved without signal or the AI). Check ${unread === 1 ? "it" : "them"} in the record log.</div>` : "");
+  reportFrame(kind, R, { ...range }, opts, `Made ${esc(fmtDay(Date.now()))} ${fmtTime(Date.now())} from ${n(all.length, "observation", "observations")} in carers' notes · counted by the app`, warn, `<div>This records carers' observations. It is not a clinical assessment and doesn't diagnose anything.</div>`);
+  const body = $("#rpBody");
+  const graph = () => {
+    if (graphRows.bars) {
+      const { bars, max, target } = graphRows;
+      return `<div class="card" style="box-shadow:none;overflow-x:auto"><div style="display:flex;align-items:flex-end;gap:3px;height:140px;position:relative;min-width:${bars.length * 14}px">${target ? `<div style="position:absolute;left:0;right:0;bottom:${Math.round((target / max) * 120)}px;border-top:2px dashed #3f6fb5" title="Target ${target} ml"></div>` : ""}${bars.map((x) => `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:140px;${notesDays.has(x.d) ? "" : "background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(0,0,0,.08) 3px,rgba(0,0,0,.08) 5px)"}"><div style="width:100%;height:${x.has ? Math.max(2, Math.round((x.v / max) * 120)) : 0}px;background:#3f6fb5;border-radius:3px 3px 0 0;-webkit-print-color-adjust:exact;print-color-adjust:exact" title="${x.v} ml"></div><span style="font-size:10px">${+x.d.slice(8)}</span></div>`).join("")}</div>
+        <p class="tiny muted" style="margin:6px 0 0">Recorded ml each day${target ? `; dashed line: target ${target} ml` : ""}. Shaded days had no notes at all; no bar means no drinks with a known amount were written down.</p></div>`;
+    }
+    return `<div class="card" style="box-shadow:none;overflow-x:auto"><table style="border-collapse:collapse;font-size:12px"><thead><tr><th></th>${ds.map((d) => `<th style="padding:2px 3px;font-weight:600">${+d.slice(8)}</th>`).join("")}</tr></thead><tbody>
+      ${graphRows.map(([label, f, colour]) => `<tr><th style="text-align:left;padding:2px 8px 2px 0;white-space:nowrap;font-weight:600">${esc(label)}</th>${ds.map((d) => { const c = f(d); return `<td style="text-align:center;padding:2px 3px;${notesDays.has(d) ? "" : "background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(0,0,0,.08) 3px,rgba(0,0,0,.08) 5px)"}">${c ? `<span style="display:inline-block;min-width:16px;border-radius:8px;background:${colour};color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact">${c}</span>` : ""}</td>`; }).join("")}</tr>`).join("")}
+      </tbody></table><p class="tiny muted" style="margin:6px 0 0">Numbers are how many times it was written that day. Shaded days had no notes at all.</p></div>`;
+  };
+  body.innerHTML = `${opts.graph ? graph() : ""}
+    <div><h3 style="font-size:17px;margin:0 0 4px">Summary</h3><ul class="small" style="margin:0;padding-left:18px;display:grid;gap:4px">${summary.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>
+    ${extraHTML}
+    <div><h3 style="font-size:17px;margin:0 0 6px">Each entry, in date order</h3><div style="display:grid;gap:8px">
+      ${timeline.length ? timeline.map((t, i) => `<div class="card" style="box-shadow:none;padding:10px 12px;display:grid;gap:2px;break-inside:avoid"><div class="tiny">${t.o ? `<button class="link tiny" data-obsnote="${i}">${when(t.ts)}</button> · ${esc(who(t.o))}` : when(t.ts)}${t.o && t.o.fixedBy ? ` · corrected by ${esc(t.o.fixedBy)}` : ""}</div>${t.html}${t.o ? `<div class="tiny muted">"${esc(t.o.words)}"</div>` : ""}</div>`).join("") : `<p class="small" style="margin:0">Nothing was written about this in the period. That doesn't mean nothing happened: only that nothing was recorded.</p>`}
+    </div></div>`;
+  body.querySelectorAll("[data-obsnote]").forEach((b) => (b.onclick = () => { const o = timeline[+b.dataset.obsnote].o; if (byNote(o)) openSavedNote(o.noteId); }));
+  if (all.length) bindReportShare(`${R.title}, ${range.label}\n\n${summary.join("\n")}\n\nMade from carers' notes.`, false);
+}
+// The parts every report shares: period, About, print, graph, and the footer.
+function reportFrame(kind, R, range, opts, meta, warnHTML, footerHTML, waiting) {
+  const au = clientCountry() === "AU", { days, from, to, graph } = opts, root = $("#fullRoot");
   root.innerHTML = `<div class="full" role="dialog" aria-modal="true" aria-label="${esc(R.title)} report"><div class="wrap" style="gap:0;min-width:0">
     <div class="noprint" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn ghost" id="rpClose">Close</button><button class="btn ghost" id="rpAbout">About this report</button><button class="btn primary" id="rpPrint" style="grid-column:1/-1">Print or save as PDF</button></div>
     <div class="noprint" style="display:grid;gap:8px;margin:12px 0">
@@ -2216,13 +2462,12 @@ async function openReport(kind, { days = 14, from = "", to = "", graph = false }
       <div class="card noprint" id="rpAboutBox" hidden style="box-shadow:none;display:grid;gap:4px"><div class="small" style="display:grid;gap:4px">${R.about(au)}</div><button class="btn ghost" id="rpAboutClose">Close this</button></div></div>
     <h2 style="font-size:22px;margin:0">${esc(R.title)} report</h2>
     <p class="small" style="margin:4px 0 0"><strong>${esc(S.client.name)}</strong> · ${esc(range.label)}</p>
-    <p class="tiny muted" style="margin:2px 0 12px">Made ${esc(fmtDay(Date.now()))} ${fmtTime(Date.now())} from ${notes.length} note${notes.length === 1 ? "" : "s"} and ${flags.length} incident${flags.length === 1 ? "" : "s"} · written by AI from carers' notes · check it against the notes before sharing</p>
-    ${leftOut ? `<div class="warn small" style="margin-bottom:10px">This period has ${allNotes.length} notes about mobility; the report uses the latest ${notes.length}. Choose a shorter period to include the ${leftOut} earlier one${leftOut === 1 ? "" : "s"}.</div>` : ""}
-    <div id="rpBody" style="display:grid;gap:14px"><p class="small">${entries.length ? "Writing the report…" : ""}</p></div>
+    <p class="tiny muted" style="margin:2px 0 12px">${meta}</p>
+    ${warnHTML || ""}
+    <div id="rpBody" style="display:grid;gap:14px"><p class="small">${waiting || ""}</p></div>
     <div class="tiny muted" style="margin-top:16px;display:grid;gap:4px">
       <div>Made only from what carers wrote. Days with no notes are not evidence that all was well.</div>
-      <div>This records carers' observations. It is not a falls risk assessment, which is done by a trained professional.</div>
-      ${docs.length ? `<div>Professional assessments in the care plan: ${docs.map((d) => `<button class="link tiny" data-opendoc="${esc(d.id)}">${esc(d.name)}</button>`).join(", ")}</div>` : ""}
+      ${footerHTML || ""}
       <div>Dignity Notes · pilot, made-up data only</div></div>
     ${canEditPlan() ? '<button class="btn secondary block noprint" id="rpShare" style="margin-top:12px" hidden>Share with the family</button>' : ""}
   </div></div>`;
@@ -2233,8 +2478,44 @@ async function openReport(kind, { days = 14, from = "", to = "", graph = false }
   $("#rpAbout").onclick = () => { $("#rpAboutBox").hidden = !$("#rpAboutBox").hidden; if (!$("#rpAboutBox").hidden) $("#rpAboutBox").scrollIntoView({ block: "start" }); };
   $("#rpAboutClose").onclick = () => { $("#rpAboutBox").hidden = true; };
   root.querySelectorAll("[data-days]").forEach((b) => (b.onclick = () => (b.dataset.days === "custom" ? ($("#rpDates").hidden = false) : again({ days: +b.dataset.days, from: "", to: "" }))));
-  $("#rpGo").onclick = () => { const f = $("#rpFrom").value, t = $("#rpTo").value; if (!f || !t || f > t) return toast("Choose a start date before the end date"); again({ from: f, to: t }); };
+  $("#rpGo").onclick = () => { const f = $("#rpFrom").value, t = $("#rpTo").value; if (!f || !t || f > t) return toast("Choose a start date before the end date"); if ((new Date(t) - new Date(f)) / 864e5 > 91) return toast("Choose up to 92 days at a time"); again({ from: f, to: t }); };
   $("#rpGraph").onchange = () => again({});
+}
+// Share a report's summary with the family, after the carer reads and edits it. Not counted as the
+// daily update; blocked when it includes incidents the family doesn't see.
+function bindReportShare(text, hasIncidents) {
+  const share = $("#rpShare"); if (!share || !text) return;
+  share.hidden = false;
+  if (hasIncidents && !(session.client && session.client.familyIncidents)) { share.disabled = true; share.textContent = "Can't share: it includes incidents, which this family doesn't see"; return; }
+  share.onclick = () => {
+    const q = sheet(`${sheetHead("Share with the family")}<p class="small" style="margin:0">Read it and change anything that shouldn't go to the family. They'll see it with the daily updates.</p>
+      <textarea id="rsText" class="grow" maxlength="4000" style="min-height:220px">${esc((REPORT_SHARE_PREFIX + text).slice(0, 4000))}</textarea><button class="btn primary block" id="rsGo">Share with the family</button>`, { guard: () => true });
+    autoGrow($("#rsText", q.root));
+    $("#rsGo", q.root).onclick = () => {
+      let t = $("#rsText", q.root).value.trim(); if (!t) return toast("Nothing to share");
+      if (!t.startsWith(REPORT_SHARE_PREFIX)) t = (REPORT_SHARE_PREFIX + t).slice(0, 4000);
+      S.summaries = S.summaries || []; S.summaries.push({ id: uid(), ts: Date.now(), day: new Date().toLocaleDateString("en-CA"), text: t }); save();
+      q.close(); share.hidden = true; toast("Shared with the family");
+    };
+  };
+}
+async function openReport(kind, { days = 14, from = "", to = "", graph = false } = {}) {
+  const R = REPORTS[kind], range = reportRange(days, from, to);
+  if (R.topic) return openObsReport(kind, R, range, { days, from, to, graph });
+  const inRange = (ts) => ts >= range.from && ts <= range.to;
+  const NOTE_CAP = 120, allNotes = S.notes.filter((n) => !isExample(n) && inRange(n.ts) && R.pick(n)).sort((a, b) => a.ts - b.ts);
+  const notes = allNotes.slice(-NOTE_CAP), leftOut = allNotes.length - notes.length; // the most recent; the report says how many earlier ones weren't used
+  const flags = S.flags.filter((f) => !DEMO_IDS.has(f.id) && inRange(f.ts) && R.pickFlag(f)).sort((a, b) => a.ts - b.ts);
+  const entries = [...flags.map((f, i) => ({ id: "f" + (i + 1), ref: f })), ...notes.map((n, i) => ({ id: "n" + (i + 1), ref: n, isNote: true }))];
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const when = (ts) => `${esc(dayLabel(ts))} ${fmtTime(ts)}`;
+  const daysWithNotes = new Set(S.notes.filter((n) => !isExample(n) && inRange(n.ts)).map((n) => dayKey(new Date(n.ts))));
+  const docs = planDocs().filter((d) => d.kind === "risk");
+  reportFrame(kind, R, range, { days, from, to, graph },
+    `Made ${esc(fmtDay(Date.now()))} ${fmtTime(Date.now())} from ${notes.length} note${notes.length === 1 ? "" : "s"} and ${flags.length} incident${flags.length === 1 ? "" : "s"} · written by AI from carers' notes · check it against the notes before sharing`,
+    leftOut ? `<div class="warn small" style="margin-bottom:10px">This period has ${allNotes.length} notes about mobility; the report uses the latest ${notes.length}. Choose a shorter period to include the ${leftOut} earlier one${leftOut === 1 ? "" : "s"}.</div>` : "",
+    `<div>This records carers' observations. It is not a falls risk assessment, which is done by a trained professional.</div>${docs.length ? `<div>Professional assessments in the care plan: ${docs.map((d) => `<button class="link tiny" data-opendoc="${esc(d.id)}">${esc(d.name)}</button>`).join(", ")}</div>` : ""}`,
+    entries.length ? "Writing the report…" : "");
   const body = $("#rpBody");
   if (!entries.length) { body.innerHTML = `<p class="small" style="margin:0">Nothing about mobility or falls was written in this period. That doesn't mean all was well: only that nothing was recorded.</p>`; return; }
   // The same notes give the same report: kept on this phone until a note in the period changes.
@@ -2270,24 +2551,7 @@ async function openReport(kind, { days = 14, from = "", to = "", graph = false }
       ${(out ? obs.map((o) => ({ e: byId.get(o.entry), what: R.labels[o.type] || "Other", words: o.words })) : entries.map((e) => ({ e, words: e.isNote ? e.ref.note : e.ref.title }))).map((r) => `<div class="card" style="box-shadow:none;padding:10px 12px;display:grid;gap:2px;break-inside:avoid"><div class="tiny"><button class="link tiny" data-src="${r.e.id}">${when(r.e.ref.ts)}</button> · ${esc(r.e.isNote ? carer(r.e.ref.carerId, r.e.ref.carerName).name : "Incident record")}</div>${out ? `<strong class="small">${esc(r.what)}</strong>` : ""}<div class="small">${esc(r.words)}</div></div>`).join("") || '<p class="small" style="margin:0">Nothing about mobility was found in these notes.</p>'}
       </div></div>`;
   body.querySelectorAll("[data-src]").forEach((b) => (b.onclick = () => { const e = byId.get(b.dataset.src); if (e.isNote) openSavedNote(e.ref.id); else openFlag(e.ref.id); }));
-  const share = $("#rpShare");
-  if (share && out && out.sections.length) {
-    share.hidden = false;
-    // Incident details go to the family only if that's been agreed for this client (as with daily updates).
-    if (flags.length && !(session.client && session.client.familyIncidents)) { share.disabled = true; share.textContent = "Can't share: it includes incidents, which this family doesn't see"; }
-    else share.onclick = () => {
-      const draft = `${REPORT_SHARE_PREFIX}${R.title}, ${range.label}\n\n${out.sections.map((x) => `${x.heading}\n${x.text}`).join("\n\n")}\n\nMade from carers' notes. Not a falls risk assessment.`.slice(0, 4000);
-      const q = sheet(`${sheetHead("Share with the family")}<p class="small" style="margin:0">Read it and change anything that shouldn't go to the family. They'll see it with the daily updates.</p>
-        <textarea id="rsText" class="grow" maxlength="4000" style="min-height:220px">${esc(draft)}</textarea><button class="btn primary block" id="rsGo">Share with the family</button>`, { guard: () => true });
-      autoGrow($("#rsText", q.root));
-      $("#rsGo", q.root).onclick = () => {
-        let text = $("#rsText", q.root).value.trim(); if (!text) return toast("Nothing to share");
-        if (!text.startsWith(REPORT_SHARE_PREFIX)) text = (REPORT_SHARE_PREFIX + text).slice(0, 4000);
-        S.summaries = S.summaries || []; S.summaries.push({ id: uid(), ts: Date.now(), day: new Date().toLocaleDateString("en-CA"), text }); save();
-        q.close(); share.hidden = true; toast("Shared with the family");
-      };
-    };
-  }
+  if (out && out.sections.length) bindReportShare(`${R.title}, ${range.label}\n\n${out.sections.map((x) => `${x.heading}\n${x.text}`).join("\n\n")}\n\nMade from carers' notes. Not a falls risk assessment.`, flags.length > 0);
 }
 /* ---------- emergency form ----------
  * A paramedic or doctor called to the home first asks whether there's a ReSPECT or DNR form (Sam,
@@ -3461,7 +3725,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
   };
   const run = async () => {
     rv.innerHTML = `<div class="recorder"><div class="spinner"></div><p class="muted" style="margin:0">Writing your care note…</p></div>`;
-    draft = await tidy(transcript);
+    draft = await tidy(transcript, !!amends);
     if (!rv.isConnected) return; // closed meanwhile
     draft.from = transcript; needsRewrite = false; offered = null; showDraft();
     if (autoSave && $("#rvSave", rv)) { offered = []; $("#rvSave", rv).click(); }
@@ -3573,10 +3837,13 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       const extra = extraAssistanceNow();
       S.notes.push({ id, ts, approvedTs: Date.now(), carerId: (pending && pending.by) || stampId(), ...(amends ? { amends } : {}), ...(autoSave ? { auto: 1 } : {}), ...(extra ? { extra: 1 } : {}), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard, ...(byRelay ? { heardBy: "relay" } : {}) } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
       draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
+      const savedNote = S.notes[S.notes.length - 1];
+      S.observations = S.observations || [];
+      for (const o of draft.source === "ai" ? draft.observations || [] : []) { const r = obsFromDraft(o, savedNote); if (r) S.observations.push(r); }
       // Copied to the cloud only once it's safely stored on this phone.
       if (!saveLocal() || !(await recStore.flush(KEY))) {
         // Not saved on this phone: take it back out so it isn't sent to the cloud half-saved.
-        S.notes = S.notes.filter((n) => n.id !== id); S.flags = S.flags.filter((f) => f.noteId !== id); saveLocal(); // a slow write that lands later is replaced too
+        S.notes = S.notes.filter((n) => n.id !== id); S.flags = S.flags.filter((f) => f.noteId !== id); S.observations = (S.observations || []).filter((o) => o.noteId !== id); saveLocal(); // a slow write that lands later is replaced too
         if (audioId && !(pending && pending.audioId === audioId)) audioDB.del([audioId]); // the kept recording stays for the next try
         saving = false; const b = $("#rvSave"); if (b) { b.disabled = false; b.textContent = "Save to record"; }
         return;
@@ -3621,6 +3888,7 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
     ${(() => { const slot = careSlot(); const ts = tasksDone.map((title) => planTasks().find((t) => t.title === title)).filter((t) => t && !taskTick(t.id, slot.day));
       return ts.length ? `<div class="card" style="box-shadow:none;display:grid;gap:6px"><strong class="small">This note says these tasks were done. Tick them?</strong>${ts.map((t) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><span class="small">${esc(t.title)}</span><button class="btn secondary" data-svtask="${esc(t.id)}">Done</button></div>`).join("")}</div>` : ""; })()}
     ${noteMedsHTML(n)}
+    ${noteObsHTML(n)}
     ${lostAt || lockedAt ? `<div class="warn small">${lockedAt ? "The recording stopped early because the screen locked or you left the app." : "Only part of the recording was turned into words."} Play it back; tap <strong>Add to this note</strong> for anything missing.</div>` : ""}
     ${unclear.length ? `<div class="warn small" style="display:grid;gap:8px"><span>These words may have been misheard: <strong>${unclear.map(esc).join(", ")}</strong>. They're highlighted below. Play the recording; if something's wrong, tap <strong>Add to this note</strong> and say the correct version.</span>
       ${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}" style="width:100%"></audio>` : ""}
@@ -3634,6 +3902,7 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
   const a = s.root.querySelector("audio[data-audio]");
   if (a && (unclear.length || lostAt || lockedAt)) loadAudio(a, true);
   else if (a) a.closest("details").addEventListener("toggle", () => loadAudio(a, true), { once: true });
+  s.root.querySelectorAll("[data-obsfix]").forEach((b) => (b.onclick = () => { s.close(); openObsFix(b.dataset.obsfix, () => openSavedNote(id)); }));
   s.root.querySelectorAll("[data-notneeded]").forEach((b) => (b.onclick = () => confirmInline(b, () => {
     // Raised automatically but not needed: resolved with a reason (flags are never deleted).
     const f = S.flags.find((x) => x.id === b.dataset.notneeded); if (!f || f.status !== "open") return;
@@ -3649,9 +3918,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-14.18";
+const PRIVACY_VERSION = "2026-10-19.19";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 18 · 14 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 19 · 19 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -3682,6 +3951,7 @@ const PRIVACY_HTML = `
 <p><strong>Turning speech into words.</strong> While you record, your phone's own speech recognition may show your words as you speak: on an iPhone this may send your voice to <strong>Apple</strong>, and on Android to <strong>Google</strong>, under their own terms (Apple says it may use it to improve its speech recognition; you can turn this off in your phone's settings). If your phone can't turn your speech into words, the recording, with the client's first name as a spelling hint, is sent through our relay to <strong>Cloudflare</strong>'s speech-to-text service, which returns the words. This may happen outside the European Union. Our relay doesn't keep that copy; the recording is kept only as described under Care notes and recordings.</p>
 <p>When you ask the app to write a note, handover, summary or report (such as the falls and mobility report), the <strong>words</strong> of your note (never the recording), the client's first name, the names of the carers involved, the names of the client's care plan sections, and your saved word fixes ("My words"), are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text it sends for tidying; the note you save is stored as described under Care notes and recordings. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
 <p><strong>Writing the care plan.</strong> When you ask the app to write up a care plan section, the words you said or typed for it, the section's current wording, the client's name, and the names and pronouns of the client and their carers are sent to Anthropic in the same way. When you ask it to fill the care plan from a care plan document, a copy of that document is sent to Anthropic to be read. You check and can change everything before it's saved, and each saved version of the care plan is kept with who changed it, and who agreed to it (the client, their attorney, or not yet).</p>
+<p><strong>Reports.</strong> When a note is saved, what it says about drinks (and how much), meals, bowels, passing urine, pain, sleep, behaviour, skin, mobility and any weight or height is also kept as separate entries with the client's record in the EU, so the reports (such as fluid intake or bowels) can be made without carers writing anything twice. The words of the note are sent to Anthropic for this as part of writing the note. Carers can correct these entries; family members don't see them unless a carer shares a report with them.</p>
 <p><strong>Medicine photos.</strong> If you take a photo of a medicine label, prescription or box to fill in or check the medicines chart, the photo is kept with the client's documents in our cloud storage in the European Union, and sent to Anthropic in the same way to be read. A prescription may show the client's name, address and date of birth. You check every detail before it's saved.</p>
 <h3>Who else handles data for us</h3>
 <ul>
