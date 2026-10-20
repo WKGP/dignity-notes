@@ -260,9 +260,9 @@ const SYNC_SHAPES = {
   handover: { req: ["ts", "text"], f: { ts: "num", fromId: "id", fromName: "str:60", toId: "id", text: "str:10000", source: "str:20" } },
   // One observation taken from a note for the specialist reports (a drink, a meal, a bowel or urinary
   // event, pain, sleep, behaviour, skin, a weight). Can be corrected later; the note itself never changes.
-  obs: { req: ["ts", "noteId", "topic"], f: { ts: "num", noteId: "id", topic: ["mobility", "fluids", "food", "bowels", "urinary", "pain", "sleep", "behaviour", "skin", "weight"], words: "str:300", drink: "str:60", offeredMl: "num", drankMl: "num", portion: ["all", "most", "half", "little", "none", "unknown"], outcome: ["taken", "partly", "refused", "opened", "not_opened", "accident", "passed", "incontinent", "pad_wet", "pad_dry", "catheter"], bristol: "num", painScore: "num", where: "str:80", kg: "num", cm: "num", carerId: "id", fixedBy: "str:60", fixedAt: "num", removed: "num" } },
+  obs: { req: ["ts", "noteId", "topic"], f: { ts: "num", noteId: "id", topic: ["mobility", "fluids", "food", "bowels", "urinary", "pain", "sleep", "behaviour", "skin", "weight"], words: "str:300", drink: "str:60", offeredMl: "num", drankMl: "num", portion: ["all", "most", "half", "little", "none", "unknown"], outcome: ["taken", "partly", "refused", "opened", "not_opened", "accident", "passed", "incontinent", "pad_wet", "pad_dry", "catheter", "slept", "woke", "restless", "napped", "awake_night"], bristol: "num", painScore: "num", where: "str:80", kg: "num", cm: "num", before: "str:300", after: "str:300", carerId: "id", fixedBy: "str:60", fixedAt: "num", removed: "num" } },
   // Incident reports and skin forms (each save a new version), administrators' reviews, catch-up ticks.
-  form: { req: ["ts", "formId", "type", "data", "status"], f: { ts: "num", formId: "id", prevId: "id", type: ["incident", "skin"], noteId: "id", flagId: "id", ref: "str:20", data: "str:20000", status: ["open", "follow_up", "closed"], by: "id", byName: "str:60" } },
+  form: { req: ["ts", "formId", "type", "data", "status"], f: { ts: "num", formId: "id", prevId: "id", type: ["incident", "skin", "assessment"], noteId: "id", flagId: "id", ref: "str:20", data: "str:20000", status: ["open", "follow_up", "closed"], by: "id", byName: "str:60" } },
   review: { req: ["ts", "formId", "notify"], f: { ts: "num", formId: "id", notify: ["yes", "no", "unsure"], why: "str:1000", candour: ["yes", "no", "unsure"], safeguarding: ["yes", "no", "unsure"], lessons: "str:1000", by: "id", byName: "str:60" } },
   ack: { req: ["ts", "what"], f: { ts: "num", what: ["read", "skin"], since: "num", by: "id", byName: "str:60" } },
   event: { req: ["ts", "when", "label"], f: { ts: "num", when: "num", label: "str:120", detail: "str:300", by: "id" } },
@@ -1645,7 +1645,7 @@ function openFind() {
       <div class="list">
         <button class="btn secondary block fd-link" data-go="plan"><div class="body"><strong>Care plan</strong><div class="muted small">Needs, routines, risks and shift tasks</div></div></button>
         ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="meds"><div class="body"><strong>Medicines chart</strong><div class="muted small">Doses, the medicine list and the monthly chart</div></div></button>' : ""}
-        ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="reports"><div class="body"><strong>Reports</strong><div class="muted small">Falls, fluids, food, bowels, urine, pain and skin, made from the notes; incident reports</div></div></button>' : ""}
+        ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="reports"><div class="body"><strong>Reports</strong><div class="muted small">Falls, fluids, food, bowels, urine, pain, sleep, behaviour and skin, made from the notes; incident reports</div></div></button>' : ""}
         <button class="btn secondary block fd-link" data-go="contacts"><div class="body"><strong>Contacts</strong><div class="muted small">GP, pharmacy, family and others</div></div></button>
         <button class="btn secondary block fd-link" data-go="log"><div class="body"><strong>Record log</strong><div class="muted small">Every note, flag and handover</div></div></button>
         <button class="btn secondary block fd-link" data-go="handover"><div class="body"><strong>Handover</strong><div class="muted small">The latest handover</div></div></button>
@@ -2298,7 +2298,7 @@ async function openPlanFromDoc(docId) {
  * said, or worked out from this client's cup sizes; an unclear amount stays "not known".
  */
 const OBS_TOPIC = { fluids: "Drink", food: "Food", bowels: "Bowels", urinary: "Urine", pain: "Pain or discomfort", sleep: "Sleep", behaviour: "Behaviour", skin: "Skin", mobility: "Mobility", weight: "Weight or height" };
-const OBS_OUTCOME = { taken: "Taken", partly: "Partly taken", refused: "Refused", opened: "Bowels opened", not_opened: "Bowels not opened (said so)", accident: "Bowel accident", passed: "Passed urine", incontinent: "Incontinent of urine", pad_wet: "Pad wet", pad_dry: "Pad dry", catheter: "Catheter" };
+const OBS_OUTCOME = { taken: "Taken", partly: "Partly taken", refused: "Refused", opened: "Bowels opened", not_opened: "Bowels not opened (said so)", accident: "Bowel accident", passed: "Passed urine", incontinent: "Incontinent of urine", pad_wet: "Pad wet", pad_dry: "Pad dry", catheter: "Catheter", slept: "Slept well", woke: "Woke in the night", restless: "Restless or unsettled", napped: "Slept in the day", awake_night: "Awake most of the night" };
 const OBS_PORTION = { all: "All", most: "Most", half: "Half", little: "A little", none: "None", unknown: "Amount not known" };
 const observations = () => (S.observations || []).filter((o) => !o.removed);
 const CUPS = () => ({ cup: 200, mug: 300, glass: 250, ...(S.cups || {}) });
@@ -2316,6 +2316,8 @@ function obsFromDraft(o, note) {
   if (o.where) r.where = String(o.where).slice(0, 80);
   if (num(o.kg, 20, 300) !== undefined) r.kg = num(o.kg, 20, 300);
   if (num(o.cm, 80, 230) !== undefined) r.cm = num(o.cm, 80, 230);
+  if (r.topic === "behaviour") { if (o.before) r.before = String(o.before).slice(0, 300); if (o.after) r.after = String(o.after).slice(0, 300); }
+  if (r.outcome && ["slept", "woke", "restless", "napped", "awake_night"].includes(r.outcome) !== (r.topic === "sleep")) delete r.outcome; // sleep outcomes only for sleep
   return OBS_TOPIC[r.topic] ? r : null;
 }
 const obsLine = (o) => {
@@ -2323,6 +2325,8 @@ const obsLine = (o) => {
   if (o.topic === "food") return `${OBS_PORTION[o.portion] || OBS_OUTCOME[o.outcome] || "Food"}: ${o.words}`;
   if (o.topic === "bowels" || o.topic === "urinary") return `${OBS_OUTCOME[o.outcome] || OBS_TOPIC[o.topic]}${o.bristol ? ` · Bristol type ${o.bristol}` : ""}: ${o.words}`;
   if (o.topic === "pain") return `${o.painScore != null ? `Score ${o.painScore}/10 · ` : ""}${o.where ? o.where + " · " : ""}${o.words}`;
+  if (o.topic === "sleep") return `${OBS_OUTCOME[o.outcome] ? OBS_OUTCOME[o.outcome] + ": " : ""}${o.words}`;
+  if (o.topic === "behaviour") return `${o.words}${o.before ? ` · Before: ${o.before}` : ""}${o.after ? ` · After: ${o.after}` : ""}`;
   if (o.topic === "weight") return `${o.kg ? o.kg + " kg" : ""}${o.kg && o.cm ? " · " : ""}${o.cm ? o.cm + " cm" : ""}${o.kg || o.cm ? "" : o.words}`;
   return o.words;
 };
@@ -2339,7 +2343,7 @@ function openObsFix(id, after) {
     ${f === "fluids" ? `<label class="f">Drink<input type="text" id="ofDrink" maxlength="60" value="${esc(o.drink || "")}"></label>
       <div class="row" style="gap:8px"><label class="f" style="flex:1">Offered (ml)<input type="number" id="ofOff" min="0" max="3000" value="${o.offeredMl ?? ""}"></label><label class="f" style="flex:1">Drunk (ml, blank if not known)<input type="number" id="ofDrank" min="0" max="3000" value="${o.drankMl ?? ""}"></label></div>
       <p class="tiny muted" style="margin:-4px 0 0">This client: cup ${CUPS().cup} ml, mug ${CUPS().mug} ml, glass ${CUPS().glass} ml.</p>` : ""}
-    ${["fluids", "food", "bowels", "urinary"].includes(f) ? `<label class="f">What happened<select id="ofOut"><option value="">Not said</option>${Object.entries(OBS_OUTCOME).filter(([k]) => ({ fluids: ["taken", "partly", "refused"], food: ["taken", "partly", "refused"], bowels: ["opened", "not_opened", "accident"], urinary: ["passed", "incontinent", "pad_wet", "pad_dry", "catheter"] })[f].includes(k)).map(([k, l]) => `<option value="${k}" ${o.outcome === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : ""}
+    ${["fluids", "food", "bowels", "urinary", "sleep"].includes(f) ? `<label class="f">What happened<select id="ofOut"><option value="">Not said</option>${Object.entries(OBS_OUTCOME).filter(([k]) => ({ sleep: ["slept", "woke", "restless", "napped", "awake_night"], fluids: ["taken", "partly", "refused"], food: ["taken", "partly", "refused"], bowels: ["opened", "not_opened", "accident"], urinary: ["passed", "incontinent", "pad_wet", "pad_dry", "catheter"] })[f].includes(k)).map(([k, l]) => `<option value="${k}" ${o.outcome === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : ""}
     ${f === "food" ? `<label class="f">How much was eaten<select id="ofPor"><option value="">Not said</option>${Object.entries(OBS_PORTION).map(([k, l]) => `<option value="${k}" ${o.portion === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : ""}
     ${f === "bowels" ? `<label class="f">Bristol stool type (only if known)<select id="ofBr"><option value="">Not said</option>${[1, 2, 3, 4, 5, 6, 7].map((k) => `<option ${o.bristol === k ? "selected" : ""}>${k}</option>`).join("")}</select></label>` : ""}
     ${f === "pain" ? `<div class="row" style="gap:8px"><label class="f" style="flex:1">Score 0 to 10 (only if given)<input type="number" id="ofSc" min="0" max="10" value="${o.painScore ?? ""}"></label><label class="f" style="flex:1">Where<input type="text" id="ofWh" maxlength="80" value="${esc(o.where || "")}"></label></div>` : ""}
@@ -2435,6 +2439,24 @@ const REPORTS = {
       au ? ext("https://www.continence.org.au/", "Continence Foundation of Australia") : ext("https://www.nhs.uk/conditions/urinary-incontinence/", "NHS: urinary incontinence"),
       "<strong>\"Nothing recorded\" is not the same as \"didn't pass urine\".</strong> Changes in colour, smell or frequency have many causes; the report never suggests one. Drinks from the fluid report are shown for context."),
   },
+  sleep: {
+    title: "Sleep and rest", topic: "sleep", words: /\b(sleep|slept|woke|awake|nap|napped|restless|unsettled|settled|bed ?time)/i,
+    about: (au) => aboutHTML("A record of what carers wrote about sleep and rest: sleeping well, waking in the night, restlessness, being awake most of the night, and sleeping in the day, with pain written about at night and any when-required medicines for sleep from the chart.",
+      "Changes in sleep often show something else is changing (pain, a urine infection, low mood, a new medicine). Seeing each night side by side shows patterns a single shift can't.",
+      `A GP, ${au ? "community nurse" : "district nurse"}, memory or mental health team, the family or an agency.`,
+      "When someone seems more tired or unsettled, before a GP visit, or when a new night carer starts.",
+      au ? ext("https://www.healthdirect.gov.au/sleep", "healthdirect: sleep") : ext("https://www.nhs.uk/live-well/sleep-and-tiredness/", "NHS: sleep and tiredness"),
+      "Each entry counts towards the night it belongs to (before midday counts as the night before). <strong>A night with nothing written isn't a night slept well.</strong> The report never says why sleep changed."),
+  },
+  behaviour: {
+    title: "Behaviour (ABC)", topic: "behaviour", words: /\b(agitat|distress|shout|upset|angry|aggress|refus|wander|anxious|confus|crying|cried|scream|hit|kick|calm|settled)/i,
+    about: (au) => aboutHTML("An ABC chart made from carers' notes: for each behaviour written about, what was happening just before (A, the antecedent), what the person did or said (B, the behaviour), and what happened after, including what the carer did and how the person responded (C, the consequence).",
+      "Behaviour is often a way of communicating a need (pain, fear, needing the toilet, too much noise, a change of routine). An ABC chart shows patterns, such as a time of day or a trigger, without anyone filling in a separate chart.",
+      `A GP, memory or mental health team, ${au ? "Dementia Support Australia" : "a dementia specialist nurse"}, the family or an agency, for example when a care plan for distressed behaviour is being written.`,
+      "When distress or refusals happen more often, before a review, or when a new carer starts. Saying in your note what happened before and what helped makes the chart more useful.",
+      au ? ext("https://www.dementia.com.au/", "Dementia Support Australia") : ext("https://www.nice.org.uk/guidance/ng97", "NICE guideline NG97: dementia"),
+      "Before and after come only from what the note says. <strong>The report never says why a behaviour happened</strong> or labels anyone as aggressive. Distress that puts someone at risk needs reporting straight away, and an injury is an incident."),
+  },
   skin: {
     title: "Skin integrity", topic: "skin", words: /\b(skin|bruis|graze|tear|redness|sore|blister|rash|wound|pressure|cream|itch)/i,
     about: (au) => aboutHTML("A record of what carers wrote about the skin (redness, bruises, skin tears, sore or broken skin, creams), the skin integrity forms completed, their follow-up checks, and the \"I've checked the skin\" ticks from carers catching up.",
@@ -2459,10 +2481,12 @@ function openReports() {
     <p class="small muted" style="margin:0">Made from the notes carers already write, for any period. Nothing extra to fill in.</p>
     ${Object.entries(REPORTS).map(([k, r]) => `<button class="btn secondary block fd-link" data-report="${k}"><div class="body"><strong>${esc(r.title)}</strong><div class="muted small">Last 7, 14 or 30 days, or choose dates</div></div></button>`).join("")}
     <button class="btn secondary block fd-link" id="rpInc"><div class="body"><strong>Incident reports</strong><div class="muted small">Every incident report, with its history${isAgency() ? " and review" : ""}</div></div></button>
+    <button class="btn secondary block fd-link" id="rpAssess"><div class="body"><strong>Professional assessments</strong><div class="muted small">MUST, PAINAD and others completed by a professional</div></div></button>
     <button class="btn secondary block fd-link" id="rpSkinForms"><div class="body"><strong>Skin integrity forms</strong><div class="muted small">Each skin concern and its follow-up checks</div></div></button>
     ${canEditPlan() ? '<button class="link small" id="rpCups" style="justify-self:start;min-height:40px">Cup sizes and fluid target</button>' : ""}`);
   $("#rpInc", s.root).onclick = () => openFormList("incident");
   $("#rpSkinForms", s.root).onclick = () => openFormList("skin");
+  $("#rpAssess", s.root).onclick = () => openFormList("assessment");
   if ($("#rpCups", s.root)) $("#rpCups", s.root).onclick = () => { s.close(); openCups(openReports); };
   s.root.querySelectorAll("[data-report]").forEach((b) => (b.onclick = () => { s.close(); openReport(b.dataset.report); }));
 }
@@ -2517,6 +2541,7 @@ function openObsReport(kind, R, range, opts) {
     if (height) summary.push(`Height last recorded: ${height.cm} cm on ${fmtDay(height.ts)}.`);
     const rows = [["Ate all or most", ["all", "most"], "#2e7d32"], ["Half or a little", ["half", "little"], "#d98a00"], ["Refused or none", ["none"], "var(--incident)"], ["Not known", ["unknown"], "#7a7085"]];
     graphRows = rows.map(([l, ks, col]) => [l, (d) => all.filter((o) => day(o) === d && (ks.includes(o.portion) || (ks.includes("none") && o.outcome === "refused" && !o.portion) || (ks.includes("unknown") && !o.portion && o.outcome !== "refused"))).length, col]);
+    extraHTML = mustInfoHTML(weights, height, all);
     for (const w of weights.filter((o) => inRange(o.ts) && !all.includes(o))) timeline.push({ ts: w.ts, html: `<strong class="small">Weight or height</strong><div class="small">${esc(obsLine(w))}</div>`, o: w });
   } else if (R.topic === "bowels") {
     const opened = all.filter((o) => o.outcome === "opened"), acc = all.filter((o) => o.outcome === "accident"), not = all.filter((o) => o.outcome === "not_opened");
@@ -2546,6 +2571,35 @@ function openObsReport(kind, R, range, opts) {
     graphRows = [["Passed", ["passed"], "#2e7d32"], ["Incontinent or wet pad", ["incontinent", "pad_wet"], "#d98a00"], ["Dry pad", ["pad_dry"], "#7a7085"], ["Catheter", ["catheter"], "#3f6fb5"]].map(([l, ks, col]) => [l, (d) => all.filter((o) => day(o) === d && ks.includes(o.outcome)).length, col]);
     const fl = observations().filter((o) => o.topic === "fluids" && inRange(o.ts) && o.drankMl != null);
     if (fl.length) extraHTML = `<p class="small" style="margin:0">For context, drinks counted in this period: ${fl.reduce((a, o) => a + o.drankMl, 0)} ml over ${new Set(fl.map(day)).size} days (see the Fluid intake report).</p>`;
+  } else if (R.topic === "sleep") {
+    // Each entry belongs to a night: before midday counts as the night before.
+    const nightOf = (ts) => { const d = new Date(ts); if (d.getHours() < 12) d.setDate(d.getDate() - 1); return dayKey(d); };
+    const c = (k) => all.filter((o) => o.outcome === k), nights = new Set(all.filter((o) => o.outcome !== "napped").map((o) => nightOf(o.ts)));
+    summary.push(`Sleep was written about for ${n(nights.size, "night", "nights")} of the ${ds.length}.`);
+    const parts = [["slept", "slept well"], ["woke", "woke in the night"], ["restless", "restless or unsettled"], ["awake_night", "awake most of the night"], ["napped", "slept in the day"]].map(([k, l]) => [c(k).length, l]).filter(([x]) => x);
+    if (parts.length) summary.push(`Recorded: ${parts.map(([x, l]) => `${x} ${l}`).join(", ")}.`);
+    const bad = [...new Set([...c("woke"), ...c("restless"), ...c("awake_night")].map((o) => nightOf(o.ts)))];
+    if (bad.length) summary.push(`Waking, restlessness or being awake was written about on ${n(bad.length, "night", "nights")}.`);
+    const night = (o) => { const h = new Date(o.ts).getHours(); return h >= 22 || h < 6; };
+    const painNight = observations().filter((o) => o.topic === "pain" && inRange(o.ts) && night(o));
+    if (painNight.length) summary.push(`Pain or discomfort was written about at night (22:00 to 06:00) ${n(painNight.length, "time", "times")}; see the Pain report.`);
+    const prn = prnFor(/sleep|insomnia|night|settle|anxi/i);
+    if (prn.length) summary.push(`${n(prn.length, "when-required dose", "when-required doses")} for sleep or settling recorded in the medicines chart.`);
+    summary.push("A night with nothing written isn't the same as a night slept well.");
+    graphRows = [["Slept well", (d) => c("slept").filter((o) => nightOf(o.ts) === d).length, "#2e7d32"], ["Woke, restless or awake", (d) => [...c("woke"), ...c("restless"), ...c("awake_night")].filter((o) => nightOf(o.ts) === d).length, "#d98a00"], ["Slept in the day", (d) => c("napped").filter((o) => day(o) === d).length, "#7a7085"]];
+    for (const d of prn) timeline.push({ ts: d.ts, html: `<strong class="small">When-required medicine (from the medicines chart)</strong><div class="small">${esc(d.med || "Medicine")} given${d.amount ? ", " + esc(d.amount) : ""}</div>`, med: d });
+  } else if (R.topic === "behaviour") {
+    const part = (ts) => { const h = new Date(ts).getHours(); return h < 6 ? "night (00:00 to 06:00)" : h < 12 ? "morning" : h < 18 ? "afternoon" : h < 22 ? "evening" : "night (22:00 to 00:00)"; };
+    summary.push(`Behaviour was written about ${n(all.length, "time", "times")}, on ${recDays.size} of the ${ds.length} days.`);
+    const byPart = new Map(); for (const o of all) byPart.set(part(o.ts), (byPart.get(part(o.ts)) || 0) + 1);
+    if (all.length >= 2) summary.push(`By time of day: ${[...byPart].sort((a, b) => b[1] - a[1]).map(([p, x]) => `${p} ${x}`).join(", ")} (from the time each note was saved).`);
+    const withA = all.filter((o) => o.before), withC = all.filter((o) => o.after);
+    summary.push(`What happened before was written for ${withA.length} of these, and what happened after for ${withC.length}.`);
+    summary.push("The report shows what carers wrote; it never says why a behaviour happened.");
+    graphRows = [["Behaviour written about", (d) => all.filter((o) => day(o) === d).length, "#7a4fa0"]];
+    extraHTML = all.length ? `<div><h3 style="font-size:17px;margin:0 0 6px">ABC chart</h3><div style="display:grid;gap:8px">
+      ${all.map((o) => `<div class="card" style="box-shadow:none;padding:10px 12px;display:grid;gap:3px;break-inside:avoid"><div class="tiny muted">${esc(dayLabel(o.ts))} ${fmtTime(o.ts)}</div>
+        <div class="small"><strong>A, before:</strong> ${esc(o.before || "Not written")}</div><div class="small"><strong>B, behaviour:</strong> ${esc(o.words)}</div><div class="small"><strong>C, after:</strong> ${esc(o.after || "Not written")}</div></div>`).join("")}</div></div>` : "";
   } else if (R.topic === "skin") {
     summary.push(`Skin was written about ${n(all.length, "time", "times")}, on ${recDays.size} of the ${ds.length} days.`);
     const sk = latestForms("skin"), open = sk.filter((r) => r.status !== "closed"), shown = sk.filter((r) => r.status !== "closed" || formVersions(r.formId).some((v) => inRange(v.ts)));
@@ -2567,6 +2621,7 @@ function openObsReport(kind, R, range, opts) {
     if (all.length >= 4) summary.push(`Written about ${n(a, "time", "times")} in the first half of the period and ${n(b, "time", "times")} in the second half.`);
     const prn = prnFor(/pain|ache|sore|discomfort/i);
     if (prn.length) summary.push(`${n(prn.length, "when-required dose", "when-required doses")} for pain recorded in the medicines chart.`);
+    extraHTML = assessListHTML("painad", "PAINAD or other pain assessments");
     graphRows = [["Pain or discomfort written about", (d) => all.filter((o) => day(o) === d).length, "#b5651d"], ["Pain relief given (when required)", (d) => prn.filter((x) => x.day === d).length, "#3f6fb5"]];
     for (const d of prn) timeline.push({ ts: d.ts, html: `<strong class="small">Pain relief (from the medicines chart)</strong><div class="small">${esc(d.med || "When-required medicine")} given${d.amount ? ", " + esc(d.amount) : ""}${outcomeFor(d.id) ? " · " + esc(outcomeFor(d.id).outcome || "") : ""}</div>`, med: d });
   }
@@ -2595,6 +2650,7 @@ function openObsReport(kind, R, range, opts) {
     </div></div>`;
   body.querySelectorAll("[data-obsnote]").forEach((b) => (b.onclick = () => { const o = timeline[+b.dataset.obsnote].o; if (byNote(o)) openSavedNote(o.noteId); }));
   if ($("#rpSkinNew", body)) $("#rpSkinNew", body).onclick = () => openFormEdit("skin");
+  body.querySelectorAll("[data-assessnew]").forEach((b) => (b.onclick = () => openFormEdit("assessment", { preset: { tool: b.dataset.assessnew } })));
   if (all.length) bindReportShare(`${R.title}, ${range.label}\n\n${summary.join("\n")}\n\nMade from carers' notes.`, false);
 }
 // The parts every report shares: period, About, print, graph, and the footer.
@@ -3063,7 +3119,17 @@ const tellOptions = (type) => type === "incident"
   ? { family: "Family or representative", gp: "GP", nurse: nurseWord(), manager: "Care manager", emergency: `Emergency services (${au999()})`, other: "Someone else" }
   : { manager: "Care manager", gp: "GP", nurse: nurseWord(), tvn: "Tissue viability nurse", family: "Family or representative", emergency: `Emergency services (${au999()})`, other: "Someone else" };
 // The form's sections: [heading, [[key, label, input type, options]]]. "ro" is filled in, not typed.
-const formSections = (type) => type === "incident" ? [
+// A professional's completed assessment (MUST, PAINAD and others), copied from what they wrote. Dignity
+// Notes never calculates or checks the score (Sam's brief, 2026-10-19; scoring would make the app a
+// medical device: DECISIONS.md).
+const ASSESS_TOOLS = { must: "MUST (Malnutrition Universal Screening Tool)", painad: "PAINAD (Pain Assessment in Advanced Dementia)", waterlow: "Waterlow (pressure ulcer risk)", braden: "Braden (pressure ulcer risk)", falls: "Falls risk assessment", other: "Other assessment" };
+const ASSESS_SHORT = { must: "MUST", painad: "PAINAD", waterlow: "Waterlow", braden: "Braden", falls: "Falls risk", other: "Assessment" };
+const ASSESS_SECTIONS = [
+  ["1. The assessment", [["client", "Client", "ro"], ["tool", "Which assessment", "sel", ASSESS_TOOLS], ["toolOther", "If other, which", "text"], ["date", "Date it was done", "date"], ["completedBy", "Who completed it (name)", "text"], ["role", "Their role (for example dietitian, district nurse, GP)", "text"]]],
+  ["2. The result, as they wrote it", [["score", "Score, as written", "text"], ["result", "Result or risk level, as written (for example low risk)", "text"], ["details", "Anything else they recorded", "area"]]],
+  ["3. What happens next", [["plan", "What they advised or planned", "area"], ["nextReview", "When it should be done again", "date"]]],
+];
+const formSections = (type) => type === "assessment" ? ASSESS_SECTIONS : type === "incident" ? [
   ["1. Client and incident details", [["client", "Client", "ro"], ["date", "Date it happened", "date"], ["time", "Time", "time"], ["where", "Where it happened", "text"], ["carer", "Carer involved", "text"]]],
   ["2. Type of incident", [["type", "Type", "sel", INC_TYPES], ["typeOther", "If other, what kind", "text"]]],
   ["3. What happened", [["what", "What happened (facts only: what you saw and heard)", "area"], ["witnessed", "Did anyone see it happen?", "sel", YNU], ["witnessWho", "Who saw it, and how to reach them", "text"]]],
@@ -3082,7 +3148,7 @@ const formSections = (type) => type === "incident" ? [
 ];
 const formLabels = (type) => Object.fromEntries(formSections(type).flatMap(([, fs]) => fs.map(([k, l]) => [k, l || ({ told: "Who was told", concerns: "Skin concerns" })[k]])));
 const formOptions = (type) => Object.fromEntries(formSections(type).flatMap(([, fs]) => fs.filter((f) => f[3]).map((f) => [f[0], f[3]])));
-const formTitle = (type) => (type === "incident" ? "Incident report" : "Skin integrity form");
+const formTitle = (type) => (type === "incident" ? "Incident report" : type === "assessment" ? "Professional assessment" : "Skin integrity form");
 const SKIN_RE = /\b(skin|bruis\w*|graze\w*|tear|redness|sore\w*|blister\w*|rash\w*|wound\w*|pressure|cut|bleed\w*|swell\w*|swollen|scratch\w*|ulcer\w*)\b/i;
 const isSkinFlag = (f) => SKIN_RE.test(`${f.title} ${f.detail || ""}`) || observations().some((o) => o.topic === "skin" && o.noteId && o.noteId === f.noteId);
 
@@ -3107,10 +3173,10 @@ function formData(r) {
 // An option's label, only for the form's own options (never "constructor" and the like from another phone).
 const opt = (o, k) => (typeof k === "string" && Object.hasOwn(o, k) ? o[k] : "");
 const formReview = (formId) => (S.reviews || []).filter((r) => r.formId === formId).sort((a, b) => b.ts - a.ts)[0];
-const formRef = (type, id, ts) => `${type === "incident" ? "IR" : "SK"}-${dayKey(new Date(ts)).slice(2).replace(/-/g, "")}-${id.slice(0, 3).toUpperCase()}`;
+const formRef = (type, id, ts) => `${type === "incident" ? "IR" : type === "assessment" ? "AS" : "SK"}-${dayKey(new Date(ts)).slice(2).replace(/-/g, "")}-${id.slice(0, 3).toUpperCase()}`;
 const concernLabel = (c) => [(c.kinds || []).map((k) => opt(SKIN_KINDS, k)).filter(Boolean).join(", ") || "Skin concern", [c.side !== "unknown" ? opt(SIDES, c.side).toLowerCase() : "", opt(BODY_AREAS, c.area).toLowerCase()].filter(Boolean).join(" ")].filter(Boolean).join(", ");
 const skinWhere = (d) => ((d.concerns || [])[0] ? concernLabel(d.concerns[0]) : "skin check") + ((d.concerns || []).length > 1 ? ` and ${d.concerns.length - 1} more` : "");
-const formLine = (r) => { const d = formData(r); return r.type === "incident" ? `${opt(INC_TYPES, d.type) || "Incident"}${d.where ? " · " + d.where : ""}` : skinWhere(d); };
+const formLine = (r) => { const d = formData(r); if (r.type === "assessment") return `${opt(ASSESS_SHORT, d.tool) || "Assessment"}${d.result ? ": " + d.result : d.score ? ": " + d.score : ""}${d.completedBy ? ", by " + d.completedBy : ""}`; return r.type === "incident" ? `${opt(INC_TYPES, d.type) || "Incident"}${d.where ? " · " + d.where : ""}` : skinWhere(d); };
 // Forms that need someone: open incident reports, an agency client's reports awaiting review (for
 // administrators), and skin concerns whose next check is due.
 function formAttn() {
@@ -3119,6 +3185,7 @@ function formAttn() {
     const d = formData(r);
     if (r.type === "incident" && isAgency() && isAdminHere() && !formReview(r.formId)) out.push({ r, label: `Incident report ${r.ref}: needs your review` });
     else if (r.type === "incident" && r.status !== "closed") out.push({ r, label: `Incident report ${r.ref}: ${FORM_STATUS[r.status].toLowerCase()}` });
+    if (r.type === "assessment" && d.nextReview && d.nextReview <= today) out.push({ r, label: `${opt(ASSESS_SHORT, d.tool) || "Assessment"} due to be done again (last ${fmtDay(new Date(d.date + "T12:00:00").getTime())})` });
     if (r.type === "skin" && r.status !== "closed" && d.nextReview && d.nextReview <= today) out.push({ r, label: `Skin check due: ${skinWhere(d)}` });
   }
   return out;
@@ -3132,8 +3199,9 @@ const internalNoteHTML = () => clientCountry() === "AU"
 
 // The note a form starts from, with any additions, for "from the note".
 const noteWithAdditions = (noteId) => { const n = S.notes.find((x) => x.id === noteId); if (!n) return ""; return [n, ...S.notes.filter((x) => x.amends === n.id).sort((a, b) => a.ts - b.ts)].map((x) => x.note).join("\n"); };
-function blankForm(type, flag) {
+function blankForm(type, flag, preset = {}) {
   const ts = flag ? flag.ts : Date.now(), d = new Date(ts);
+  if (type === "assessment") return { client: S.client.name, tool: "", toolOther: "", date: dayKey(d), completedBy: "", role: "", score: "", result: "", details: "", plan: "", nextReview: "", told: [], suggested: [], ...preset };
   const note = flag && S.notes.find((n) => n.id === flag.noteId);
   const base = { client: S.client.name, carer: note ? carer(note.carerId, note.carerName).name : (session.name || onDuty().name), date: dayKey(d), time: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`, told: [], suggested: [] };
   if (type === "incident") return { ...base, where: "", type: "", typeOther: "", what: note ? note.note.slice(0, 2000) : "", witnessed: "", witnessWho: "", injured: "", injury: "", medical: "", action: "", safe: "", emergency: "", after: "", monitoring: "", planReview: "", safeguarding: "", safeguardingWhy: "", further: "", ...(note ? { suggested: ["what"] } : {}) };
@@ -3190,10 +3258,10 @@ function saveFormVersion(type, formId, d, status, meta) {
   touch(rec); (S.forms = S.forms || []).push(rec); save(); return rec;
 }
 // Start (no formId) or amend a form. flag: the flag it starts from (its note fills it in).
-function openFormEdit(type, { formId = null, flag = null, after } = {}) {
+function openFormEdit(type, { formId = null, flag = null, after, preset } = {}) {
   formType = type;
   const prev = formId ? formLatest(formId) : null;
-  let d = prev ? formData(prev) : blankForm(type, flag), st = prev ? prev.status : "open", dirty = false;
+  let d = prev ? formData(prev) : blankForm(type, flag, preset), st = prev ? prev.status : "open", dirty = false;
   if (!Array.isArray(d.suggested)) d.suggested = [];
   if (type === "skin" && !Array.isArray(d.concerns)) d.concerns = [];
   const meta = { noteId: prev ? prev.noteId : flag ? flag.noteId : undefined, flagId: prev ? prev.flagId : flag ? flag.id : undefined };
@@ -3213,11 +3281,12 @@ function openFormEdit(type, { formId = null, flag = null, after } = {}) {
       d = readForm(body, d);
       if (!d.date) return toast("Add the date");
       if (type === "incident" && !d.what) return toast("Say what happened");
+      if (type === "assessment" && (!d.tool || !d.completedBy)) return toast("Choose the assessment and say who completed it");
       if (type === "skin" && d.concern === "yes" && !d.concerns.some((c) => (c.kinds || []).length || c.description)) return toast("Describe the skin concern, or choose No");
       if (type === "skin" && d.concern === "yes" && d.status !== "resolved" && !d.nextReview) return toast("Choose when it should be checked next");
       if (type === "skin" && d.concern !== "yes") d.concerns = d.concerns.filter((c) => (c.kinds || []).length || c.description);
       const go = () => {
-        const status = type === "incident" ? $("#fmStatus", body).value : d.status === "resolved" || d.concern !== "yes" ? "closed" : "open";
+        const status = type === "incident" ? $("#fmStatus", body).value : type === "assessment" ? (d.nextReview ? "open" : "closed") : d.status === "resolved" || d.concern !== "yes" ? "closed" : "open";
         const rec = saveFormVersion(type, formId, d, status, meta); if (!rec) return;
         dirty = false; s.close(); render(); toast(prev ? "Saved: the change is in the history" : `${formTitle(type)} ${rec.ref} saved`);
         if (after) after(rec); else openForm(rec.formId);
@@ -3291,14 +3360,14 @@ function openForm(formId) {
       : `<div class="small">Waiting for an administrator to review it.</div>`}
     ${isAdminHere() && cloudOn() ? `<button class="btn secondary noprint" id="fvReview">${rv ? "Review again" : "Review this report"}</button>` : ""}</section>`;
   const s = sheet(`${sheetHead(`${formTitle(type)} ${esc(r.ref)}`)}
-    <div class="row" style="gap:6px;flex-wrap:wrap"><span class="chip ${r.status === "closed" ? "" : type === "incident" ? "incident" : "follow"}">${skin ? (r.status === "closed" ? "Closed: healed or resolved" : `Being followed up${d.nextReview ? ", next check " + esc(fmtDay(new Date(d.nextReview + "T12:00:00").getTime())) : ""}`) : esc(FORM_STATUS[r.status])}</span></div>
+    <div class="row" style="gap:6px;flex-wrap:wrap"><span class="chip ${r.status === "closed" ? "" : type === "incident" ? "incident" : "follow"}">${type === "assessment" ? (d.nextReview ? `Next due ${esc(fmtDay(new Date(d.nextReview + "T12:00:00").getTime()))}` : "Recorded") : skin ? (r.status === "closed" ? "Closed: healed or resolved" : `Being followed up${d.nextReview ? ", next check " + esc(fmtDay(new Date(d.nextReview + "T12:00:00").getTime())) : ""}`) : esc(FORM_STATUS[r.status])}</span></div>
     ${r.noteId && S.notes.some((n) => n.id === r.noteId) ? `<button class="link small" id="fvNote" style="justify-self:start;min-height:40px">Open the note it came from</button>` : ""}
     ${formConflict(formId) ? `<div class="warn small">This was changed on two phones at about the same time. The newest version is shown; check the History for the other change.</div>` : ""}
     ${formViewHTML(type, { ...d, followups: skin ? allFollowups(formId) : d.followups })}
     ${reviewHTML}
     <details><summary class="small">History (${vs.length} version${vs.length === 1 ? "" : "s"})</summary><div style="display:grid;gap:6px;margin-top:6px">${vs.map((v, i) => `<div class="small"><strong>${esc(dayLabel(v.ts))} ${fmtTime(v.ts)}, ${esc(v.byName || carer(v.by).name)}:</strong> ${i ? esc(formChanges(vs[i - 1], v, type).join("; ")) : "started"}</div>`).join("")}</div></details>
-    <div class="tiny muted">${internalNoteHTML()}</div>
-    ${canWrite ? `${skin && r.status !== "closed" ? `<button class="btn primary block" id="fvFollow">Add a follow-up check</button>` : ""}<button class="btn ${skin && r.status !== "closed" ? "secondary" : "primary"} block" id="fvEdit">${skin ? "Change the form" : "Amend the report"}</button>` : ""}
+    <div class="tiny muted">${type === "assessment" ? ASSESS_NOTE : internalNoteHTML()}</div>
+    ${canWrite ? `${skin && r.status !== "closed" ? `<button class="btn primary block" id="fvFollow">Add a follow-up check</button>` : ""}<button class="btn ${skin && r.status !== "closed" ? "secondary" : "primary"} block" id="fvEdit">${skin || type === "assessment" ? "Change the form" : "Amend the report"}</button>` : ""}
     <button class="btn ghost block" id="fvPrint">Print or save as PDF</button>`);
   if ($("#fvNote", s.root)) $("#fvNote", s.root).onclick = () => { s.close(); openSavedNote(r.noteId); };
   if ($("#fvEdit", s.root)) $("#fvEdit", s.root).onclick = () => { s.close(); openFormEdit(type, { formId }); };
@@ -3369,13 +3438,48 @@ function openFormReview(formId) {
 // All incident reports, newest first (Reports, and the record log's Incidents filter).
 function openFormList(type) {
   const list = latestForms(type).sort((a, b) => b.ts - a.ts);
-  const s = sheet(`${sheetHead(type === "incident" ? "Incident reports" : "Skin integrity forms")}
-    <p class="small muted" style="margin:0">${type === "incident" ? "Started from an incident flag (open the flag, then Create incident report)." : "Started from a skin flag, or below."}</p>
-    ${type === "skin" && !isFamily() ? `<button class="btn primary block" id="flNew">New skin check</button>` : ""}
+  const s = sheet(`${sheetHead(type === "incident" ? "Incident reports" : type === "assessment" ? "Professional assessments" : "Skin integrity forms")}
+    <p class="small muted" style="margin:0">${type === "incident" ? "Started from an incident flag (open the flag, then Create incident report)." : type === "assessment" ? "Copy in an assessment a trained professional has completed (such as MUST or PAINAD), with their result as they wrote it. Upload their form to the care plan too, if you have it." : "Started from a skin flag, or below."}</p>
+    ${type !== "incident" && !isFamily() ? `<button class="btn primary block" id="flNew">${type === "assessment" ? "Record a completed assessment" : "New skin check"}</button>` : ""}
     ${list.length ? list.map((r) => `<button class="btn secondary block fd-link" data-openform="${esc(r.formId)}"><div class="body"><strong>${esc(r.ref)} · ${esc(formLine(r))}</strong><div class="muted small">${esc(dayLabel(formVersions(r.formId)[0].ts))} · ${esc(type === "skin" && r.status === "open" ? "Being followed up" : FORM_STATUS[r.status])}${type === "incident" && isAgency() ? (formReview(r.formId) ? " · reviewed" : " · not reviewed yet") : ""}</div></div></button>`).join("") : `<div class="empty">None yet.</div>`}`);
-  if ($("#flNew", s.root)) $("#flNew", s.root).onclick = () => { s.close(); openFormEdit("skin"); };
+  if ($("#flNew", s.root)) $("#flNew", s.root).onclick = () => { s.close(); openFormEdit(type); };
 }
 
+/* ---------- MUST: the supporting information (Sam, 2026-10-19) ----------
+ * MUST (BAPEN) is completed by a trained person. The food report gathers what they'll need from the
+ * notes: weights and dates for the last 6 months, height, BMI worked out from those measurements, weight
+ * change, meals refused, and what's missing. It never gives a MUST score or a risk level: a score from
+ * the app could be relied on as a clinical result (software as a medical device), and missing
+ * information can't safely count as zero. A completed MUST is recorded as a professional assessment.
+ */
+const ASSESS_NOTE = "Copied from a professional's completed assessment. Dignity Notes doesn't calculate or check scores; follow the professional's advice and the care plan.";
+function assessListHTML(tool, title) {
+  const list = latestForms("assessment").filter((r) => formData(r).tool === tool).sort((a, b) => (formData(b).date || "").localeCompare(formData(a).date || ""));
+  return `<div><h3 style="font-size:17px;margin:0 0 6px">${esc(title)}</h3>${list.length ? `<div style="display:grid;gap:6px">${list.slice(0, 5).map((r) => { const d = formData(r); return `<button class="link small" data-openform="${esc(r.formId)}" style="justify-self:start;text-align:left;min-height:40px">${d.date ? esc(fmtDay(new Date(d.date + "T12:00:00").getTime())) : ""}: ${esc(formLine(r))}${d.nextReview ? ` · next due ${esc(fmtDay(new Date(d.nextReview + "T12:00:00").getTime()))}` : ""}</button>`; }).join("")}</div>` : `<p class="small" style="margin:0">None recorded.</p>`}
+    ${isFamily() ? "" : `<button class="btn secondary noprint" data-assessnew="${esc(tool)}" style="margin-top:6px">Record a completed ${esc(ASSESS_SHORT[tool])} assessment</button>`}</div>`;
+}
+function mustInfoHTML(weights, height, foodObs) {
+  // One weight a day (the last one written that day).
+  const perDay = [...new Map(weights.map((o) => [dayKey(new Date(o.ts)), o])).values()];
+  const since = Date.now() - 183 * 864e5, w6 = perDay.filter((o) => o.ts >= since), last = weights[weights.length - 1];
+  const day = (ts) => esc(fmtDay(ts)), li = [], missing = [];
+  if (w6.length) li.push(`Weights in the last 6 months${w6.length > 8 ? ` (the latest 8 of ${w6.length})` : ""}: ${w6.slice(-8).map((o) => `${o.kg} kg (${day(o.ts)})`).join(", ")}.`);
+  else { li.push(last ? `No weight in the last 6 months; the last was ${last.kg} kg on ${day(last.ts)}.` : "No weight has been recorded."); missing.push("a recent weight"); }
+  if (height) li.push(`Height: ${height.cm} cm (${day(height.ts)}).`); else missing.push("height (or a measurement a professional can use instead)");
+  if (last && height && height.cm > 50) { const bmi = Math.round((last.kg / (height.cm / 100) ** 2) * 10) / 10; li.push(`BMI worked out from these measurements: ${bmi} kg/m² (weight ${day(last.ts)}, height ${day(height.ts)}). Check the measurements before using it.`); }
+  if (w6.length >= 2) { const a = w6[0], b = w6[w6.length - 1], dk = Math.round((b.kg - a.kg) * 10) / 10, pc = Math.round((dk / a.kg) * 1000) / 10; li.push(`Weight change: ${dk > 0 ? "+" : ""}${dk} kg (${pc > 0 ? "+" : ""}${pc}%) between ${day(a.ts)} and ${day(b.ts)}.`); }
+  else missing.push("two or more weights over the last 3 to 6 months");
+  const lossNotes = observations().filter((o) => o.topic === "weight" && /unplanned|unintentional|not trying|planned|on purpose|diet/i.test(o.words || ""));
+  li.push(lossNotes.length ? `Notes about whether weight change was planned: ${lossNotes.map((o) => `"${esc(o.words)}" (${day(o.ts)})`).join("; ")}.` : "Whether any weight loss was planned or unplanned isn't written in the notes.");
+  const refused = foodObs.filter((o) => o.portion === "none" || o.outcome === "refused"), little = foodObs.filter((o) => o.portion === "little");
+  li.push(`In this period: ${refused.length} meal${refused.length === 1 ? "" : "s"} refused or nothing eaten, ${little.length} with only a little eaten.`);
+  li.push("Illness affecting eating, or days with little or nothing to eat, aren't worked out by the app: check the notes and incidents.");
+  return `<div class="card" style="box-shadow:none;display:grid;gap:6px;break-inside:avoid"><h3 style="font-size:17px;margin:0">MUST: supporting information</h3>
+    <p class="small" style="margin:0">For whoever completes the <strong>Malnutrition Universal Screening Tool</strong> (MUST): a trained person, such as a nurse or dietitian. <strong>Dignity Notes doesn't give a MUST score or risk level.</strong></p>
+    <ul class="small" style="margin:0;padding-left:18px;display:grid;gap:3px">${li.map((x) => `<li>${x}</li>`).join("")}</ul>
+    ${missing.length ? `<p class="small" style="margin:0"><strong>Missing:</strong> ${esc(missing.join("; "))}. Missing information is never counted as nothing wrong.</p>` : ""}
+    ${assessListHTML("must", "Completed MUST assessments")}</div>`;
+}
 /* ---------- catching up after time away ----------
  * A carer new to the client, or back after a number of days away (7 unless an administrator sets it;
  * Sam, 2026-10-16), sees what changed since they were last here at the top of Today: the care plan,

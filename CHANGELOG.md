@@ -2,6 +2,7 @@
 
 ## 1.3.0 - 2026-10-15
 
+- 1.3.13: Sleep and rest report, and a Behaviour (ABC) report with what happened before and after. The Food and nutrition report has MUST supporting information (weights, height, BMI from the measurements, what's missing; never a score). Professional assessments (MUST, PAINAD, Waterlow and others) can be recorded as completed, with a due date.
 - 1.3.12: Recordings are turned into words by the more accurate speech-to-text whenever there's signal, with the client's and carers' first names, medicines and your saved words as spelling hints (the phone's words are kept as the preview and used if the two disagree). Voice set-up: read 8 sentences once and the app learns the words it mishears in your voice. Privacy notice version 21.
 - 1.3.10: Adding or changing a medicine works without signal: kept on the phone, shown as "not on the chart yet" (and in the handover), sent by itself when there's signal, once only, and never over someone else's newer change.
 - 1.3.9: Incident reports and skin integrity forms, started from a flag and filled in from the note (each answer marked "from the note: check"); every amendment kept with who and when; print or save as PDF. Clients are set as private or agency; an administrator reviews an agency client's incident reports (statutory notification needed?). Skin follow-up checks, and a Skin integrity report. A catch-up card for carers new to a client or back after time away ("I've read this", "I've checked the skin"). Privacy notice version 20.
