@@ -1066,10 +1066,12 @@ function parseMedTimes(text) {
 }
 // Add or change a medicine: where it came from is required every time (never carried over from the last
 // version); a change also needs a reason.
-function openMedEdit(m, after) {
+// note: shown at the top (e.g. the differences a box check found), so the carer can correct the entry.
+function openMedEdit(m, after, note = "") {
   const v = m ? { ...m, source: "", sourceDetail: "", verbalFrom: "", verbalAt: "", readBack: false, verbalRepeatedTo: "" } : { times: [], route: "By mouth" };
   const s = sheet(`${sheetHead(m ? "Change " + esc(m.name) : "Add a medicine")}
     <p class="small muted" style="margin:0">Copy it exactly from the pharmacy label or prescription. ${m ? "The change" : "It"} shows as not yet checked until someone else confirms it against the label. If you're the only carer, double-check it yourself afterwards; the next carer checks it at handover. Pilot: made-up details only.</p>
+    ${note ? `<div class="warn small">${note}</div>` : ""}
     <button class="btn secondary block" id="mePhoto" type="button">Fill in from a photo of the label or prescription</button>${photoInputHTML("mePhotoFile")}
     <div id="mePhotoMsg" style="display:grid;gap:8px" role="status"></div>
     <form id="meForm" style="display:grid;gap:12px">
@@ -1166,6 +1168,7 @@ function openMedEdit(m, after) {
  * replaces it. The photos are kept with the client's documents (kind "medicine").
  */
 // Phone photos are made smaller (longest side 2000 px, JPEG) so they upload quickly and the AI can read them.
+const BOX_FLAG = "Medicine box doesn't match the chart: ";
 const norm2 = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9.]/g, "");
 async function shrinkPhoto(file) {
   if (!/^image\//.test(file.type)) return file;
@@ -1204,7 +1207,7 @@ function openBoxCheck(m, after) {
       // Raised even if this sheet was closed meanwhile (same client); once while it's still open.
       let flagged = false;
       if (wrong && session && session.client && session.client.id === cid) {
-        const title = `Medicine box doesn't match the chart: ${medName(m)}`.slice(0, 190);
+        const title = `${BOX_FLAG}${medName(m)}`.slice(0, 190);
         if (!S.flags.some((x) => x.status === "open" && x.title === title)) {
           const detail = (r.sameMedicine === "no" ? "The box looks like a different medicine or strength. " : "") + diffs.map((d) => `${d.what}: box says "${d.box}", chart says "${d.chart}"`).join("; ");
           const f = { id: uid(), ts: Date.now(), kind: "follow_up", title, detail: (detail.slice(0, 1800) + ". Checked with a photo; check with the pharmacist or GP."), status: "open", noteId: null };
@@ -2852,8 +2855,20 @@ const attnRowHTML = (f) => `<button class="attn-row" data-flag="${esc(f.id)}"><s
   <span class="body"><strong>${esc(f.title)}</strong><span class="tiny muted">${f.kind === "incident" ? "Incident" : "To note"} · ${esc(dayLabel(f.ts))} ${fmtTime(f.ts)}${f.status === "resolved" ? " · resolved" : ""}</span></span>${ICON.chev}</button>`;
 function openFlag(id) {
   const f = S.flags.find((x) => x.id === id); if (!f) return;
+  // A box check that didn't match: the medicine it was about, so the chart can be corrected from here.
+  const boxMed = f.title.startsWith(BOX_FLAG) && cloudOn() ? medsState().list.find((m) => !m.stoppedAt && f.title === `${BOX_FLAG}${medName(m)}`.slice(0, 190)) : null;
   const s = sheet(`${sheetHead(f.kind === "incident" ? "Incident" : "To note")}${flagHTML(f, false)}
-    ${f.status === "open" ? '<button class="btn primary block" id="flResolve">Mark as resolved</button>' : ""}`);
+    ${boxMed && f.status === "open" ? `<button class="btn primary block" id="flMedFix">Correct the medicine on the chart</button><p class="tiny muted" style="margin:-4px 0 0">Check the box or prescription first: correct the chart only if the chart is wrong. If the box is wrong, keep it aside and ask the pharmacist or GP.</p>` : ""}
+    ${f.status === "open" ? `<button class="btn ${boxMed ? "secondary" : "primary"} block" id="flResolve">Mark as resolved</button>` : ""}`);
+  if ($("#flMedFix", s.root)) $("#flMedFix", s.root).onclick = () => {
+    if (!medsSignedOff()) { s.close(); return openMeds("list"); } // the list explains a missing sign-off
+    s.close();
+    openMedEdit(boxMed, () => {
+      // Corrected: the flag is resolved with a reason; the earlier version stays in the medicine's history.
+      const cur = S.flags.find((x) => x.id === id);
+      if (cur && cur.status === "open") { Object.assign(cur, { status: "resolved", resolvedTs: Date.now(), resolvedBy: stampId(), resolvedNote: "Chart corrected to match the box" }); touch(cur); save(); render(); }
+    }, `<strong>The box check found:</strong> ${esc(f.detail || "")} Change what's wrong, then say why (for example "Corrected to match the box: typed 500gm instead of 500mg").`);
+  };
   if ($("#flResolve", s.root)) $("#flResolve", s.root).onclick = () => {
     const cur = S.flags.find((x) => x.id === id); s.close();
     if (!cur) return toast("This flag is no longer on this phone");
@@ -3850,7 +3865,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       }
       scheduleSync(); dropPending(pending);
       s.close(); render();
-      if (autoSave) openSavedNote(id, { unclear: draft.unclear || [], gaps: draft.record_gaps || [], lostAt, lockedAt, tasksDone: draft.tasks_done || [] });
+      if (autoSave) openSavedNote(id, { unclear: draft.unclear || [], gaps: draft.flags.some((f) => f.kind === "incident") ? draft.record_gaps || [] : [], lostAt, lockedAt, tasksDone: draft.tasks_done || [] });
       const inc = draft.flags.filter((f) => f.kind === "incident").length;
       // The carer's first note of this shift: remind them to hand over at the end of it.
       const firstOfShift = !extra && shiftNotes().filter((n) => n.carerId === stampId()).length === 1;
