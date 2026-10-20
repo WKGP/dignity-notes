@@ -1768,6 +1768,14 @@ let lastAgreed = "";
 const agreedSelectHTML = (id, v) => `<label class="f">Who agreed to this?<select id="${id}"><option value="" ${v ? "" : "selected"}>Choose…</option>${Object.entries(AGREED_LABEL).map(([k, l]) => `<option value="${k}" ${v === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>`;
 const URGENCY_LABEL = { urgent: "Urgent", important: "Important", non_urgent: "Non urgent" };
 const DOC_KIND_LABEL = { respect: "Emergency care plan (ReSPECT, DNACPR, Advance Care Directive)", risk: "Risk assessment", care_plan: "Care plan", medicine: "Medicine label, prescription or box photo", other: "Other document" };
+// Care plan wording with "- " lines shown as a proper list (Sam, 2026-10-20).
+function planTextHTML(t) {
+  if (!t || !t.trim()) return "No details written yet.";
+  let out = "", list = [];
+  const flush = () => { if (list.length) { out += `<ul style="margin:4px 0;padding-left:18px">${list.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`; list = []; } };
+  for (const line of t.split("\n")) { const m = line.match(/^\s*[-•*]\s+(.*)$/); if (m) list.push(m[1]); else { flush(); if (line.trim()) out += `<span style="display:block">${esc(line)}</span>`; } }
+  flush(); return out;
+}
 const plan = () => (S.plan && Array.isArray(S.plan.sections) ? S.plan : { sections: [], docs: [] });
 const planDocs = () => (S.plan && Array.isArray(S.plan.docs) ? S.plan.docs : []);
 const respectDoc = () => planDocs().find((d) => d.kind === "respect");
@@ -1947,7 +1955,7 @@ function openPlan() {
   const p = plan(), docs = planDocs(), r = respectDoc();
   const s = sheet(`${sheetHead(`Care plan · ${esc(S.client.name)}`)}
     ${r ? `<button class="btn primary block" data-opendoc="${esc(r.id)}">Emergency care plan</button>` : ""}
-    ${p.sections.length ? [...p.sections].sort((a, b) => ({ urgent: 0, important: 1 }[a.urgency] ?? 2) - ({ urgent: 0, important: 1 }[b.urgency] ?? 2)).map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}${x.agreed === "pending" ? ' <span class="chip follow">To check with them</span>' : ""}</summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "No details written yet.")}</p>${x.agreed ? `<p class="tiny muted" style="margin:6px 0 0">${esc(AGREED_LABEL[x.agreed])}${x.agreed !== "pending" && x.agreedAt ? " · " + fmtDay(x.agreedAt) : ""}</p>` : ""}</details>`).join("")
+    ${p.sections.length ? [...p.sections].sort((a, b) => ({ urgent: 0, important: 1 }[a.urgency] ?? 2) - ({ urgent: 0, important: 1 }[b.urgency] ?? 2)).map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}${x.agreed === "pending" ? ' <span class="chip follow">To check with them</span>' : ""}</summary><p class="small" style="margin:8px 0 0">${planTextHTML(x.text)}</p>${x.agreed ? `<p class="tiny muted" style="margin:6px 0 0">${esc(AGREED_LABEL[x.agreed])}${x.agreed !== "pending" && x.agreedAt ? " · " + fmtDay(x.agreedAt) : ""}</p>` : ""}</details>`).join("")
       : '<div class="empty">No sections yet.</div>'}
     <div class="card" style="box-shadow:none;display:grid;gap:6px"><h3 style="font-size:17px;margin:0">Shift tasks</h3>
       ${planTasks().length ? planTasks().map((t) => `<div class="small"><strong>${esc(t.title)}</strong> <span class="muted">· ${esc(periodLabel(t.period))}${t.days.length ? " · " + t.days.map((d) => DAY_NAMES[d]).join(", ") : ""}</span></div>`).join("") : '<div class="small muted">No tasks yet.</div>'}
@@ -3153,11 +3161,13 @@ function sheet(html, { onClose, guard } = {}) {
 // Two-tap confirm: the first tap turns the button into "Tap again to discard".
 function confirmInline(btn, action, label = "Tap again to confirm") {
   if (!btn || btn.dataset.armed) return action();
-  btn.dataset.armed = "1"; const old = btn.innerHTML, oldAria = btn.getAttribute("aria-label");
-  btn.innerHTML = `<span style="font-size:13px;font-weight:700;color:var(--record);white-space:nowrap">${esc(label)}</span>`;
+  btn.dataset.armed = "1"; const old = btn.innerHTML, oldAria = btn.getAttribute("aria-label"), oldBg = btn.style.background, oldCol = btn.style.color;
+  // Dark text on amber, so it reads on any button (orange on purple couldn't be read: Sam, 2026-10-18).
+  btn.innerHTML = `<span style="font-size:14px;font-weight:700;white-space:normal">${esc(label)}</span>`;
+  btn.style.background = "#ffd27a"; btn.style.color = "#1d1a22";
   if (oldAria !== null) btn.setAttribute("aria-label", label);
   btn.style.width = "auto";
-  setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.innerHTML = old; btn.style.width = ""; if (oldAria !== null) btn.setAttribute("aria-label", oldAria); } }, 3000);
+  setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.innerHTML = old; btn.style.width = ""; btn.style.background = oldBg; btn.style.color = oldCol; if (oldAria !== null) btn.setAttribute("aria-label", oldAria); } }, 3000);
 }
 const sheetHead = (title) => `<div class="sheet-h"><h2>${title}</h2><button class="icon-btn" data-close aria-label="Close">${ICON.close}</button></div>`;
 
