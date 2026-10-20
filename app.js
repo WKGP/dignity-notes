@@ -250,7 +250,7 @@ const cloudOn = () => !!(session && session.token && !session.local && session.r
 // records from other phones are displayed here.
 const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SYNC_SHAPES = {
-  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", heardBy: "str:10", amends: "id", auto: "num", extra: "num", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
+  note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", phoneHeard: "str:30000", heardBy: "str:10", amends: "id", auto: "num", extra: "num", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
   flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", raisedBy: "id", resolvedNote: "str:1000", resolvedTs: "num", resolvedBy: "id" } },
   task: { req: ["ts", "taskId", "day", "status"], f: { ts: "num", taskId: "str:40", title: "str:120", day: "str:10", period: ["morning", "afternoon", "evening", "night", "any"], status: ["done", "not_done"], reason: "str:300", by: "id", noteId: "id" } },
   dose: { req: ["ts", "medId", "day", "slot", "code"], f: { ts: "num", medId: "id", med: "str:200", day: "str:10", slot: "str:8", code: ["T", "P", "R", "NT", "NR", "D", "C", "M", "E", "O", "V"], amount: "str:40", reason: "str:300", prnFor: "str:200", note: "str:500", corrects: "id", outcomeOf: "id", outcome: "str:200", by: "id", byName: "str:60" } },
@@ -2964,6 +2964,7 @@ function renderToday() {
       ${activeTransfer() ? `<button class="tile on" id="ctaBack">${ICON.out}Back in care</button>` : `<button class="tile" id="ctaOut">${ICON.out}Out with someone</button>`}
     </div>
     ${fbQuestionsHTML()}
+    ${voiceCardHTML()}
     ${planProgressHTML()}
     ${familyReadyHTML()}
     <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="count ${attn.length ? "" : "calm"}">${attn.length}</span></div>
@@ -2992,7 +2993,7 @@ function renderToday() {
   $("#qPlan").onclick = () => openPlan();
   if ($("#plGuideGo")) $("#plGuideGo").onclick = () => openPlanGuide();
   if ($("#emBtn")) $("#emBtn").onclick = () => (emergForm() ? openEmergency() : openEmergencyEdit());
-  bindStorageBanner(v); bindCatchup(v);
+  bindStorageBanner(v); bindCatchup(v); bindVoiceCard(v);
   $("#addEvent").onclick = () => openEventSheet();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
   if ($("#ctaBack")) $("#ctaBack").onclick = () => openReturnSheet();
@@ -3528,7 +3529,7 @@ function renderLog() {
         <div class="chips">${n.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>
         <details ${logOpen ? "open" : ""}><summary>${n.audioId ? "Recording and words" : "Words"}</summary>
           ${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}"></audio>` : ""}
-          ${n.heard ? `<p class="small muted" style="margin:8px 0 0"><strong>${n.heardBy === "relay" ? "Speech-to-text heard" : "The phone heard"}:</strong> ${esc(n.heard)}</p>
+          ${n.heard ? `<p class="small muted" style="margin:8px 0 0"><strong>${n.heardBy === "relay" ? "Speech-to-text heard" : "The phone heard"}:</strong> ${esc(n.heard)}</p>${n.phoneHeard ? `<p class="small muted" style="margin:6px 0 0"><strong>The phone heard (live preview):</strong> ${esc(n.phoneHeard)}</p>` : ""}
           <p class="small muted" style="margin:6px 0 0"><strong>${n.auto ? "After remembered word fixes" : "Checked by the carer"}:</strong> ${esc(n.transcript)}</p>` : `<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p>`}
            <p class="tiny muted" style="margin:6px 0 0">${n.auto ? `Saved automatically at ${fmtTime(n.approvedTs || n.ts)} from ${esc(carer(n.carerId, n.carerName).name)}'s recording. The note was written by the app and not checked before saving; the words and recording above are what was said.` : `Approved by ${esc(carer(n.carerId, n.carerName).name)} at ${fmtTime(n.approvedTs || n.ts)}`}</p></details>
          ${n.amends ? "" : S.notes.filter((x) => x.amends === n.id && x.id !== n.id).sort((x, y) => x.ts - y.ts).map((x) => `<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:8px">
@@ -3853,7 +3854,8 @@ function openSettings() {
       <div class="list" id="stDict"></div></div>
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Your accent</h3>
       <label class="f">The phone turns your speech into words more accurately when it knows your accent<select id="stAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
-      <p class="tiny muted" style="margin:0">${session.local ? "Saved on this phone only." : "Saved on your account, so it follows you to any phone you sign in on."}</p></div>
+      <p class="tiny muted" style="margin:0">${session.local ? "Saved on this phone only." : "Saved on your account, so it follows you to any phone you sign in on."}</p>
+      ${session.local || isFamily() || !cloudOn() ? "" : `<button class="btn secondary" id="stVoice">Voice set-up (about 2 minutes)</button><p class="tiny muted" style="margin:-4px 0 0">${voiceSetupState() && voiceSetupState().done ? `Done ${esc(dayLabel(voiceSetupState().done).toLowerCase())}. Do it again any time, for example for a new client's name.` : "Read a few sentences so the app learns the words it mishears in your voice."}</p>`}</div>
     <button class="btn ghost" id="stPrivacy">Read the privacy notice</button>
     <div class="card small" style="display:grid;gap:6px"><h3 style="font-size:17px">About</h3>
       <div>App version <strong id="abApp">checking…</strong></div>
@@ -3874,6 +3876,7 @@ function openSettings() {
     $("#stDict", s.root).querySelectorAll("[data-forget]").forEach((b) => (b.onclick = () => { forgetWord(b.dataset.forget); drawDict(); toast("Removed"); }));
   };
   drawDict();
+  if ($("#stVoice")) $("#stVoice").onclick = () => { s.close(); openVoiceSetup(); };
   $("#stAccent").onchange = (e) => { setSpeechLang(e.target.value); toast("Accent saved. It follows you to any phone you sign in on."); };
   $("#stTest").onclick = async () => {
     const m = $("#stMsg"); m.textContent = "Checking…"; m.style.color = "";
@@ -4092,6 +4095,143 @@ function noteFixesUsed(keys) {
 function forgetWord(from) { const d = loadDict(); delete d[dictNorm(from)]; saveDict(d); }
 // Spellings to suggest to the AI (data, not instructions): the most used fixes.
 const dictVocabulary = () => { const d = loadDict(); return [...new Set(Object.values(d).sort((a, b) => (b.used || 0) - (a.used || 0)).map((e) => e.to))].slice(0, 40); };
+/* ---------- better speech to text, and a voice set-up (Sam, 2026-10-20) ----------
+ * Each recording is turned into words by the relay's speech-to-text (Whisper) whenever there's signal;
+ * the phone's own live words are the preview and the fallback. Whisper gets spelling hints: the
+ * client's and carers' names, the medicines on the chart, common care words, and this person's own
+ * remembered words. The speech engine itself can't be trained on one voice; the voice set-up (read a
+ * few sentences once) finds the words it gets wrong for this person and remembers the fixes.
+ */
+const CARE_WORDS = ["Zimmer frame", "commode", "continence pad", "MAR chart", "Cavilon cream", "catheter", "sacrum"];
+function speechHints() {
+  const client = (S.client && S.client.name) || "the client";
+  const names = [...new Set([client, ...roster().map((c) => c.name)].filter(Boolean).map((n) => String(n).split(/\s+/)[0]))]; // first names only
+  const meds = cloudOn() ? [...new Set(medsState().list.filter((m) => !m.stoppedAt).map((m) => m.name).filter(Boolean))].slice(0, 15) : [];
+  const words = [...new Set([...dictVocabulary(), ...CARE_WORDS])].slice(0, 30);
+  return [`A care note about ${client}.`, `People: ${names.join(", ")}.`, meds.length ? `Medicines: ${meds.join(", ")}.` : "", `Words: ${words.join(", ")}.`].filter(Boolean).join(" ").slice(0, 600);
+}
+const VOICE_KEY = () => "dignitynotes.voicesetup." + (session ? session.username : "");
+const voiceSetupState = () => { try { return JSON.parse(localStorage.getItem(VOICE_KEY()) || "null"); } catch { return { done: 1 }; } };
+const setVoiceSetup = (v) => { try { localStorage.setItem(VOICE_KEY(), JSON.stringify(v)); } catch {} };
+// Offered on Today until done or put off (a week at a time).
+const voiceCardHTML = () => {
+  if (!session || session.local || isFamily() || !cloudOn() || !navigator.mediaDevices) return "";
+  const v = voiceSetupState(); if (v && (v.done || (v.later && Date.now() < v.later))) return "";
+  return `<div class="card" style="display:grid;gap:8px"><div class="card-h"><h3>Help the app hear you</h3></div>
+    <p class="small" style="margin:0">Read 8 short sentences aloud (about 2 minutes, somewhere quiet). The app finds the names and words it mishears in your voice and fixes them from then on.</p>
+    <div class="row" style="gap:8px"><button class="btn primary" data-voice="go">Start the voice set-up</button><button class="btn ghost" data-voice="later">Not now</button></div></div>`;
+};
+function bindVoiceCard(v) {
+  v.querySelectorAll("[data-voice]").forEach((b) => (b.onclick = () => { if (b.dataset.voice === "later") { setVoiceSetup({ later: Date.now() + 7 * 864e5 }); render(); } else openVoiceSetup(); }));
+}
+function voiceSentences() {
+  const c = (S.client && S.client.name) || "Nana";
+  const others = roster().map((r) => r.name).filter((n) => n && n !== session.name);
+  const meds = cloudOn() ? [...new Set(medsState().list.filter((m) => !m.stoppedAt).map((m) => m.name).filter(Boolean))] : [];
+  const out = [
+    [`${c} had porridge and a cup of tea at breakfast.`, [c, "porridge"]],
+    [`I walked ${c} to the bathroom with the Zimmer frame.`, [c, "Zimmer frame"]],
+    [`${c} used the commode overnight and the continence pad was dry.`, ["commode", "continence pad"]],
+    [`I put Cavilon cream on the red area on the sacrum.`, ["Cavilon cream", "sacrum"]],
+    [`Small bruise on the left forearm, no skin tear.`, ["bruise", "forearm", "skin tear"]],
+  ];
+  for (const m of meds.slice(0, 2)) out.push([`Gave ${m} at eight o'clock, as on the MAR chart.`, [m, "MAR chart"]]);
+  if (others[0]) out.push([`Handed over to ${others[0]} at the end of my shift.`, [others[0]]]);
+  out.push([`${c} drank about a litre today and refused the afternoon drink.`, [c, "litre"]]);
+  return out.slice(0, 8);
+}
+// The words in what was heard that stand for a term in the sentence that was read, or null if it was
+// heard right. The heard words are lined up with the sentence (longest common run of words), and only
+// the words between the matched neighbours of the term count: never a nearby word that happens to look
+// alike. Never everyday words, numbers or sides, never a plural or a small variation.
+function wordPairs(A, B) {
+  const n = A.length, m = B.length, L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n && j < m) { if (A[i] === B[j]) { out.push([i, j]); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) i++; else j++; }
+  return out;
+}
+function misheardAs(term, heard, sentence = term) {
+  const low = (x) => tokens(x).map((w) => w.toLowerCase());
+  const T = low(term), Sx = low(sentence), H = low(heard);
+  if (!T.length || !H.length || ` ${H.join(" ")} `.includes(` ${T.join(" ")} `)) return null;
+  let p = -1; for (let k = 0; k + T.length <= Sx.length; k++) if (Sx.slice(k, k + T.length).join(" ") === T.join(" ")) { p = k; break; }
+  if (p < 0 || Sx.length * H.length > 40000) return "";
+  const pairs = wordPairs(Sx, H), q = p + T.length;
+  const before = pairs.filter(([a]) => a < p).pop(), after = pairs.find(([a]) => a >= q);
+  const span = H.slice(before ? before[1] + 1 : 0, after ? after[1] : H.length);
+  if (!span.length || span.length > 3 || span.join(" ") === T.join(" ")) return "";
+  if (span.some((w) => DICT_COMMON.has(w) || DICT_BLOCK.has(w) || /\d/.test(w))) return "";
+  return isMishearing(span, tokens(term), 0.6) ? span.join(" ") : "";
+}
+// A short recording for the set-up (not saved anywhere): microphone on until stop() is called.
+async function recordClip() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  let mr; try { mr = new MediaRecorder(stream); } catch (e) { stream.getTracks().forEach((t) => t.stop()); throw e; }
+  const chunks = [];
+  mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  mr.start();
+  const blob = () => new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+  // Some phones never say the recorder stopped: finish after 2 seconds anyway, as the main recorder does.
+  return { stop: () => new Promise((r) => { let done = false; const end = () => { if (done) return; done = true; stream.getTracks().forEach((t) => t.stop()); r(blob()); }; mr.onstop = end; try { mr.stop(); } catch { end(); } setTimeout(end, 2000); }), cancel: () => { try { mr.stop(); } catch {} stream.getTracks().forEach((t) => t.stop()); } };
+}
+function openVoiceSetup() {
+  if (!navigator.onLine) return toast("The voice set-up needs signal. Try again when you're connected.");
+  const list = voiceSentences(), found = new Map(); let i = 0, clip = null, results = [];
+  const s = sheet(`${sheetHead("Voice set-up")}<div id="vsBody" style="display:grid;gap:12px"></div>`, { onClose: () => { if (clip) clip.cancel(); } });
+  const body = $("#vsBody", s.root);
+  const step = () => {
+    const [text] = list[i];
+    body.innerHTML = `<p class="small muted" style="margin:0">Sentence ${i + 1} of ${list.length}. Tap Record, read it aloud as you'd normally speak, then tap Stop.</p>
+      <div class="card" style="box-shadow:none;font-size:20px;line-height:1.4;padding:14px">${esc(text)}</div>
+      <button class="btn primary block" id="vsRec">${ICON.mic} Record</button>
+      <div class="small" id="vsMsg" role="status"></div>
+      <div class="row" style="gap:8px"><button class="btn ghost" id="vsSkip">Skip this one</button></div>`;
+    $("#vsSkip", body).onclick = () => next();
+    $("#vsRec", body).onclick = async (e) => {
+      const b = e.currentTarget;
+      if (!clip) {
+        if (b.disabled) return; b.disabled = true;
+        let c; try { c = await recordClip(); } catch { b.disabled = false; return ($("#vsMsg", body).textContent = "The microphone isn't available. Allow it for Dignity Notes in the phone's settings."); }
+        if (!s.root.isConnected || !b.isConnected) { c.cancel(); return; } // closed or moved on while asking
+        clip = c; b.disabled = false;
+        b.innerHTML = "Stop"; $("#vsMsg", body).textContent = "Listening… read the sentence, then tap Stop.";
+        return;
+      }
+      b.disabled = true; const blob = await clip.stop(); clip = null;
+      $("#vsMsg", body).textContent = "Checking what was heard…";
+      let heard = "";
+      try { heard = blob.size > 2000 ? await serverWords(blob) : ""; } catch (err) { $("#vsMsg", body).textContent = err.message || "Couldn't check it just now."; b.disabled = false; b.innerHTML = `${ICON.mic} Try again`; return; }
+      if (!heard) { $("#vsMsg", body).textContent = "Nothing was heard. Try again, a little closer to the phone."; b.disabled = false; b.innerHTML = `${ICON.mic} Try again`; return; }
+      const terms = list[i][1].filter(Boolean), wrong = [];
+      for (const t of terms) { const w = misheardAs(t, heard, list[i][0]); if (w) { wrong.push([w, t]); if (!found.has(w)) found.set(w, t); } }
+      results.push({ text: list[i][0], heard, wrong });
+      $("#vsMsg", body).innerHTML = `<strong>Heard:</strong> ${esc(heard)}<br>${wrong.length ? `To fix: ${wrong.map(([w, t]) => `"${esc(w)}" means "${esc(t)}"`).join(", ")}` : "✓ Every name and word was heard right."}`;
+      b.disabled = false; b.innerHTML = i + 1 < list.length ? "Next sentence" : "See the results"; b.onclick = () => next();
+    };
+  };
+  const next = () => { if (clip) { clip.cancel(); clip = null; } i++; if (i < list.length) step(); else finish(); };
+  const finish = () => {
+    const fixes = [...found].map(([from, to]) => ({ from, to }));
+    body.innerHTML = `<p class="small" style="margin:0">${results.length ? `${results.length} sentence${results.length === 1 ? "" : "s"} read.` : "No sentences were read."} ${fixes.length ? "These were misheard. Ticked ones are fixed automatically in your notes from now on:" : results.length ? "Every name and word was heard right: nothing to fix." : ""}</p>
+      ${fixes.map((f, k) => `<label class="check"><input type="checkbox" data-vfix="${k}" checked><span>"${esc(f.from)}" → <strong>${esc(f.to)}</strong></span></label>`).join("")}
+      <label class="f">Your accent<select id="vsAccent">${ACCENTS.map(([c, n]) => `<option value="${c}" ${c === speechLang() ? "selected" : ""}>English (${n})</option>`).join("")}</select></label>
+      <p class="tiny muted" style="margin:0">Fixes are kept under My words in Settings, where you can remove any. Correcting a word on the Saved screen adds more.</p>
+      <button class="btn primary block" id="vsDone">Save</button>`;
+    $("#vsDone", body).onclick = () => {
+      const keep = fixes.filter((_, k) => $(`[data-vfix="${k}"]`, body).checked);
+      rememberFixes(keep);
+      if ($("#vsAccent", body).value !== speechLang()) setSpeechLang($("#vsAccent", body).value);
+      setVoiceSetup({ done: Date.now(), fixes: keep.length });
+      s.close(); render(); toast(keep.length ? `${keep.length} word${keep.length === 1 ? "" : "s"} will be fixed automatically` : "Voice set-up done");
+    };
+  };
+  body.innerHTML = `<p class="small" style="margin:0">You'll read ${list.length} short sentences with ${esc((S.client && S.client.name) || "the client")}'s name, the carers' names, medicines and everyday care words. The app checks what it heard and remembers fixes for the words it gets wrong in your voice.</p>
+    <p class="small" style="margin:0">Somewhere quiet, speaking as you normally would. Nothing you read is saved as a note or kept.</p>
+    <button class="btn primary block" id="vsStart">Start</button>`;
+  $("#vsStart", body).onclick = step;
+}
+
 
 /* ---------- speech accent ----------
  * The phone's speech recognition works much better when it knows the speaker's accent.
@@ -4223,9 +4363,14 @@ function drawLive() {
     : `<span class="interim">${rec.speechOK ? "Your words will appear here as you speak…" : "Live words aren't available in this browser. Your recording is still being kept."}</span>`;
 }
 // Words from a recording, worked out on the relay (Cloudflare speech-to-text). Empty when offline or not set up.
-async function serverWords(blob, signal) {
+// Do two versions of what was said mostly agree? (Share of the speech-to-text's words the phone heard too.)
+function agreesWith(a, b) {
+  const A = tokens(a).map((w) => w.toLowerCase()), B = new Set(tokens(b).map((w) => w.toLowerCase()));
+  return A.length > 0 && A.filter((w) => B.has(w)).length / A.length >= 0.5;
+}
+async function serverWords(blob, signal, timeout = 60000) {
   if (!session || session.local || !session.token || !navigator.onLine || !relayBase()) return "";
-  const r = await syncFetch("/transcribe", { signal, headers: { "Content-Type": blob.type || "application/octet-stream", "X-Lang": speechLang().slice(0, 2).toLowerCase(), "X-Hint": encodeURIComponent(`A care note about ${(S.client && S.client.name) || "the client"}.`) }, body: blob });
+  const r = await syncFetch("/transcribe", { signal, headers: { "Content-Type": blob.type || "application/octet-stream", "X-Lang": speechLang().slice(0, 2).toLowerCase(), "X-Hint": encodeURIComponent(speechHints()) }, body: blob, timeout });
   return String((await r.json()).text || "").trim();
 }
 
@@ -4257,7 +4402,7 @@ async function resumePending() {
     }
     if (appBusy() || !(S.pending || []).some((x) => x.id === p.id)) return; // something opened meanwhile: try later
     toast("Finishing a recording that wasn't saved");
-    openReview({ transcript: words, blob, pending: p, byRelay, amends: p.amends, lostAt: p.lostAt, lockedAt: p.lockedAt });
+    openReview({ transcript: words, blob, pending: p, byRelay, amends: p.amends, lostAt: p.lostAt, lockedAt: p.lockedAt, phoneWords: p.phoneWords || "" });
   } finally { resumingPending = false; }
 }
 
@@ -4280,15 +4425,22 @@ function stopRecording(cancel) {
     // Closed (discarded) or a new recording started while the recording was being stored.
     if (rec.cancelled && gen === rec.gen) { dropPending(pending); if (pending && pending.audioId) audioDB.del([pending.audioId]); rec.finishing = false; return; }
     if (gen !== rec.gen) return; // kept, and finished later
-    let transcript = (rec.final + " " + rec.interim).trim(), lostAt = rec.speechLostAt && rec.final ? rec.speechLostAt : 0, byRelay = false, serverError = "";
-    // The phone heard nothing, or stopped listening part-way (common on iPhone Home Screen apps and some
-    // Android phones): turn the whole recording into words with the relay's speech-to-text instead.
-    // If that returns nothing, any words the phone did catch are kept.
-    if (blob && (!transcript || rec.speechLostAt) && !rec.skipServer) {
+    let transcript = (rec.final + " " + rec.interim).trim(), lostAt = rec.speechLostAt && rec.final ? rec.speechLostAt : 0, byRelay = false, serverError = "", phoneWords = "";
+    // With signal, the relay's speech-to-text (Whisper, with names and medicines as spelling hints) turns
+    // the whole recording into words: more accurate than the phone's, especially with accents (Sam,
+    // 2026-10-20). Without signal, or if it returns nothing, the phone's own words are kept.
+    if (blob && (!transcript || rec.speechLostAt || (cloudOn() && navigator.onLine)) && !rec.skipServer) {
       const h = $("#recHint"); if (h) h.textContent = "Turning your recording into words… (or tap Type instead)";
       rec.abort = new AbortController();
-      try { const t = await serverWords(blob, rec.abort.signal); if (t) { transcript = t; lostAt = 0; byRelay = true; } }
-      catch (e) { if (!rec.skipServer && !rec.cancelled) serverError = e.message || ""; }
+      // When the phone already has the words, wait less: on a weak signal its words are used instead.
+      const had = !!transcript && !rec.speechLostAt;
+      try {
+        const t = await serverWords(blob, rec.abort.signal, had ? 20000 : 60000);
+        // Whisper can invent words over silence or noise (even a medicine from the hints): when the phone
+        // heard the note, Whisper's words are used only if most of them are the phone's words too.
+        if (t && (!had || agreesWith(t, transcript))) { phoneWords = transcript; transcript = t; lostAt = 0; byRelay = true; }
+      }
+      catch (e) { if (!rec.skipServer && !rec.cancelled && !had) serverError = e.message || ""; }
       rec.abort = null;
       if (rec.cancelled || gen !== rec.gen) { // closed (discarded), or a new recording started (kept: finished later)
         if (gen === rec.gen) rec.finishing = false;
@@ -4297,8 +4449,8 @@ function stopRecording(cancel) {
       }
     }
     rec.finishing = false;
-    if (pending) { pending.transcript = transcript; pending.byRelay = byRelay; pending.lostAt = lostAt; pending.triedServer = true; saveLocal(); }
-    openReview({ transcript, blob, lostAt, lockedAt: rec.stoppedAt, byRelay, serverError, pending, amends: rec.amends });
+    if (pending) { pending.transcript = transcript; pending.byRelay = byRelay; pending.phoneWords = phoneWords; pending.lostAt = lostAt; pending.triedServer = true; saveLocal(); }
+    openReview({ transcript, blob, lostAt, lockedAt: rec.stoppedAt, byRelay, serverError, pending, amends: rec.amends, phoneWords });
   };
   const mic = $("#micBtn"); if (mic && !cancel) { mic.disabled = true; $("#recHint").textContent = "Finishing…"; }
   if (rec.media && rec.media.state !== "inactive") {
@@ -4308,7 +4460,7 @@ function stopRecording(cancel) {
   } else setTimeout(finish, 300);
 }
 
-async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, serverError, pending, amends }) {
+async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, serverError, pending, amends, phoneWords = "" }) {
   // Notes are saved as soon as they're written (Sam's request): what was said is recorded as it was,
   // and anything to correct or add is added to it afterwards, so every change leaves a trace.
   const autoSave = true;
@@ -4445,7 +4597,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       }
       const ts = (pending && pending.recordedAt) || Date.now();
       const extra = extraAssistanceNow();
-      S.notes.push({ id, ts, approvedTs: Date.now(), carerId: (pending && pending.by) || stampId(), ...(amends ? { amends } : {}), ...(autoSave ? { auto: 1 } : {}), ...(extra ? { extra: 1 } : {}), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard, ...(byRelay ? { heardBy: "relay" } : {}) } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
+      S.notes.push({ id, ts, approvedTs: Date.now(), carerId: (pending && pending.by) || stampId(), ...(amends ? { amends } : {}), ...(autoSave ? { auto: 1 } : {}), ...(extra ? { extra: 1 } : {}), transcript: finalSaid, ...(spoken && rawHeard !== finalSaid ? { heard: rawHeard, ...(byRelay ? { heardBy: "relay" } : {}) } : {}), ...(byRelay && phoneWords ? { phoneHeard: phoneWords.slice(0, 30000) } : {}), note, categories: draft.categories, ...(draft.source === "ai" && plan().sections.length ? { planSections: [...new Set(draft.plan_sections || [])].slice(0, 20) } : {}), audioId, source: draft.source });
       draft.flags.forEach((f) => S.flags.push({ id: uid(), ts, kind: f.kind, title: f.title, detail: f.detail, status: "open", noteId: id }));
       const savedNote = S.notes[S.notes.length - 1];
       S.observations = S.observations || [];
@@ -4557,9 +4709,9 @@ function openSavedNote(id, { unclear = [], background = [], gaps = [], lostAt = 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-20.20";
+const PRIVACY_VERSION = "2026-10-20.21";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 20 · 20 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 21 · 20 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -4587,7 +4739,7 @@ const PRIVACY_HTML = `
 <h3>AI note writing</h3>
 <p>When you ask the user manual a question, your question (nothing else) is sent through our relay to Anthropic so the AI can answer it from the manual. It isn't stored.</p>
 <p>When you use the feedback helper, your messages and any screenshot are also sent to Anthropic, so the helper can ask questions and write a summary for the developer. Email addresses and phone numbers are removed automatically before a report is stored.</p>
-<p><strong>Turning speech into words.</strong> While you record, your phone's own speech recognition may show your words as you speak: on an iPhone this may send your voice to <strong>Apple</strong>, and on Android to <strong>Google</strong>, under their own terms (Apple says it may use it to improve its speech recognition; you can turn this off in your phone's settings). If your phone can't turn your speech into words, the recording, with the client's first name as a spelling hint, is sent through our relay to <strong>Cloudflare</strong>'s speech-to-text service, which returns the words. This may happen outside the European Union. Our relay doesn't keep that copy; the recording is kept only as described under Care notes and recordings.</p>
+<p><strong>Turning speech into words.</strong> While you record, your phone's own speech recognition may show your words as you speak: on an iPhone this may send your voice to <strong>Apple</strong>, and on Android to <strong>Google</strong>, under their own terms (Apple says it may use it to improve its speech recognition; you can turn this off in your phone's settings). When there's signal (or if your phone can't turn your speech into words), the recording is sent through our relay to <strong>Cloudflare</strong>'s speech-to-text service, which returns the words. Spelling hints go with it: the first names of the client and their carers, the names of the client's medicines, and your saved word fixes. The voice set-up works the same way; its practice recordings aren't kept. This may happen outside the European Union. Our relay doesn't keep that copy; the recording is kept only as described under Care notes and recordings.</p>
 <p>When you ask the app to write a note, handover, summary or report (such as the falls and mobility report), the <strong>words</strong> of your note (never the recording), the client's first name, the names of the carers involved, the names of the client's care plan sections, and your saved word fixes ("My words"), are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text it sends for tidying; the note you save is stored as described under Care notes and recordings. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
 <p><strong>Writing the care plan.</strong> When you ask the app to write up a care plan section, the words you said or typed for it, the section's current wording, the client's name, and the names and pronouns of the client and their carers are sent to Anthropic in the same way. When you ask it to fill the care plan from a care plan document, a copy of that document is sent to Anthropic to be read. You check and can change everything before it's saved, and each saved version of the care plan is kept with who changed it, and who agreed to it (the client, their attorney, or not yet).</p>
 <p><strong>Reports.</strong> When a note is saved, what it says about drinks (and how much), meals, bowels, passing urine, pain, sleep, behaviour, skin, mobility and any weight or height is also kept as separate entries with the client's record in the EU, so the reports (such as fluid intake or bowels) can be made without carers writing anything twice. The words of the note are sent to Anthropic for this as part of writing the note. Carers can correct these entries; family members don't see them unless a carer shares a report with them.</p>
