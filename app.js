@@ -3895,6 +3895,29 @@ const markUnclear = (text, words) => {
   return out + esc(raw.slice(last));
 };
 // The note just saved, with anything to check, and a way to add to it (never to change it).
+// Correcting a misheard word (Sam, 2026-10-16 and 20). Saved notes never change, so the correction is
+// added underneath as a dated addition ("'cavalier' should read 'Cavilon'"), and the app can remember
+// it so the same word is fixed next time. No AI involved: it's exactly what the carer typed.
+function openWordFix(n, wrong = "", after) {
+  const target = n.amends || n.id;
+  const s = sheet(`${sheetHead("Correct a misheard word")}
+    <p class="small muted" style="margin:0">The note stays as it was saved; your correction is added underneath, with your name and the time.</p>
+    <label class="f">The word or words that are wrong<input type="text" id="wfWrong" maxlength="80" value="${esc(wrong)}" autocomplete="off" placeholder="e.g. cavalier cream"></label>
+    <label class="f">What was actually said<input type="text" id="wfRight" maxlength="80" autocomplete="off" placeholder="e.g. Cavilon cream"></label>
+    <label class="check"><input type="checkbox" id="wfLearn" checked><span>Remember this, so it's corrected next time I say it</span></label>
+    <button class="btn primary block" id="wfSave">Add the correction</button>`);
+  setTimeout(() => $(wrong ? "#wfRight" : "#wfWrong", s.root).focus(), 60);
+  $("#wfSave", s.root).onclick = () => {
+    const from = $("#wfWrong", s.root).value.trim(), to = $("#wfRight", s.root).value.trim();
+    if (!from || !to) return toast("Fill in both boxes");
+    if (from.toLowerCase() === to.toLowerCase()) return toast("The correction is the same as the word");
+    const now = Date.now(), text = `Correction: "${from}" should read "${to}".`;
+    S.notes.push({ id: uid(), ts: now, approvedTs: now, carerId: stampId(), amends: target, note: text, transcript: text, categories: [], source: "correction" });
+    if ($("#wfLearn", s.root).checked) rememberFixes([{ from, to }]);
+    save(); s.close(); render(); toast("Correction added to the note");
+    if (after) after();
+  };
+}
 function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, tasksDone = [] } = {}) {
   const n = S.notes.find((x) => x.id === id); if (!n) return;
   const original = n.amends ? S.notes.find((x) => x.id === n.amends) : null;
@@ -3914,6 +3937,8 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
       <p class="note-text" style="margin:0;background:var(--surface, #fff);border-radius:8px;padding:10px 12px;font-size:17px;line-height:1.5">${markUnclear(n.transcript, unclear)}</p></div>` : ""}
     ${gaps.length ? `<div class="warn small">For a full incident record, you haven't said ${gaps.map((g) => gapNames[g] || g).map(esc).join(", ")}. Tap <strong>Add to this note</strong> to add it.</div>` : ""}
     ${unclear.length ? "" : `<details ${lostAt || lockedAt ? "open" : ""}><summary class="small">Recording and words</summary>${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}"></audio>` : ""}<p class="small muted" style="margin:8px 0 0">${esc(n.transcript)}</p></details>`}
+    ${unclear.length ? `<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span class="small"><strong>Correct:</strong></span>${unclear.map((w, i) => `<button class="btn secondary" data-wfix="${i}" style="min-height:40px;padding:6px 12px">${esc(w)}</button>`).join("")}</div>` : ""}
+    <button class="link small" id="svFix" style="justify-self:start;min-height:40px">Correct a misheard word</button>
     <div class="row"><button class="btn secondary" id="svAdd">Add to this note</button><button class="btn ghost" id="svType">Type an addition</button></div>
     <button class="btn primary block" id="svDone">Done</button>
     <p class="tiny muted" style="margin:0;text-align:center">Saved notes aren't changed. Corrections and extra details are added underneath, with who added them and when.</p>`);
@@ -3932,6 +3957,9 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
   bindNoteMeds(s.root, n, () => { s.close(); openSavedNote(id, { unclear, gaps, lostAt, lockedAt, tasksDone }); });
   const target = n.amends || n.id; // additions always hang off the original note
   $("#svAdd", s.root).onclick = () => openRecorder({ amends: target });
+  const again = () => openSavedNote(id, { unclear, gaps, lostAt, lockedAt, tasksDone });
+  $("#svFix", s.root).onclick = () => { s.close(); openWordFix(n, "", again); };
+  s.root.querySelectorAll("[data-wfix]").forEach((b) => (b.onclick = () => { s.close(); openWordFix(n, unclear[+b.dataset.wfix], again); }));
   $("#svType", s.root).onclick = () => openReview({ transcript: "", typed: true, amends: target });
   $("#svDone", s.root).onclick = () => s.close();
 }
