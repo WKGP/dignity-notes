@@ -404,6 +404,7 @@ async function syncNow() {
       }
       if (still() && !syncState.pulled) { syncState.pulled = true; changed = true; }
     } catch (e) { errors.push(e.message); }
+    try { if (still() && (await sendMedPending())) changed = true; } catch {}
     if (still()) { await loadPlan(); syncState.error = errors[0] || ""; if (!errors.length) syncState.last = Date.now(); }
   } finally {
     syncState.busy = false;
@@ -552,7 +553,7 @@ function summaryPayload(mode, toId) {
   return {
     mode, country: clientCountry(), clientId: session && session.client ? session.client.id : "", client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
     notes: [...(mode === "handover" ? S.flags.filter((f) => f.status === "resolved" && f.resolvedTs >= shiftStart() && !isExample(f)).map((f) => ({ ts: f.resolvedTs, note: `Resolved: ${f.title}.${f.resolvedNote ? " How: " + f.resolvedNote : ""}`, carerId: f.resolvedBy, resolvedFlag: true })) : []), ...(mode === "family" ? familyNotes() : shiftNotes())].sort((a, b) => a.ts - b.ts).map((n) => { if (n.resolvedFlag) return { time: fmtTime(n.ts), carer: carer(n.carerId).name, note: n.note }; const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name + (n.extra && mode !== "family" ? ", extra assistance" : ""), note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
-    flags: [...openFlags().filter((f) => !isExample(f) && !(mode === "family" && f.kind === "incident" && !familyIncidentsOn()) && !(mode === "family" && (f.ts < Date.now() - 24 * 36e5 || MEDS_SAFETY_FLAG.test(f.title)))).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })), ...(mode === "handover" ? handoverFormFlags() : [])],
+    flags: [...openFlags().filter((f) => !isExample(f) && !(mode === "family" && f.kind === "incident" && !familyIncidentsOn()) && !(mode === "family" && (f.ts < Date.now() - 24 * 36e5 || MEDS_SAFETY_FLAG.test(f.title)))).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })), ...(mode === "handover" ? [...handoverFormFlags(), ...medPending().map((x) => ({ kind: "To note", title: `Medicine ${x.medId ? "change" : "added"} saved on this phone, not on the chart yet: ${medName(x.med)}`, detail: `${x.med.dose || ""}${x.problem ? ". Not sent: " + x.problem : ". It goes on the chart when there's signal."}` }))] : [])],
     transfers: S.transfers.filter((t) => t.outTs >= (mode === "family" ? Date.now() - 24 * 36e5 : shiftStart()) || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
     planGaps: mode === "handover" ? planGaps() : [],
     tasksMissed: mode === "handover" ? tasksMissedForHandover() : [],
@@ -759,6 +760,67 @@ function dosesForToday() {
   const now = Date.now(), from = shiftStart();
   return dosesDue(now - 24 * 36e5, now + 60 * 60000).filter((o) => o.ts >= from || !o.st.last || o.st.twice);
 }
+/* ---------- medicine changes saved without signal (Sam, 2026-10-15 and 20) ----------
+ * The medicine list lives in the cloud (one list for every carer, each change checked by someone else),
+ * so a change made with no signal is kept on this phone, for this person and client, and shown as
+ * "not on the chart yet" until it's sent. It's sent by itself when there's signal. If someone else
+ * changed that medicine meanwhile it isn't sent: the carer sees the chart as it is now and decides.
+ */
+const medPending = () => (S.medPending = S.medPending || []);
+let medPendingBusy = false;
+const MED_SAME_SKIP = new Set(["changeReason", "photoId"]);
+const medVal = (v) => JSON.stringify(typeof v === "string" ? v.trim() : Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x.trim() : x)) : v ?? "");
+const sameMed = (cur, med) => Object.keys(med).filter((k) => !MED_SAME_SKIP.has(k)).every((k) => medVal(cur[k]) === medVal(med[k]));
+async function sendMedPending() {
+  if (medPendingBusy || !cloudOn() || !navigator.onLine || !medPending().some((p) => !p.problem)) return false;
+  medPendingBusy = true; let changed = false; const key = KEY;
+  try {
+    for (const p of medPending().filter((x) => !x.problem)) {
+      if (KEY !== key) break;
+      try {
+        await syncJSON("/plan/meds/save", { client: session.client.id, id: p.medId || undefined, baseUpdatedAt: p.medId ? p.baseUpdatedAt : undefined, newId: p.medId ? undefined : p.newId, med: p.med });
+        S.medPending = medPending().filter((x) => x.id !== p.id); changed = true;
+      } catch (e) {
+        if (!e.status || e.status >= 500 || [401, 428, 429].includes(e.status)) break; // no connection, or the cloud busy or signed out: try again later
+        // Changed meanwhile, or already saved by an earlier try whose answer was lost.
+        if (e.status === 409 && p.medId) { medsState().at = 0; await loadMeds(true); const cur = medsState().list.find((m) => m.id === p.medId); if (cur && sameMed(cur, p.med)) { S.medPending = medPending().filter((x) => x.id !== p.id); changed = true; continue; } }
+        p.problem = e.status === 409 ? "Someone else changed this medicine before your change was sent." : e.message || "It couldn't be saved."; changed = true;
+      }
+      saveLocal();
+    }
+  } finally { medPendingBusy = false; }
+  if (changed && KEY === key) { medsState().at = 0; await loadMeds(true); }
+  return changed;
+}
+function medPendingHTML() {
+  const ps = medPending(); if (!ps.length || !cloudOn()) return "";
+  return `<div class="warn small" style="display:grid;gap:8px;margin-bottom:8px"><strong>Saved on this phone, not on the chart yet</strong>
+    ${ps.map((p) => `<div style="display:grid;gap:4px"><div>${p.medId ? "Change to" : "New medicine:"} <strong>${esc(medName(p.med))}</strong>, ${esc(p.med.dose || "")} · saved ${esc(dayLabel(p.ts).toLowerCase())} ${fmtTime(p.ts)}</div>
+      ${p.problem ? `<div><strong>Not sent:</strong> ${esc(p.problem)} Open it to check it against the chart as it is now.</div>` : `<div>It goes on the chart when there's signal. Until then, record doses against the chart as it is, and say in a note what you gave.</div>`}
+      <div class="row" style="gap:8px;flex-wrap:wrap">${p.problem ? `<button class="btn secondary" data-mpopen="${esc(p.id)}" style="min-height:40px">Open it</button>` : `<button class="btn secondary" data-mpsend style="min-height:40px">Send now</button>`}<button class="btn ghost" data-mpdrop="${esc(p.id)}" style="min-height:40px">Discard it</button></div></div>`).join("")}</div>`;
+}
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest && e.target.closest("[data-mpsend],[data-mpopen],[data-mpdrop]"); if (!t) return;
+  if (t.hasAttribute("data-mpsend")) {
+    if (!navigator.onLine) return toast("Still no signal: it's sent by itself when there is");
+    if (medPendingBusy) return toast("Sending it now");
+    t.disabled = true; const before = medPending().length, probs = medPending().filter((p) => p.problem).length;
+    await sendMedPending(); render();
+    const sent = before - medPending().length, newProbs = medPending().filter((p) => p.problem).length - probs;
+    return toast(sent ? `Sent: on the chart now, waiting to be checked${medPending().length ? ". Something is still waiting." : ""}` : newProbs ? "Not sent: see the message on the change" : "Couldn't send it yet: it's sent by itself when there's signal");
+  }
+  const p = medPending().find((x) => x.id === (t.dataset.mpopen || t.dataset.mpdrop)); if (!p) return;
+  if (t.dataset.mpdrop) return confirmInline(t, async () => {
+    if (navigator.onLine) { medsState().at = 0; await loadMeds(true).catch(() => {}); }
+    const there = medsState().list.find((m) => (p.medId ? m.id === p.medId : m.id === p.newId)), reached = there && sameMed(there, p.med);
+    S.medPending = medPending().filter((x) => x.id !== p.id); saveLocal(); render();
+    toast(reached ? "It was already on the chart (the answer had been lost). Removed from this phone." : "Discarded: it isn't on the chart");
+  }, "Tap again to discard it");
+  medsState().at = 0; await loadMeds(true);
+  const cur = p.medId ? medsState().list.find((m) => m.id === p.medId && !m.stoppedAt) : null;
+  if (p.medId && !cur) return toast("That medicine is no longer on the list. Discard this, or add it again.");
+  openMedEdit(cur, null, `<strong>Not sent:</strong> ${esc(p.problem)} The form shows your ${cur ? "change" : "new medicine"}${cur ? `; the chart now says ${esc(medName(cur))}, ${esc(cur.dose || "")}` : ""}. Check it against the label, then save.`, p);
+});
 function medsCardHTML() {
   const ms = medsState(), p = medsProfile(), active = ms.list.filter((m) => !m.stoppedAt);
   if (!cloudOn()) return "";
@@ -944,7 +1006,7 @@ function openMeds(tabName = "today") {
         ${m.stoppedAt || !medsSignedOff() ? "" : `<div class="row" style="gap:8px">${!m.checkedAt ? (m.mine ? (medSelfChecked(m) ? '<span class="tiny muted" style="align-self:center">You double-checked this. The next carer checks it against the label at handover.</span>' : `<span class="tiny muted" style="align-self:center;flex:1 1 100%">Someone who didn't change it should check this against the label. If you're the only carer here:</span><button class="btn primary" data-mself="${esc(m.id)}" style="flex:1 1 100%">Double-check it myself</button>`) : `<button class="btn primary" data-mcheck="${esc(m.id)}" style="flex:1 1 100%">${m.source === "verbal" && !m.writtenConfirmation ? "Written confirmation received" : "I've checked it against the label"}</button>`) : ""}
           <button class="btn secondary" data-medit="${esc(m.id)}" style="flex:1">Change</button><button class="btn ghost" data-mstop="${esc(m.id)}" style="flex:1">Stop</button></div>`}
         <button class="link small" data-mhist="${esc(m.id)}" style="justify-self:start;min-height:44px">Earlier versions</button></div>`;
-      body.innerHTML = `${medsSignedOff() ? '<button class="btn primary block" id="mdAdd">Add a medicine</button>' : `<div class="warn small">${esc(medsSignOffText())} You can read the list and record supplies; adding, changing, stopping or checking medicines needs a sign-off from an administrator (Manage people).</div>`}
+      body.innerHTML = `${medPendingHTML()}${medsSignedOff() ? '<button class="btn primary block" id="mdAdd">Add a medicine</button>' : `<div class="warn small">${esc(medsSignOffText())} You can read the list and record supplies; adding, changing, stopping or checking medicines needs a sign-off from an administrator (Manage people).</div>`}
         ${active.length ? active.map(card).join("") : '<div class="empty">No medicines on the list yet.</div>'}
         ${stopped.length ? `<details><summary class="small">Stopped recently (${stopped.length})</summary>${stopped.map(card).join("")}</details>` : ""}`;
       if ($("#mdAdd", s.root)) $("#mdAdd", s.root).onclick = () => openMedEdit(null, back("list"));
@@ -1083,8 +1145,10 @@ function parseMedTimes(text) {
 // Add or change a medicine: where it came from is required every time (never carried over from the last
 // version); a change also needs a reason.
 // note: shown at the top (e.g. the differences a box check found), so the carer can correct the entry.
-function openMedEdit(m, after, note = "") {
-  const v = m ? { ...m, source: "", sourceDetail: "", verbalFrom: "", verbalAt: "", readBack: false, verbalRepeatedTo: "" } : { times: [], route: "By mouth" };
+function openMedEdit(m, after, note = "", pend = null) {
+  // pend: a change saved on this phone without signal, shown again to check and save.
+  if (!pend && m) { pend = medPending().find((x) => x.medId === m.id) || null; if (pend) note = `${note ? note + "<br>" : ""}${pend.problem ? `<strong>Not sent:</strong> ${esc(pend.problem)} ` : ""}Your change saved on this phone (not on the chart yet) is shown.`; }
+  const v = pend ? { route: "By mouth", times: [], ...(m || {}), ...pend.med } : m ? { ...m, source: "", sourceDetail: "", verbalFrom: "", verbalAt: "", readBack: false, verbalRepeatedTo: "" } : { times: [], route: "By mouth" };
   const s = sheet(`${sheetHead(m ? "Change " + esc(m.name) : "Add a medicine")}
     <p class="small muted" style="margin:0">Copy it exactly from the pharmacy label or prescription. ${m ? "The change" : "It"} shows as not yet checked until someone else confirms it against the label. If you're the only carer, double-check it yourself afterwards; the next carer checks it at handover. Pilot: made-up details only.</p>
     ${note ? `<div class="warn small">${note}</div>` : ""}
@@ -1159,6 +1223,7 @@ function openMedEdit(m, after, note = "") {
     } catch (err) { if (msg.isConnected) msg.innerHTML = `<div class="warn small">${esc(err.message || "Couldn't read the photo. Try again, or type it in.")}</div>`; }
     b.disabled = false; e.target.value = "";
   };
+  if (pend && $s("#meWhy")) $s("#meWhy").value = pend.med.changeReason || "";
   $s("#meForm").onsubmit = async (e) => {
     e.preventDefault();
     if (!$s("#meAiOk").hidden && !$s("#meAiChk").checked) { $s("#meAiChk").focus(); return toast("Check every field against the label, then tick the box"); }
@@ -1171,9 +1236,20 @@ function openMedEdit(m, after, note = "") {
       source: $s("#meSrc").value, sourceDetail: $s("#meSrcD").value, verbalFrom: $s("#meVFrom").value, verbalAt: $s("#meVAt").value, verbalRepeatedTo: $s("#meVRep").value, readBack: $s("#meVRb").checked,
       changeReason: m ? $s("#meWhy").value : "", photoId };
     const btn = e.submitter || $("#meForm button.primary", s.root); btn.disabled = true;
-    const out = await syncJSON("/plan/meds/save", { client: session.client.id, id: m ? m.id : undefined, baseUpdatedAt: m ? m.updatedAt : undefined, med }).catch(() => ({ error: "No connection. Try again when you have signal." }));
+    const newId = pend && !pend.medId ? pend.newId : uid();
+    // A change continued from one saved without signal keeps the version it was made from, so someone
+    // else's newer change is never overwritten; after "Not sent", the carer has seen the chart as it is now.
+    const base = m ? (pend && pend.medId && !pend.problem ? pend.baseUpdatedAt : m.updatedAt) : undefined;
+    const out = await syncJSON("/plan/meds/save", { client: session.client.id, id: m ? m.id : undefined, baseUpdatedAt: base, newId: m ? undefined : newId, med }).catch((err) => (err.status ? { error: err.message } : { offline: true }));
     btn.disabled = false;
+    if (out.offline) {
+      // No signal: keep it on this phone (replacing an earlier unsent change to the same medicine).
+      const keep = { id: pend ? pend.id : uid(), ts: Date.now(), medId: m ? m.id : "", baseUpdatedAt: base || 0, newId, med };
+      S.medPending = [...medPending().filter((x) => x.id !== keep.id), keep]; saveLocal();
+      s.close(); render(); return toast("No signal: saved on this phone. It goes on the chart when there's signal.");
+    }
     if (out.error) return toast(out.error);
+    if (pend) { S.medPending = medPending().filter((x) => x.id !== pend.id); saveLocal(); }
     medsState().at = 0; await loadMeds(true); s.close(); render(); toast(m ? "Changed. Ask someone else to check it against the label." : "Added. Ask someone else to check it against the label."); if (after) after();
   };
 }
@@ -2893,6 +2969,7 @@ function renderToday() {
         ${attn.length > 3 ? `<button class="link small" id="attnMore" style="margin-top:2px;min-height:44px">${attnAll ? "Show fewer" : `See all ${attn.length}`}</button>` : ""}`
         : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div>
     ${tasksCardHTML()}
+    ${medPendingHTML()}
     ${medsCardHTML()}
     ${handoverCardHTML(ho)}
     <div class="card"><div class="card-h"><h3>Coming up</h3></div>
