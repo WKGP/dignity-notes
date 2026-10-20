@@ -184,6 +184,7 @@ function loadUser() {
   if (!S.tasks) { S.tasks = []; if (S.sync) S.sync.seq = 0; }
   if (!S.observations) { S.observations = []; if (S.sync) S.sync.seq = 0; } // observations for the reports: pull them once
   if (!S.supplies) { S.supplies = []; if (S.sync) S.sync.seq = 0; } // medicine supplies received: pull them once
+  if (!S.forms) { S.forms = []; S.reviews = []; S.acks = []; if (S.sync) S.sync.seq = 0; } // forms, reviews, catch-up ticks: pull them once
   if (!S.doses) { S.doses = []; if (S.sync) S.sync.seq = 0; } // medicines chart entries: pull them once
   else { const keep = Date.now() - 70 * 864e5; S.doses = S.doses.filter((d) => d.ts > keep); } // this and last month's chart; older entries stay in the cloud // ticks for this client; an older app skipped them, so pull everything once (duplicates are ignored)
   S.onDuty = myId(); S.detached = false; // back on this client: anything kept unsent goes now
@@ -234,7 +235,7 @@ const audioDB = (() => {
  * Sync runs in the background, so it never signs anyone out or opens a screen in the middle of
  * something: if the sign-in has ended it pauses, and asks once nothing is open.
  */
-const SYNC_KINDS = { note: "notes", obs: "observations", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule", task: "tasks", message: "messages", summary: "summaries", dose: "doses", supply: "supplies" };
+const SYNC_KINDS = { note: "notes", obs: "observations", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule", task: "tasks", message: "messages", summary: "summaries", dose: "doses", supply: "supplies", form: "forms", review: "reviews", ack: "acks" };
 const DEMO_IDS = new Set(["n0", "f0", "h0", "s1", "s2", "s3", "m0"]);
 const SYNC_RECORD_MAX = 58000, SYNC_BATCH_MAX = 400000; // the relay allows 60,000 a record, 1,000,000 a request
 // When a record last changed (older records have no mt, so use their latest time).
@@ -260,6 +261,10 @@ const SYNC_SHAPES = {
   // One observation taken from a note for the specialist reports (a drink, a meal, a bowel or urinary
   // event, pain, sleep, behaviour, skin, a weight). Can be corrected later; the note itself never changes.
   obs: { req: ["ts", "noteId", "topic"], f: { ts: "num", noteId: "id", topic: ["mobility", "fluids", "food", "bowels", "urinary", "pain", "sleep", "behaviour", "skin", "weight"], words: "str:300", drink: "str:60", offeredMl: "num", drankMl: "num", portion: ["all", "most", "half", "little", "none", "unknown"], outcome: ["taken", "partly", "refused", "opened", "not_opened", "accident", "passed", "incontinent", "pad_wet", "pad_dry", "catheter"], bristol: "num", painScore: "num", where: "str:80", kg: "num", cm: "num", carerId: "id", fixedBy: "str:60", fixedAt: "num", removed: "num" } },
+  // Incident reports and skin forms (each save a new version), administrators' reviews, catch-up ticks.
+  form: { req: ["ts", "formId", "type", "data", "status"], f: { ts: "num", formId: "id", prevId: "id", type: ["incident", "skin"], noteId: "id", flagId: "id", ref: "str:20", data: "str:20000", status: ["open", "follow_up", "closed"], by: "id", byName: "str:60" } },
+  review: { req: ["ts", "formId", "notify"], f: { ts: "num", formId: "id", notify: ["yes", "no", "unsure"], why: "str:1000", candour: ["yes", "no", "unsure"], safeguarding: ["yes", "no", "unsure"], lessons: "str:1000", by: "id", byName: "str:60" } },
+  ack: { req: ["ts", "what"], f: { ts: "num", what: ["read", "skin"], since: "num", by: "id", byName: "str:60" } },
   event: { req: ["ts", "when", "label"], f: { ts: "num", when: "num", label: "str:120", detail: "str:300", by: "id" } },
   transfer: { req: ["outTs", "withWhom"], f: { outTs: "num", withWhom: "str:100", relationship: "str:100", purpose: "str:200", carerId: "id", backTs: "num", backNote: "str:2000", backCarerId: "id" } },
 };
@@ -279,6 +284,7 @@ function cleanRecord(kind, data) {
   }
   if (shape.req.some((k) => out[k] === undefined)) return null;
   if (kind === "note" && !out.categories) out.categories = [];
+  if (kind === "form") { try { const d = JSON.parse(out.data); if (!d || typeof d !== "object" || Array.isArray(d)) return null; } catch { return null; } }
   return out;
 }
 
@@ -396,6 +402,7 @@ async function syncNow() {
         si.seq = out.seq || si.seq; more = !!out.more;
         saveLocal();
       }
+      if (still() && !syncState.pulled) { syncState.pulled = true; changed = true; }
     } catch (e) { errors.push(e.message); }
     if (still()) { await loadPlan(); syncState.error = errors[0] || ""; if (!errors.length) syncState.last = Date.now(); }
   } finally {
@@ -545,7 +552,7 @@ function summaryPayload(mode, toId) {
   return {
     mode, country: clientCountry(), clientId: session && session.client ? session.client.id : "", client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
     notes: [...(mode === "handover" ? S.flags.filter((f) => f.status === "resolved" && f.resolvedTs >= shiftStart() && !isExample(f)).map((f) => ({ ts: f.resolvedTs, note: `Resolved: ${f.title}.${f.resolvedNote ? " How: " + f.resolvedNote : ""}`, carerId: f.resolvedBy, resolvedFlag: true })) : []), ...(mode === "family" ? familyNotes() : shiftNotes())].sort((a, b) => a.ts - b.ts).map((n) => { if (n.resolvedFlag) return { time: fmtTime(n.ts), carer: carer(n.carerId).name, note: n.note }; const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name + (n.extra && mode !== "family" ? ", extra assistance" : ""), note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
-    flags: openFlags().filter((f) => !isExample(f) && !(mode === "family" && f.kind === "incident" && !familyIncidentsOn()) && !(mode === "family" && (f.ts < Date.now() - 24 * 36e5 || MEDS_SAFETY_FLAG.test(f.title)))).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
+    flags: [...openFlags().filter((f) => !isExample(f) && !(mode === "family" && f.kind === "incident" && !familyIncidentsOn()) && !(mode === "family" && (f.ts < Date.now() - 24 * 36e5 || MEDS_SAFETY_FLAG.test(f.title)))).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })), ...(mode === "handover" ? handoverFormFlags() : [])],
     transfers: S.transfers.filter((t) => t.outTs >= (mode === "family" ? Date.now() - 24 * 36e5 : shiftStart()) || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
     planGaps: mode === "handover" ? planGaps() : [],
     tasksMissed: mode === "handover" ? tasksMissedForHandover() : [],
@@ -610,6 +617,7 @@ function renderFamilyHome() {
       ${sums.length ? sums.map((x) => `<div style="border-top:1px solid var(--line);padding-top:10px;margin-top:10px"><div class="tiny muted">${esc(dayLabel(x.ts))}${x.byName ? " · from " + esc(x.byName) : ""}</div><p class="note-text" style="white-space:pre-line;margin:4px 0 0">${esc(x.text)}</p></div>`).join("") : '<div class="empty">No updates shared yet. The carers share a short update when they can.</div>'}</div>
     ${coming.length ? `<div class="card"><div class="card-h"><h3>Coming up</h3></div><div class="list">${coming.map((e) => `<div class="item"><div class="when">${fmtTime(e.when)}</div><div class="body"><div><strong>${esc(e.label)}</strong></div><div class="muted small">${esc(dayLabel(e.when))}${e.detail ? " · " + esc(e.detail) : ""}</div></div></div>`).join("")}</div></div>` : ""}
     ${fv.incidents ? `<div class="card"><div class="card-h"><h3>Incidents</h3><span class="muted small">Last 14 days</span></div>${fv.incidents.length ? fv.incidents.map((f) => `<div class="flag incident"><div class="body"><strong>${esc(f.title)}</strong>${f.detail ? `<div class="small">${esc(f.detail)}</div>` : ""}<div class="tiny muted">${esc(dayLabel(f.ts))} ${fmtTime(f.ts)}${f.status === "resolved" ? " · resolved" : ""}</div></div></div>`).join("") : '<div class="empty">No incidents.</div>'}</div>` : ""}
+    ${Array.isArray(fv.reports) && fv.reports.length ? `<div class="card"><div class="card-h"><h3>Incident reports</h3><span class="muted small">Last 30 days</span></div><div style="display:grid;gap:8px">${fv.reports.map((r) => `<details><summary class="small"><strong>${esc(r.ref)}</strong> · ${esc(dayLabel(r.ts))} · ${esc(FORM_STATUS[r.status] || "")}</summary><div style="display:grid;gap:4px;margin-top:6px">${formViewHTML("incident", formData({ data: JSON.stringify(r.data || {}) }))}<div class="tiny muted">Last changed by ${esc(r.byName)}. ${internalNoteHTML()}</div></div></details>`).join("")}</div></div>` : ""}
     <div class="card"><div class="card-h"><h3>Messages</h3><span class="muted small">With ${name}'s carers</span></div>
       <div class="thread" id="fThread">${msgs.map((m) => `<div class="msg ${m.from === "family" ? "carer" : ""}"><span class="who">${esc(m.name || (m.from === "family" ? "Family" : "Carer"))} · ${esc(dayLabel(m.ts))} ${fmtTime(m.ts)}</span>${esc(m.text)}</div>`).join("") || '<div class="empty">No messages yet.</div>'}</div>
       <form class="composer" id="fMsgForm" style="margin-top:12px"><input type="text" id="fMsgText" maxlength="2000" placeholder="Write a message to the carers" aria-label="Message" autocomplete="off"><button class="btn primary" style="min-height:46px">Send</button></form>
@@ -1561,7 +1569,7 @@ function openFind() {
       <div class="list">
         <button class="btn secondary block fd-link" data-go="plan"><div class="body"><strong>Care plan</strong><div class="muted small">Needs, routines, risks and shift tasks</div></div></button>
         ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="meds"><div class="body"><strong>Medicines chart</strong><div class="muted small">Doses, the medicine list and the monthly chart</div></div></button>' : ""}
-        ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="reports"><div class="body"><strong>Reports</strong><div class="muted small">Falls, fluids, food, bowels, urine and pain, made from the notes</div></div></button>' : ""}
+        ${cloudOn() ? '<button class="btn secondary block fd-link" data-go="reports"><div class="body"><strong>Reports</strong><div class="muted small">Falls, fluids, food, bowels, urine, pain and skin, made from the notes; incident reports</div></div></button>' : ""}
         <button class="btn secondary block fd-link" data-go="contacts"><div class="body"><strong>Contacts</strong><div class="muted small">GP, pharmacy, family and others</div></div></button>
         <button class="btn secondary block fd-link" data-go="log"><div class="body"><strong>Record log</strong><div class="muted small">Every note, flag and handover</div></div></button>
         <button class="btn secondary block fd-link" data-go="handover"><div class="body"><strong>Handover</strong><div class="muted small">The latest handover</div></div></button>
@@ -1691,9 +1699,11 @@ function openResolve(id) {
   if (f.status !== "open") { render(); return toast("Already resolved"); }
   const s = sheet(`${sheetHead("Mark as resolved")}<p class="small" style="margin:0"><strong>${esc(f.title)}</strong></p>
     <label class="f">How was it resolved? (optional)<textarea id="rsWhat" rows="3" maxlength="1000" placeholder="e.g. Used the Zimmer frame and she got back to bed safely"></textarea></label>
+    ${formsForFlag(id).map((r) => `<button type="button" class="btn ghost" data-rsform="${esc(`${r.type === "incident" ? "Incident report" : "Skin integrity form"} completed (${r.ref}).`)}">${r.type === "incident" ? "Incident report" : "Skin integrity form"} completed (${esc(r.ref)})</button>`).join("")}
     <div class="row"><button class="btn ghost" id="rsMic" style="flex:0 0 auto"></button></div><div class="small" id="rsMsg" role="status"></div>
     <button class="btn primary block" id="rsGo">Mark as resolved</button>`, { onClose: () => dict.cancel() });
   const dict = dictation($("#rsWhat", s.root), $("#rsMic", s.root), (t) => ($("#rsMsg", s.root).textContent = t), { hint: "Check the words, then tap Mark as resolved.", max: 1000 });
+  s.root.querySelectorAll("[data-rsform]").forEach((b) => (b.onclick = () => { const t = $("#rsWhat", s.root); if (!t.value.includes(b.dataset.rsform)) t.value = (b.dataset.rsform + " " + t.value).trim().slice(0, 1000); }));
   $("#rsGo", s.root).onclick = async () => {
     if (dict.busy()) await dict.finish();
     const cur = S.flags.find((x) => x.id === id); if (!cur || cur.status !== "open") { s.close(); render(); return toast("Already resolved"); }
@@ -2349,6 +2359,15 @@ const REPORTS = {
       au ? ext("https://www.continence.org.au/", "Continence Foundation of Australia") : ext("https://www.nhs.uk/conditions/urinary-incontinence/", "NHS: urinary incontinence"),
       "<strong>\"Nothing recorded\" is not the same as \"didn't pass urine\".</strong> Changes in colour, smell or frequency have many causes; the report never suggests one. Drinks from the fluid report are shown for context."),
   },
+  skin: {
+    title: "Skin integrity", topic: "skin", words: /\b(skin|bruis|graze|tear|redness|sore|blister|rash|wound|pressure|cream|itch)/i,
+    about: (au) => aboutHTML("A record of what carers wrote about the skin (redness, bruises, skin tears, sore or broken skin, creams), the skin integrity forms completed, their follow-up checks, and the \"I've checked the skin\" ticks from carers catching up.",
+      "Skin damage, especially pressure damage, can develop in hours and is easier to prevent than to heal. Seeing every entry in date order shows whether a concern is new, repeating, healing or getting worse.",
+      `A GP, ${au ? "community nurse" : "district nurse"} or tissue viability nurse, the family or an agency, for example when a sore area doesn't heal.`,
+      "Before a nurse or GP visit, when a red or sore area is found, or when a new carer starts. Pressure damage is described in categories 1 to 4 (from a red patch that doesn't fade when pressed, to a very deep wound); the form records what the carer saw, never a diagnosis.",
+      au ? ext("https://www.healthdirect.gov.au/pressure-sores", "healthdirect: pressure sores") : ext("https://www.nhs.uk/conditions/pressure-sores/", "NHS: pressure ulcers (pressure sores)"),
+      "Skin integrity forms are completed by carers from a skin flag, or from this report. Deeper pressure damage (category 3 or 4, or can't tell how deep) or several sore areas may need a safeguarding referral: ask the nurse and your manager."),
+  },
   pain: {
     title: "Pain and discomfort", topic: "pain", words: /\b(pain|hurt|ache|sore|grimac|discomfort|wince)/i,
     about: (au) => aboutHTML("A record of pain or discomfort carers wrote about: what the person said, where, any score out of 10 they gave, and signs carers noticed such as grimacing or holding a body part, in the carer's words.",
@@ -2363,7 +2382,11 @@ function openReports() {
   const s = sheet(`${sheetHead("Reports · " + esc(S.client.name))}
     <p class="small muted" style="margin:0">Made from the notes carers already write, for any period. Nothing extra to fill in.</p>
     ${Object.entries(REPORTS).map(([k, r]) => `<button class="btn secondary block fd-link" data-report="${k}"><div class="body"><strong>${esc(r.title)}</strong><div class="muted small">Last 7, 14 or 30 days, or choose dates</div></div></button>`).join("")}
+    <button class="btn secondary block fd-link" id="rpInc"><div class="body"><strong>Incident reports</strong><div class="muted small">Every incident report, with its history${isAgency() ? " and review" : ""}</div></div></button>
+    <button class="btn secondary block fd-link" id="rpSkinForms"><div class="body"><strong>Skin integrity forms</strong><div class="muted small">Each skin concern and its follow-up checks</div></div></button>
     ${canEditPlan() ? '<button class="link small" id="rpCups" style="justify-self:start;min-height:40px">Cup sizes and fluid target</button>' : ""}`);
+  $("#rpInc", s.root).onclick = () => openFormList("incident");
+  $("#rpSkinForms", s.root).onclick = () => openFormList("skin");
   if ($("#rpCups", s.root)) $("#rpCups", s.root).onclick = () => { s.close(); openCups(openReports); };
   s.root.querySelectorAll("[data-report]").forEach((b) => (b.onclick = () => { s.close(); openReport(b.dataset.report); }));
 }
@@ -2447,6 +2470,17 @@ function openObsReport(kind, R, range, opts) {
     graphRows = [["Passed", ["passed"], "#2e7d32"], ["Incontinent or wet pad", ["incontinent", "pad_wet"], "#d98a00"], ["Dry pad", ["pad_dry"], "#7a7085"], ["Catheter", ["catheter"], "#3f6fb5"]].map(([l, ks, col]) => [l, (d) => all.filter((o) => day(o) === d && ks.includes(o.outcome)).length, col]);
     const fl = observations().filter((o) => o.topic === "fluids" && inRange(o.ts) && o.drankMl != null);
     if (fl.length) extraHTML = `<p class="small" style="margin:0">For context, drinks counted in this period: ${fl.reduce((a, o) => a + o.drankMl, 0)} ml over ${new Set(fl.map(day)).size} days (see the Fluid intake report).</p>`;
+  } else if (R.topic === "skin") {
+    summary.push(`Skin was written about ${n(all.length, "time", "times")}, on ${recDays.size} of the ${ds.length} days.`);
+    const sk = latestForms("skin"), open = sk.filter((r) => r.status !== "closed"), shown = sk.filter((r) => r.status !== "closed" || formVersions(r.formId).some((v) => inRange(v.ts)));
+    summary.push(open.length ? `${n(open.length, "skin concern is", "skin concerns are")} being followed up${open.some((r) => formData(r).nextReview && formData(r).nextReview <= dayKey(new Date())) ? ", and a check is due" : ""}.` : "No skin integrity form is open.");
+    const checks = (S.acks || []).filter((a) => a.what === "skin" && inRange(a.ts));
+    if (checks.length) summary.push(`"I've checked the skin" was ticked ${n(checks.length, "time", "times")} by carers catching up.`);
+    const vsIn = forms().filter((v) => v.type === "skin" && inRange(v.ts));
+    graphRows = [["Skin written about", (d) => all.filter((o) => day(o) === d).length, "#b5651d"], ["Skin form saved", (d) => vsIn.filter((v) => dayKey(new Date(v.ts)) === d).length, "#3f6fb5"]];
+    for (const v of vsIn) timeline.push({ ts: v.ts, html: `<strong class="small">Skin integrity form <button class="link small" data-openform="${esc(v.formId)}">${esc(v.ref)}</button></strong><div class="small">${v.formId === v.id ? "Started" : "Changed"} by ${esc(v.byName || "")}: ${esc(skinWhere(formData(v)))}${formData(v).status ? ` (${esc((opt(SKIN_STATUS, formData(v).status) || "").toLowerCase())})` : ""}</div>` });
+    extraHTML = `<div><h3 style="font-size:17px;margin:0 0 6px">Skin integrity forms</h3>${shown.length ? `<div style="display:grid;gap:6px">${shown.map((r) => { const d = formData(r); return `<div class="card" style="box-shadow:none;padding:10px 12px;display:grid;gap:2px;break-inside:avoid"><button class="link small" data-openform="${esc(r.formId)}" style="justify-self:start;text-align:left">${esc(r.ref)}: ${esc(skinWhere(d))}</button><div class="small">${r.status === "closed" ? "Healed or resolved" : `${esc(opt(SKIN_STATUS, d.status) || "Being followed up")}${d.nextReview ? `, next check ${esc(fmtDay(new Date(d.nextReview + "T12:00:00").getTime()))}` : ""}`} · ${(d.followups || []).length} follow-up check${(d.followups || []).length === 1 ? "" : "s"}</div></div>`; }).join("")}</div>` : `<p class="small" style="margin:0">None in this period.</p>`}
+      ${isFamily() ? "" : `<button class="btn secondary noprint" id="rpSkinNew" style="margin-top:8px">New skin check</button>`}</div>`;
   } else if (R.topic === "pain") {
     summary.push(`Pain or discomfort was written about ${n(all.length, "time", "times")}, on ${recDays.size} of the ${ds.length} days.`);
     const scored = all.filter((o) => o.painScore != null);
@@ -2484,6 +2518,7 @@ function openObsReport(kind, R, range, opts) {
       ${timeline.length ? timeline.map((t, i) => `<div class="card" style="box-shadow:none;padding:10px 12px;display:grid;gap:2px;break-inside:avoid"><div class="tiny">${t.o ? `<button class="link tiny" data-obsnote="${i}">${when(t.ts)}</button> · ${esc(who(t.o))}` : when(t.ts)}${t.o && t.o.fixedBy ? ` · corrected by ${esc(t.o.fixedBy)}` : ""}</div>${t.html}${t.o ? `<div class="tiny muted">"${esc(t.o.words)}"</div>` : ""}</div>`).join("") : `<p class="small" style="margin:0">Nothing was written about this in the period. That doesn't mean nothing happened: only that nothing was recorded.</p>`}
     </div></div>`;
   body.querySelectorAll("[data-obsnote]").forEach((b) => (b.onclick = () => { const o = timeline[+b.dataset.obsnote].o; if (byNote(o)) openSavedNote(o.noteId); }));
+  if ($("#rpSkinNew", body)) $("#rpSkinNew", body).onclick = () => openFormEdit("skin");
   if (all.length) bindReportShare(`${R.title}, ${range.label}\n\n${summary.join("\n")}\n\nMade from carers' notes.`, false);
 }
 // The parts every report shares: period, About, print, graph, and the footer.
@@ -2837,9 +2872,11 @@ function renderToday() {
   const latest = [...real(S.notes)].sort((a, b) => b.ts - a.ts)[0];
   const sched = [...S.schedule].filter((s) => s.when > Date.now() - 6 * 36e5).sort((a, b) => a.when - b.when);
   const flags = openFlags().sort((a, b) => (a.kind === "incident" ? -1 : 1) - (b.kind === "incident" ? -1 : 1) || b.ts - a.ts);
+  const attn = [...formAttn().map(formAttnRowHTML), ...flags.map(attnRowHTML)];
   v.innerHTML = `
     <div class="hello"><h2>${greet}, ${esc(onDuty().name)}</h2><p>${fmtDay(Date.now())}${onDuty().shift ? " · " + esc(onDuty().shift) : ""}</p></div>
     ${storageBanner()}
+    ${catchupHTML()}
     <button class="cta" id="ctaRec">${ICON.mic}Record a note</button>
     ${isSharedPhone() ? `<p class="small" style="margin:-4px 0 0;text-align:center">Recording as <strong>${esc(session.name)}</strong> · <button class="link small" id="shSwitch" style="min-height:40px">Not you? Switch carer</button></p>` : ""}
     <div class="tiles">
@@ -2851,9 +2888,9 @@ function renderToday() {
     ${fbQuestionsHTML()}
     ${planProgressHTML()}
     ${familyReadyHTML()}
-    <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="count ${flags.length ? "" : "calm"}">${flags.length}</span></div>
-      ${flags.length ? `<div class="attn">${(attnAll ? flags : flags.slice(0, 3)).map(attnRowHTML).join("")}</div>
-        ${flags.length > 3 ? `<button class="link small" id="attnMore" style="margin-top:2px;min-height:44px">${attnAll ? "Show fewer" : `See all ${flags.length}`}</button>` : ""}`
+    <div class="card"><div class="card-h"><h3>Needs attention</h3><span class="count ${attn.length ? "" : "calm"}">${attn.length}</span></div>
+      ${attn.length ? `<div class="attn">${(attnAll ? attn : attn.slice(0, 3)).join("")}</div>
+        ${attn.length > 3 ? `<button class="link small" id="attnMore" style="margin-top:2px;min-height:44px">${attnAll ? "Show fewer" : `See all ${attn.length}`}</button>` : ""}`
         : '<div class="empty">Nothing outstanding. Flags from your notes appear here.</div>'}</div>
     ${tasksCardHTML()}
     ${medsCardHTML()}
@@ -2876,7 +2913,7 @@ function renderToday() {
   $("#qPlan").onclick = () => openPlan();
   if ($("#plGuideGo")) $("#plGuideGo").onclick = () => openPlanGuide();
   if ($("#emBtn")) $("#emBtn").onclick = () => (emergForm() ? openEmergency() : openEmergencyEdit());
-  bindStorageBanner(v);
+  bindStorageBanner(v); bindCatchup(v);
   $("#addEvent").onclick = () => openEventSheet();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
   if ($("#ctaBack")) $("#ctaBack").onclick = () => openReturnSheet();
@@ -2888,13 +2925,23 @@ function renderToday() {
 let attnAll = false;
 const attnRowHTML = (f) => `<button class="attn-row" data-flag="${esc(f.id)}"><span class="sdot ${f.status === "resolved" ? "done" : f.kind === "incident" ? "incident" : ""}"></span>
   <span class="body"><strong>${esc(f.title)}</strong><span class="tiny muted">${f.kind === "incident" ? "Incident" : "To note"} · ${esc(dayLabel(f.ts))} ${fmtTime(f.ts)}${f.status === "resolved" ? " · resolved" : ""}</span></span>${ICON.chev}</button>`;
+// On an incident flag: Create incident report (or open it); on a skin flag: the skin integrity form.
+function flagFormsHTML(f) {
+  if (isFamily() || isExample(f)) return "";
+  const have = formsForFlag(f.id), inc = have.find((r) => r.type === "incident"), skin = have.find((r) => r.type === "skin");
+  return [f.kind === "incident" ? (inc ? `<button class="btn secondary block" data-openform="${esc(inc.formId)}">Open incident report ${esc(inc.ref)}</button>` : `<button class="btn secondary block" id="flIncident">Create incident report</button>`) : "",
+    isSkinFlag(f) ? (skin ? `<button class="btn secondary block" data-openform="${esc(skin.formId)}">Open skin integrity form ${esc(skin.ref)}</button>` : `<button class="btn secondary block" id="flSkin">Complete skin integrity form</button>`) : ""].join("");
+}
 function openFlag(id) {
   const f = S.flags.find((x) => x.id === id); if (!f) return;
   // A box check that didn't match: the medicine it was about, so the chart can be corrected from here.
   const boxMed = f.title.startsWith(BOX_FLAG) && cloudOn() ? medsState().list.find((m) => !m.stoppedAt && f.title === `${BOX_FLAG}${medName(m)}`.slice(0, 190)) : null;
   const s = sheet(`${sheetHead(f.kind === "incident" ? "Incident" : "To note")}${flagHTML(f, false)}
     ${boxMed && f.status === "open" ? `<button class="btn primary block" id="flMedFix">Correct the medicine on the chart</button><p class="tiny muted" style="margin:-4px 0 0">Check the box or prescription first: correct the chart only if the chart is wrong. If the box is wrong, keep it aside and ask the pharmacist or GP.</p>` : ""}
+    ${flagFormsHTML(f)}
     ${f.status === "open" ? `<button class="btn ${boxMed ? "secondary" : "primary"} block" id="flResolve">Mark as resolved</button>` : ""}`);
+  if ($("#flIncident", s.root)) $("#flIncident", s.root).onclick = () => { s.close(); openFormEdit("incident", { flag: f }); };
+  if ($("#flSkin", s.root)) $("#flSkin", s.root).onclick = () => { s.close(); openFormEdit("skin", { flag: f }); };
   if ($("#flMedFix", s.root)) $("#flMedFix", s.root).onclick = () => {
     if (!medsSignedOff()) { s.close(); return openMeds("list"); } // the list explains a missing sign-off
     s.close();
@@ -2905,6 +2952,418 @@ function openFlag(id) {
     }, `<strong>The box check found:</strong> ${esc(f.detail || "")} Change what's wrong, then say why (for example "Corrected to match the box: typed 500gm instead of 500mg").`);
   };
   if ($("#flResolve", s.root)) $("#flResolve", s.root).onclick = () => { s.close(); if (!S.flags.some((x) => x.id === id)) return toast("This flag is no longer on this phone"); openResolve(id); };
+}
+
+/* ---------- incident reports and skin integrity forms ----------
+ * Started from an incident or skin flag (Sam, 2026-10-20): a separate record linked to the note, with
+ * what the note already says filled in and marked "from the note: check"; the carer completes the rest.
+ * Every save is a new version (nothing is overwritten), so the history shows each amendment, who made
+ * it and when. Agency clients get an administrator's review (is a statutory notification needed?).
+ * It's an internal record, never a CQC or other statutory notification. Skin concerns are followed up
+ * with a status and the next review date. UK rules researched in INCIDENT_SKIN_RULES.md.
+ */
+const INC_TYPES = { fall: "Fall", near_miss: "Near miss", injury: "Injury", aggression: "Aggression or challenging behaviour", medication: "Medication incident", accident: "Accident", other: "Other" };
+const SKIN_KINDS = { redness: "Redness", bruising: "Bruising", dry_skin: "Dry skin", skin_tear: "Skin tear", broken_skin: "Broken skin", blister: "Blister", swelling: "Swelling", rash: "Rash", discolouration: "Discolouration", pressure_damage: "Suspected pressure damage", wound: "Existing wound", other: "Other" };
+const BODY_AREAS = { head_face: "Head or face", neck: "Neck", shoulder: "Shoulder", upper_arm: "Upper arm", elbow: "Elbow", forearm: "Forearm", wrist_hand: "Wrist or hand", chest: "Chest", abdomen: "Tummy (abdomen)", upper_back: "Upper back", lower_back: "Lower back", sacrum: "Base of the spine (sacrum)", hip: "Hip", buttock: "Buttock", thigh: "Thigh", knee: "Knee", lower_leg: "Lower leg or shin", ankle: "Ankle", heel: "Heel", foot_toes: "Foot or toes", other: "Somewhere else" };
+const SIDES = { left: "Left", right: "Right", both: "Both sides", middle: "Middle", unknown: "Not sure" };
+const VIEWS = { front: "Front of the body", back: "Back of the body", unknown: "Not sure" };
+const YNU = { yes: "Yes", no: "No", unknown: "Not known" };
+const YN = { yes: "Yes", no: "No" };
+// What the carer saw, in plain words (the pressure ulcer categories, NPIAP/EPUAP). Not a diagnosis.
+const PU_CATEGORY = { none: "Not pressure damage", "1": "Category 1: red patch that doesn't fade when pressed, skin unbroken", "2": "Category 2: blister or shallow open skin", "3": "Category 3: deeper open wound", "4": "Category 4: very deep wound (muscle, tendon or bone may show)", unstageable: "Can't tell how deep (the base is covered)", deep: "Deep purple or maroon area, skin unbroken", unsure: "Not sure" };
+const SKIN_STATUS = { improving: "Improving", unchanged: "Unchanged", deteriorating: "Getting worse", resolved: "Healed or resolved" };
+const SKIN_REASONS = { routine: "Routine check", new: "New concern", follow_up: "Follow-up of a known concern", family: "Family asked", professional: "A health professional asked", other: "Other" };
+const FORM_STATUS = { open: "Open", follow_up: "Follow-up needed", closed: "Closed" };
+const SAFEGUARD = { yes: "Yes", no: "No", not_needed: "Not needed" };
+const NOTIFY = { yes: "Yes", no: "No", unsure: "Not sure yet" };
+const isAgency = () => !!(session && session.client && session.client.care === "agency");
+const au999 = () => (clientCountry() === "AU" ? "000" : "999");
+const nurseWord = () => (clientCountry() === "AU" ? "Community nurse" : "District nurse");
+const tellOptions = (type) => type === "incident"
+  ? { family: "Family or representative", gp: "GP", nurse: nurseWord(), manager: "Care manager", emergency: `Emergency services (${au999()})`, other: "Someone else" }
+  : { manager: "Care manager", gp: "GP", nurse: nurseWord(), tvn: "Tissue viability nurse", family: "Family or representative", emergency: `Emergency services (${au999()})`, other: "Someone else" };
+// The form's sections: [heading, [[key, label, input type, options]]]. "ro" is filled in, not typed.
+const formSections = (type) => type === "incident" ? [
+  ["1. Client and incident details", [["client", "Client", "ro"], ["date", "Date it happened", "date"], ["time", "Time", "time"], ["where", "Where it happened", "text"], ["carer", "Carer involved", "text"]]],
+  ["2. Type of incident", [["type", "Type", "sel", INC_TYPES], ["typeOther", "If other, what kind", "text"]]],
+  ["3. What happened", [["what", "What happened (facts only: what you saw and heard)", "area"], ["witnessed", "Did anyone see it happen?", "sel", YNU], ["witnessWho", "Who saw it, and how to reach them", "text"]]],
+  ["4. Injuries", [["injured", "Was anyone hurt?", "sel", YNU], ["injury", "What injury, and where on the body", "area"], ["medical", "Medical attention given or asked for", "area"]]],
+  ["5. What was done straight away", [["action", "What you did", "area"], ["safe", "Was the person made safe?", "sel", YNU], ["emergency", `Were emergency services called (${au999()})?`, "sel", YN]]],
+  ["6. Who was told", [["told", "", "tell"]]],
+  ["7. Outcome and follow-up", [["after", "How the person was afterwards", "area"], ["monitoring", "Further monitoring needed", "area"], ["planReview", "Do the care plan or risk assessment need reviewing?", "sel", YNU], ["safeguarding", "Was a safeguarding concern raised (with the council or your manager)?", "sel", SAFEGUARD], ["safeguardingWhy", "Why, or who it was raised with", "text"], ["further", "Further action needed, and by whom", "area"]]],
+] : [
+  ["1. Details", [["client", "Client", "ro"], ["date", "Date of the check", "date"], ["time", "Time", "time"], ["carer", "Carer", "text"]]],
+  ["2. Reason for the check", [["reason", "Reason", "sel", SKIN_REASONS], ["reasonOther", "If other, why", "text"]]],
+  ["3. Skin condition", [["concern", "Is there a skin concern?", "sel", YN], ["concerns", "", "concerns"]]],
+  ["4. What was done straight away", [["carePlan", "Was the care plan followed (for example repositioning, creams, pressure cushion)?", "sel", YNU], ["action", "What you did", "area"], ["medical", "Medical attention given or asked for", "area"]]],
+  ["5. Who was told", [["told", "", "tell"]]],
+  ["6. Monitoring", [["status", "How is it now?", "sel", SKIN_STATUS], ["nextReview", "Next check due", "date"]]],
+  ["7. Further action", [["further", "Further action needed, and by whom", "area"], ["safeguarding", "Was a safeguarding concern raised (with the council or your manager)?", "sel", SAFEGUARD], ["safeguardingWhy", "Why, or who it was raised with", "text"]]],
+];
+const formLabels = (type) => Object.fromEntries(formSections(type).flatMap(([, fs]) => fs.map(([k, l]) => [k, l || ({ told: "Who was told", concerns: "Skin concerns" })[k]])));
+const formOptions = (type) => Object.fromEntries(formSections(type).flatMap(([, fs]) => fs.filter((f) => f[3]).map((f) => [f[0], f[3]])));
+const formTitle = (type) => (type === "incident" ? "Incident report" : "Skin integrity form");
+const SKIN_RE = /\b(skin|bruis\w*|graze\w*|tear|redness|sore\w*|blister\w*|rash\w*|wound\w*|pressure|cut|bleed\w*|swell\w*|swollen|scratch\w*|ulcer\w*)\b/i;
+const isSkinFlag = (f) => SKIN_RE.test(`${f.title} ${f.detail || ""}`) || observations().some((o) => o.topic === "skin" && o.noteId && o.noteId === f.noteId);
+
+const forms = () => (S.forms || []).filter((x) => !isExample(x));
+const formVersions = (formId) => forms().filter((x) => x.formId === formId).sort((a, b) => a.ts - b.ts || (a.id < b.id ? -1 : 1));
+const formLatest = (formId) => { const v = formVersions(formId); return v[v.length - 1]; };
+const latestForms = (type) => [...new Set(forms().filter((x) => !type || x.type === type).map((x) => x.formId))].map(formLatest).filter(Boolean);
+const formsForFlag = (flagId) => latestForms().filter((r) => r.flagId === flagId);
+// A form's answers, made safe to show: lists are lists of objects, everything else plain text.
+function formData(r) {
+  let d; try { d = JSON.parse(r.data); } catch { d = null; }
+  if (!d || typeof d !== "object" || Array.isArray(d)) return {};
+  const obj = (x) => x && typeof x === "object" && !Array.isArray(x);
+  const strs = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Array.isArray(v) ? v.filter((x) => typeof x === "string") : typeof v === "number" ? v : typeof v === "string" ? v : ""]));
+  const out = strs(d);
+  for (const k of ["told", "concerns", "followups"]) out[k] = Array.isArray(d[k]) ? d[k].filter(obj).map(strs) : [];
+  out.concerns = out.concerns.map((c) => ({ ...c, kinds: Array.isArray(c.kinds) ? c.kinds : [] }));
+  out.followups = out.followups.map((f) => ({ ...f, ts: Number(f.ts) || 0 }));
+  if (!Array.isArray(out.suggested)) out.suggested = [];
+  return out;
+}
+// An option's label, only for the form's own options (never "constructor" and the like from another phone).
+const opt = (o, k) => (typeof k === "string" && Object.hasOwn(o, k) ? o[k] : "");
+const formReview = (formId) => (S.reviews || []).filter((r) => r.formId === formId).sort((a, b) => b.ts - a.ts)[0];
+const formRef = (type, id, ts) => `${type === "incident" ? "IR" : "SK"}-${dayKey(new Date(ts)).slice(2).replace(/-/g, "")}-${id.slice(0, 3).toUpperCase()}`;
+const concernLabel = (c) => [(c.kinds || []).map((k) => opt(SKIN_KINDS, k)).filter(Boolean).join(", ") || "Skin concern", [c.side !== "unknown" ? opt(SIDES, c.side).toLowerCase() : "", opt(BODY_AREAS, c.area).toLowerCase()].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+const skinWhere = (d) => ((d.concerns || [])[0] ? concernLabel(d.concerns[0]) : "skin check") + ((d.concerns || []).length > 1 ? ` and ${d.concerns.length - 1} more` : "");
+const formLine = (r) => { const d = formData(r); return r.type === "incident" ? `${opt(INC_TYPES, d.type) || "Incident"}${d.where ? " · " + d.where : ""}` : skinWhere(d); };
+// Forms that need someone: open incident reports, an agency client's reports awaiting review (for
+// administrators), and skin concerns whose next check is due.
+function formAttn() {
+  const today = dayKey(new Date()), out = [];
+  for (const r of latestForms()) {
+    const d = formData(r);
+    if (r.type === "incident" && isAgency() && isAdminHere() && !formReview(r.formId)) out.push({ r, label: `Incident report ${r.ref}: needs your review` });
+    else if (r.type === "incident" && r.status !== "closed") out.push({ r, label: `Incident report ${r.ref}: ${FORM_STATUS[r.status].toLowerCase()}` });
+    if (r.type === "skin" && r.status !== "closed" && d.nextReview && d.nextReview <= today) out.push({ r, label: `Skin check due: ${skinWhere(d)}` });
+  }
+  return out;
+}
+const formAttnRowHTML = (x) => `<button class="attn-row" data-openform="${esc(x.r.formId)}"><span class="sdot ${x.r.type === "incident" ? "incident" : ""}"></span>
+  <span class="body"><strong>${esc(x.label)}</strong><span class="tiny muted">${formTitle(x.r.type)} · ${esc(dayLabel(x.r.ts))} ${fmtTime(x.r.ts)}</span></span>${ICON.chev}</button>`;
+document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-openform]"); if (b) openForm(b.dataset.openform); });
+const internalNoteHTML = () => clientCountry() === "AU"
+  ? `<strong>Internal care record.</strong> It isn't a report to the Aged Care Quality and Safety Commission (the Serious Incident Response Scheme) or anyone else: a registered provider still reports through the proper channels. Someone in danger: call 000.`
+  : `<strong>Internal care record.</strong> It isn't a notification to the CQC, the HSE (RIDDOR), the police or the council: a registered care provider still notifies through the proper channels. Someone in danger: call 999. Urgent medical advice: NHS 111. Abuse or neglect: the council's adult social care team.`;
+
+// The note a form starts from, with any additions, for "from the note".
+const noteWithAdditions = (noteId) => { const n = S.notes.find((x) => x.id === noteId); if (!n) return ""; return [n, ...S.notes.filter((x) => x.amends === n.id).sort((a, b) => a.ts - b.ts)].map((x) => x.note).join("\n"); };
+function blankForm(type, flag) {
+  const ts = flag ? flag.ts : Date.now(), d = new Date(ts);
+  const note = flag && S.notes.find((n) => n.id === flag.noteId);
+  const base = { client: S.client.name, carer: note ? carer(note.carerId, note.carerName).name : (session.name || onDuty().name), date: dayKey(d), time: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`, told: [], suggested: [] };
+  if (type === "incident") return { ...base, where: "", type: "", typeOther: "", what: note ? note.note.slice(0, 2000) : "", witnessed: "", witnessWho: "", injured: "", injury: "", medical: "", action: "", safe: "", emergency: "", after: "", monitoring: "", planReview: "", safeguarding: "", safeguardingWhy: "", further: "", ...(note ? { suggested: ["what"] } : {}) };
+  return { ...base, reason: flag ? "new" : "routine", reasonOther: "", concern: flag ? "yes" : "", concerns: flag ? [{ kinds: [], area: "", side: "", view: "", first: "", description: "", size: "", pain: "", category: "" }] : [], carePlan: "", action: "", medical: "", status: "", nextReview: "", further: "", safeguarding: "", safeguardingWhy: "", followups: [] };
+}
+const sugTag = (sug, k) => (sug.includes(k) ? ` <span class="chip follow" data-sug="${k}" style="font-size:12px">from the note: check</span>` : "");
+function fieldEditHTML(d, [k, label, t, opts], sug) {
+  const v = d[k] == null ? "" : String(d[k]), tag = sugTag(sug, k);
+  if (t === "ro") return `<div class="small"><strong>${esc(label)}:</strong> ${esc(v)}</div>`;
+  if (t === "tell") return tellEditHTML(d, sug);
+  if (t === "concerns") return concernsEditHTML(d, sug);
+  if (t === "area") return `<label class="f">${esc(label)}${tag}<textarea data-k="${k}" rows="3" maxlength="2000">${esc(v)}</textarea></label>`;
+  if (t === "sel") return `<label class="f">${esc(label)}${tag}<select data-k="${k}"><option value="">Choose…</option>${Object.entries(opts).map(([o, l]) => `<option value="${esc(o)}" ${v === o ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>`;
+  return `<label class="f">${esc(label)}${tag}<input type="${t === "date" ? "date" : t === "time" ? "time" : "text"}" data-k="${k}" value="${esc(v)}" maxlength="300" autocomplete="off"></label>`;
+}
+let formType = "incident"; // the form being edited (for the Who was told list)
+function tellEditHTML(d, sug) {
+  const by = new Map((d.told || []).map((t) => [t.who, t]));
+  return `<div style="display:grid;gap:8px">${sug.includes("told") ? `<span class="chip follow" data-sug="told" style="justify-self:start;font-size:12px">from the note: check</span>` : ""}${Object.entries(tellOptions(formType)).map(([k, l]) => { const t = by.get(k) || {}; return `<div class="card" style="box-shadow:none;padding:8px 10px;display:grid;gap:6px">
+    <label class="check"><input type="checkbox" data-tell="${k}" ${by.has(k) ? "checked" : ""}><span>${esc(l)}</span></label>
+    <div data-tellrow="${k}" style="display:grid;gap:6px" ${by.has(k) ? "" : "hidden"}><label class="f">When they were told<input type="datetime-local" data-tellwhen="${k}" value="${esc(t.when || "")}"></label>
+    <label class="f">${k === "other" ? "Who, and what was said" : "What was said or advised"}<input type="text" data-telldetail="${k}" value="${esc(t.detail || "")}" maxlength="300" autocomplete="off"></label></div></div>`; }).join("")}</div>`;
+}
+function concernsEditHTML(d, sug) {
+  const cs = d.concerns || [];
+  return `<div style="display:grid;gap:10px">${sug.includes("concerns") ? `<span class="chip follow" data-sug="concerns" style="justify-self:start;font-size:12px">from the note: check</span>` : ""}
+    ${cs.map((c, i) => `<div class="card" style="box-shadow:none;padding:10px 12px;display:grid;gap:8px"><strong class="small">Concern ${i + 1}</strong>
+      <fieldset style="border:0;padding:0;margin:0;display:grid;gap:4px"><legend class="small" style="font-weight:600;margin-bottom:4px">What you see (tick all that apply)</legend>${Object.entries(SKIN_KINDS).map(([k, l]) => `<label class="check"><input type="checkbox" data-ckind="${i}:${k}" ${(c.kinds || []).includes(k) ? "checked" : ""}><span>${esc(l)}</span></label>`).join("")}</fieldset>
+      ${[["area", "Where on the body", BODY_AREAS], ["side", "Which side", SIDES], ["view", "Front or back", VIEWS]].map(([k, l, o]) => `<label class="f">${l}<select data-ck="${i}:${k}"><option value="">Choose…</option>${Object.entries(o).map(([v, t]) => `<option value="${v}" ${c[k] === v ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>`).join("")}
+      <label class="f">When it was first noticed<input type="text" data-ck="${i}:first" value="${esc(c.first || "")}" maxlength="100" placeholder="e.g. this morning when washing" autocomplete="off"></label>
+      <label class="f">Describe it (colour, warmth, any broken skin, discharge)<textarea data-ck="${i}:description" rows="2" maxlength="1000">${esc(c.description || "")}</textarea></label>
+      <label class="f">Size, if measured<input type="text" data-ck="${i}:size" value="${esc(c.size || "")}" maxlength="60" placeholder="e.g. 3 cm by 2 cm" autocomplete="off"></label>
+      <label class="f">Does it hurt?<select data-ck="${i}:pain"><option value="">Choose…</option>${Object.entries(YNU).map(([v, t]) => `<option value="${v}" ${c.pain === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label class="f">If it may be pressure damage, what it looks like<select data-ck="${i}:category"><option value="">Choose…</option>${Object.entries(PU_CATEGORY).map(([v, t]) => `<option value="${v}" ${c.category === v ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
+      <span class="tiny muted" style="margin-top:-4px">What you saw, not a diagnosis. Ask a ${nurseWord().toLowerCase()} or GP to look at broken or discoloured skin.</span>
+      <button type="button" class="link small" data-crm="${i}" style="justify-self:start;min-height:40px">Remove this concern</button></div>`).join("")}
+    <button type="button" class="btn secondary" id="fmAddConcern">Add ${cs.length ? "another" : "a"} concern</button></div>`;
+}
+// Everything typed on the form, on top of what it held.
+function readForm(root, d) {
+  const out = JSON.parse(JSON.stringify(d));
+  root.querySelectorAll("[data-k]").forEach((el) => (out[el.dataset.k] = el.value.trim()));
+  out.told = [...root.querySelectorAll("[data-tell]")].filter((c) => c.checked).map((c) => ({ who: c.dataset.tell, when: $(`[data-tellwhen="${c.dataset.tell}"]`, root).value, detail: $(`[data-telldetail="${c.dataset.tell}"]`, root).value.trim() }));
+  if (Array.isArray(out.concerns)) out.concerns = out.concerns.map((c, i) => ({ ...c, kinds: [...root.querySelectorAll(`[data-ckind^="${i}:"]`)].filter((x) => x.checked).map((x) => x.dataset.ckind.split(":")[1]), ...Object.fromEntries([...root.querySelectorAll(`[data-ck^="${i}:"]`)].map((x) => [x.dataset.ck.split(":")[1], x.value.trim()])) }));
+  return out;
+}
+function saveFormVersion(type, formId, d, status, meta) {
+  const id = uid(), fid = formId || id, prev = formId ? formLatest(formId) : null;
+  const now = Math.max(Date.now(), prev ? prev.ts + 1 : 0); // after the version it amends, even if this phone's clock is behind
+  const data = JSON.stringify(d);
+  if (prev && prev.data === data && prev.status === status) { toast("Nothing changed"); return null; }
+  if (data.length > 19000) { toast("This form is too long. Shorten the longest answers."); return null; }
+  const rec = { id, ts: now, formId: fid, type, ref: prev ? prev.ref : formRef(type, fid, now), data, status, by: stampId(), byName: session.name || onDuty().name, ...(prev ? { prevId: prev.id } : {}), ...(meta.noteId ? { noteId: meta.noteId } : {}), ...(meta.flagId ? { flagId: meta.flagId } : {}) };
+  touch(rec); (S.forms = S.forms || []).push(rec); save(); return rec;
+}
+// Start (no formId) or amend a form. flag: the flag it starts from (its note fills it in).
+function openFormEdit(type, { formId = null, flag = null, after } = {}) {
+  formType = type;
+  const prev = formId ? formLatest(formId) : null;
+  let d = prev ? formData(prev) : blankForm(type, flag), st = prev ? prev.status : "open", dirty = false;
+  if (!Array.isArray(d.suggested)) d.suggested = [];
+  if (type === "skin" && !Array.isArray(d.concerns)) d.concerns = [];
+  const meta = { noteId: prev ? prev.noteId : flag ? flag.noteId : undefined, flagId: prev ? prev.flagId : flag ? flag.id : undefined };
+  const s = sheet(`${sheetHead(prev ? `${formTitle(type)} ${esc(prev.ref)}` : formTitle(type))}<div id="fmBody" style="display:grid;gap:12px"></div>`, { guard: () => dirty });
+  const body = $("#fmBody", s.root);
+  const draw = () => {
+    body.innerHTML = `<div class="small" style="padding:10px 12px;border-radius:12px;background:var(--surface-2, #f3eff7)">${internalNoteHTML()}</div>
+      ${prev ? `<p class="small" style="margin:0">Your changes are saved as a new version: the earlier one stays in the history, with who changed it and when.</p>` : ""}
+      <div class="small" id="fmAI" role="status"></div>
+      ${formSections(type).map(([h, fs]) => `<section style="display:grid;gap:10px"><h3 style="font-size:17px;margin:4px 0 0">${esc(h)}</h3>${fs.map((f) => fieldEditHTML(d, f, d.suggested)).join("")}${h.startsWith("7.") && type === "skin" ? `<p class="tiny muted" style="margin:0">Deeper pressure damage (category 3 or 4, or can't tell how deep), or several sore areas, may need a safeguarding referral: talk to the ${nurseWord().toLowerCase()} and your manager, or the council's adult social care team.</p>` : ""}</section>`).join("")}
+      ${type === "incident" ? `<section style="display:grid;gap:10px"><h3 style="font-size:17px;margin:4px 0 0">8. Completion</h3><p class="small" style="margin:0">Completed by <strong>${esc(session.name || onDuty().name)}</strong> when you save (each version keeps who saved it and when).${isAgency() ? " An administrator reviews it afterwards." : ""}</p>
+        <label class="f">Status<select id="fmStatus">${Object.entries(FORM_STATUS).map(([k, l]) => `<option value="${k}" ${st === k ? "selected" : ""}>${l}</option>`).join("")}</select></label></section>` : ""}
+      <button class="btn primary block" id="fmSave">Save the ${type === "incident" ? "report" : "form"}</button>`;
+    if ($("#fmAddConcern", body)) $("#fmAddConcern", body).onclick = () => { d = readForm(body, d); d.concerns.push({ kinds: [], area: "", side: "", view: "", first: "", description: "", size: "", pain: "", category: "" }); d.concern = "yes"; dirty = true; draw(); };
+    body.querySelectorAll("[data-crm]").forEach((b) => (b.onclick = () => { d = readForm(body, d); d.concerns.splice(+b.dataset.crm, 1); dirty = true; draw(); }));
+    $("#fmSave", body).onclick = (e) => {
+      d = readForm(body, d);
+      if (!d.date) return toast("Add the date");
+      if (type === "incident" && !d.what) return toast("Say what happened");
+      if (type === "skin" && d.concern === "yes" && !d.concerns.some((c) => (c.kinds || []).length || c.description)) return toast("Describe the skin concern, or choose No");
+      if (type === "skin" && d.concern === "yes" && d.status !== "resolved" && !d.nextReview) return toast("Choose when it should be checked next");
+      if (type === "skin" && d.concern !== "yes") d.concerns = d.concerns.filter((c) => (c.kinds || []).length || c.description);
+      const go = () => {
+        const status = type === "incident" ? $("#fmStatus", body).value : d.status === "resolved" || d.concern !== "yes" ? "closed" : "open";
+        const rec = saveFormVersion(type, formId, d, status, meta); if (!rec) return;
+        dirty = false; s.close(); render(); toast(prev ? "Saved: the change is in the history" : `${formTitle(type)} ${rec.ref} saved`);
+        if (after) after(rec); else openForm(rec.formId);
+      };
+      if (d.suggested.length) return confirmInline(e.currentTarget, go, "Tap again: the answers from the note are right");
+      go();
+    };
+  };
+  // Changing an answer marks it as checked by the carer; any change means closing asks first.
+  const keyOf = (el) => el.dataset.k || (el.dataset.tell || el.dataset.tellwhen || el.dataset.telldetail ? "told" : el.dataset.ck || el.dataset.ckind ? "concerns" : "");
+  const changed = (e) => { dirty = true; const k = keyOf(e.target); if (k && d.suggested.includes(k)) { d.suggested = d.suggested.filter((x) => x !== k); const c = $(`[data-sug="${k}"]`, body); if (c) c.remove(); } if (e.target.dataset.tell) $(`[data-tellrow="${e.target.dataset.tell}"]`, body).hidden = !e.target.checked; };
+  body.addEventListener("input", changed); body.addEventListener("change", changed);
+  draw();
+  // A new form from a note: the AI suggests answers from what the note says (never guesses).
+  const words = !prev && meta.noteId ? noteWithAdditions(meta.noteId) : "";
+  if (words && cloudOn() && navigator.onLine) {
+    $("#fmAI", body).textContent = "Filling in what the note says…";
+    syncJSON("/plan/formfill", { client: session.client.id, clientName: S.client.name, form: type, note: words }, 60000).then((out) => {
+      if (!body.isConnected) return;
+      d = readForm(body, d);
+      const set = (k, v) => { if (v && v !== "unknown" && (!d[k] || d.suggested.includes(k))) { d[k] = v; if (!d.suggested.includes(k)) d.suggested.push(k); } };
+      if (type === "incident") { set("type", out.type); for (const k of ["where", "what", "witnessed", "injured", "injury", "medical", "action", "safe"]) set(k, String(out[k] || "").slice(0, 2000)); }
+      else {
+        set("action", String(out.action || "").slice(0, 2000)); set("medical", String(out.medical || "").slice(0, 2000));
+        const cs = (out.concerns || []).slice(0, 8).map((c) => ({ kinds: opt(SKIN_KINDS, c.kind) ? [c.kind] : [], area: opt(BODY_AREAS, c.area) ? c.area : "", side: opt(SIDES, c.side) ? c.side : "", view: opt(VIEWS, c.view) ? c.view : "", first: "", description: String(c.description || "").slice(0, 1000), size: "", pain: opt(YNU, c.pain) ? c.pain : "", category: "" }));
+        if (cs.length && !d.concerns.some((c) => (c.kinds || []).length || c.description)) { d.concerns = cs; d.concern = "yes"; if (!d.suggested.includes("concerns")) d.suggested.push("concerns"); }
+      }
+      const tell = (out.told || []).filter((w) => tellOptions(type)[w]);
+      if (tell.length && !d.told.length) { d.told = tell.map((who) => ({ who, when: "", detail: "" })); d.suggested.push("told"); }
+      draw();
+      $("#fmAI", body).textContent = d.suggested.length ? "Answers marked \"from the note\" were filled in from the note: check each one and fill in the rest." : "The note didn't say more than this: fill in the rest.";
+    }).catch(() => { if (body.isConnected) $("#fmAI", body).textContent = "Couldn't fill it in from the note just now: fill it in yourself."; });
+  } else if (words) $("#fmAI", body).textContent = "What happened was copied from the note: check it and fill in the rest.";
+}
+
+// A form's answers, read only (also printed, and shown to family when they see incidents).
+function formViewHTML(type, d) {
+  const val = (k, t, opts) => { const v = d[k]; if (v == null || v === "") return ""; return opts ? (opt(opts, v) || String(v)) : String(v); };
+  const from = (k) => ((d.suggested || []).includes(k) ? ` <span class="tiny muted">(from the note)</span>` : "");
+  const tellOpts = { ...tellOptions("incident"), ...tellOptions("skin") };
+  const rows = (fs) => fs.map(([k, label, t, opts]) => {
+    if (t === "tell") return (d.told || []).length ? `<div class="small" style="display:grid;gap:2px">${from("told")}${d.told.map((x) => `<div>• <strong>${esc(opt(tellOpts, x.who) || x.who)}</strong>${x.when && !isNaN(new Date(x.when)) ? `, ${esc(fmtDay(new Date(x.when).getTime()))} ${esc(String(x.when).slice(11, 16))}` : ""}${x.detail ? `: ${esc(x.detail)}` : ""}</div>`).join("")}</div>` : `<div class="small muted">Nobody recorded.</div>`;
+    if (t === "concerns") return (d.concerns || []).map((c, i) => `<div class="small" style="display:grid;gap:2px;break-inside:avoid"><strong>Concern ${i + 1}: ${esc(concernLabel(c))}</strong>${from("concerns")}
+      ${opt(VIEWS, c.view) && c.view !== "unknown" ? `<div>${esc(opt(VIEWS, c.view))}</div>` : ""}${c.first ? `<div>First noticed: ${esc(c.first)}</div>` : ""}${c.description ? `<div>${esc(c.description)}</div>` : ""}${c.size ? `<div>Size: ${esc(c.size)}</div>` : ""}${opt(YNU, c.pain) ? `<div>Hurts: ${opt(YNU, c.pain)}</div>` : ""}${opt(PU_CATEGORY, c.category) ? `<div>Looks like: ${esc(opt(PU_CATEGORY, c.category))} <span class="tiny muted">(what the carer saw, not a diagnosis)</span></div>` : ""}</div>`).join("") || "";
+    const v = k === "date" && d.date ? fmtDay(new Date(d.date + "T12:00:00").getTime()) : k === "nextReview" && d.nextReview ? fmtDay(new Date(d.nextReview + "T12:00:00").getTime()) : val(k, t, opts);
+    return v ? `<div class="small"><strong>${esc(label)}${/\?$/.test(label) ? "" : ":"}</strong> <span style="white-space:pre-line">${esc(v)}</span>${from(k)}</div>` : "";
+  }).join("");
+  return formSections(type).map(([h, fs]) => { const r = rows(fs); return r.trim() ? `<section style="display:grid;gap:4px;break-inside:avoid"><h3 style="font-size:16px;margin:6px 0 2px">${esc(h)}</h3>${r}</section>` : ""; }).join("")
+    + ((d.followups || []).length ? `<section style="display:grid;gap:4px"><h3 style="font-size:16px;margin:6px 0 2px">Follow-up checks</h3>${d.followups.map((f) => `<div class="small">• <strong>${esc(dayLabel(f.ts))} ${fmtTime(f.ts)}, ${esc(f.byName || "")}:</strong> ${esc(opt(SKIN_STATUS, f.status))}${f.note ? `. ${esc(f.note)}` : ""}${f.nextReview ? ` Next check ${esc(fmtDay(new Date(f.nextReview + "T12:00:00").getTime()))}.` : ""}</div>`).join("")}</section>` : "");
+}
+// What changed between two versions, in words, for the history.
+function formChanges(a, b, type) {
+  const da = formData(a), db = formData(b), labels = formLabels(type), opts = formOptions(type), out = [];
+  const show = (k, v) => { const o = opts[k]; const s = o && o[v] ? o[v] : String(v || ""); return s.length > 80 ? s.slice(0, 80) + "…" : s; };
+  for (const k of Object.keys(labels)) {
+    if (k === "told" || k === "concerns") { if (JSON.stringify(da[k] || []) !== JSON.stringify(db[k] || [])) out.push(`${labels[k]} changed`); continue; }
+    if ((da[k] || "") !== (db[k] || "")) out.push(`${labels[k]}: "${show(k, da[k]) || "blank"}" to "${show(k, db[k]) || "blank"}"`);
+  }
+  if ((db.followups || []).length > (da.followups || []).length) out.push("Follow-up check added");
+  if (a.status !== b.status) out.push(`Status: ${FORM_STATUS[a.status]} to ${FORM_STATUS[b.status]}`);
+  return out.length ? out : ["No change to the answers"];
+}
+function openForm(formId) {
+  const r = formLatest(formId); if (!r) return toast("This form isn't on this phone yet");
+  const type = r.type, d = formData(r), vs = formVersions(formId), rv = formReview(formId);
+  const canWrite = !isFamily(), skin = type === "skin";
+  const reviewHTML = type !== "incident" || !isAgency() ? "" : `<section class="card" style="box-shadow:none;display:grid;gap:4px;break-inside:avoid"><h3 style="font-size:16px;margin:0">Manager review</h3>
+    ${rv ? `<div class="small">Reviewed by <strong>${esc(rv.byName || "")}</strong>, ${esc(dayLabel(rv.ts))} ${fmtTime(rv.ts)}</div>
+      <div class="small"><strong>Statutory notification needed:</strong> ${esc(NOTIFY[rv.notify] || "")}${rv.why ? `. ${esc(rv.why)}` : ""}</div>
+      ${rv.candour ? `<div class="small"><strong>Duty of candour applies:</strong> ${esc(NOTIFY[rv.candour] || "")}</div>` : ""}${rv.safeguarding ? `<div class="small"><strong>Safeguarding referral needed:</strong> ${esc(NOTIFY[rv.safeguarding] || "")}</div>` : ""}${rv.lessons ? `<div class="small"><strong>Lessons learned:</strong> ${esc(rv.lessons)}</div>` : ""}`
+      : `<div class="small">Waiting for an administrator to review it.</div>`}
+    ${isAdminHere() && cloudOn() ? `<button class="btn secondary noprint" id="fvReview">${rv ? "Review again" : "Review this report"}</button>` : ""}</section>`;
+  const s = sheet(`${sheetHead(`${formTitle(type)} ${esc(r.ref)}`)}
+    <div class="row" style="gap:6px;flex-wrap:wrap"><span class="chip ${r.status === "closed" ? "" : type === "incident" ? "incident" : "follow"}">${skin ? (r.status === "closed" ? "Closed: healed or resolved" : `Being followed up${d.nextReview ? ", next check " + esc(fmtDay(new Date(d.nextReview + "T12:00:00").getTime())) : ""}`) : esc(FORM_STATUS[r.status])}</span></div>
+    ${r.noteId && S.notes.some((n) => n.id === r.noteId) ? `<button class="link small" id="fvNote" style="justify-self:start;min-height:40px">Open the note it came from</button>` : ""}
+    ${formConflict(formId) ? `<div class="warn small">This was changed on two phones at about the same time. The newest version is shown; check the History for the other change.</div>` : ""}
+    ${formViewHTML(type, { ...d, followups: skin ? allFollowups(formId) : d.followups })}
+    ${reviewHTML}
+    <details><summary class="small">History (${vs.length} version${vs.length === 1 ? "" : "s"})</summary><div style="display:grid;gap:6px;margin-top:6px">${vs.map((v, i) => `<div class="small"><strong>${esc(dayLabel(v.ts))} ${fmtTime(v.ts)}, ${esc(v.byName || carer(v.by).name)}:</strong> ${i ? esc(formChanges(vs[i - 1], v, type).join("; ")) : "started"}</div>`).join("")}</div></details>
+    <div class="tiny muted">${internalNoteHTML()}</div>
+    ${canWrite ? `${skin && r.status !== "closed" ? `<button class="btn primary block" id="fvFollow">Add a follow-up check</button>` : ""}<button class="btn ${skin && r.status !== "closed" ? "secondary" : "primary"} block" id="fvEdit">${skin ? "Change the form" : "Amend the report"}</button>` : ""}
+    <button class="btn ghost block" id="fvPrint">Print or save as PDF</button>`);
+  if ($("#fvNote", s.root)) $("#fvNote", s.root).onclick = () => { s.close(); openSavedNote(r.noteId); };
+  if ($("#fvEdit", s.root)) $("#fvEdit", s.root).onclick = () => { s.close(); openFormEdit(type, { formId }); };
+  if ($("#fvFollow", s.root)) $("#fvFollow", s.root).onclick = () => { s.close(); openSkinFollowUp(formId); };
+  if ($("#fvReview", s.root)) $("#fvReview", s.root).onclick = () => { s.close(); openFormReview(formId); };
+  $("#fvPrint", s.root).onclick = () => printForm(formId);
+}
+// Print one form on its own (works over a report, which keeps its own screen).
+function printForm(formId) {
+  const r = formLatest(formId); if (!r) return;
+  const d = formData(r), vs = formVersions(formId), rv = formReview(formId), p = $("#printRoot");
+  p.innerHTML = `<div style="display:grid;gap:8px;color:#000;font-family:inherit"><h2 style="margin:0">${formTitle(r.type)} ${esc(r.ref)}</h2>
+    <div class="small"><strong>${esc(S.client.name)}</strong> · status: ${esc(FORM_STATUS[r.status])} · printed ${esc(fmtDay(Date.now()))} ${fmtTime(Date.now())}</div>
+    ${formViewHTML(r.type, d)}
+    ${rv ? `<section><h3 style="font-size:16px;margin:6px 0 2px">Manager review</h3><div class="small">${esc(rv.byName || "")}, ${esc(dayLabel(rv.ts))} ${fmtTime(rv.ts)}. Statutory notification needed: ${esc(NOTIFY[rv.notify] || "")}${rv.why ? `. ${esc(rv.why)}` : ""}${rv.candour ? `. Duty of candour: ${esc(NOTIFY[rv.candour])}` : ""}${rv.safeguarding ? `. Safeguarding referral: ${esc(NOTIFY[rv.safeguarding])}` : ""}${rv.lessons ? `. Lessons learned: ${esc(rv.lessons)}` : ""}</div></section>` : ""}
+    <section><h3 style="font-size:16px;margin:6px 0 2px">History</h3>${vs.map((v, i) => `<div class="small">${esc(dayLabel(v.ts))} ${fmtTime(v.ts)}, ${esc(v.byName || "")}: ${i ? esc(formChanges(vs[i - 1], v, r.type).join("; ")) : "started"}</div>`).join("")}</section>
+    <div class="tiny">${internalNoteHTML()}</div><div class="tiny">Dignity Notes · pilot, made-up data only</div></div>`;
+  document.body.classList.add("printing-form");
+  const done = () => { document.body.classList.remove("printing-form"); p.innerHTML = ""; window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done);
+  window.print();
+  setTimeout(done, 30000); // some phones never send "afterprint"
+}
+function openSkinFollowUp(formId) {
+  const r = formLatest(formId); if (!r) return;
+  const d = formData(r);
+  const s = sheet(`${sheetHead("Follow-up check")}<p class="small" style="margin:0"><strong>${esc(skinWhere(d))}</strong> · ${esc(r.ref)}</p>
+    <label class="f">How is it now?<select id="fuStatus"><option value="">Choose…</option>${Object.entries(SKIN_STATUS).map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
+    <label class="f">What you saw (optional)<textarea id="fuNote" rows="3" maxlength="1000" placeholder="e.g. Bruise fading, now yellow; no pain"></textarea></label>
+    <div class="row"><button class="btn ghost" id="fuMic" style="flex:0 0 auto"></button></div><div class="small" id="fuMsg" role="status"></div>
+    <label class="f">Next check due<input type="date" id="fuNext" min="${esc(dayKey(new Date()))}"></label>
+    <button class="btn primary block" id="fuSave">Save the check</button>`, { onClose: () => dict.cancel() });
+  const dict = dictation($("#fuNote", s.root), $("#fuMic", s.root), (t) => ($("#fuMsg", s.root).textContent = t), { hint: "Check the words, then tap Save the check.", max: 1000 });
+  $("#fuStatus", s.root).onchange = (e) => { $("#fuNext", s.root).closest("label").hidden = e.target.value === "resolved"; };
+  $("#fuSave", s.root).onclick = async (e) => {
+    const btn = e.currentTarget; if (btn.disabled) return; btn.disabled = true;
+    if (dict.busy()) await dict.finish();
+    btn.disabled = false;
+    const status = $("#fuStatus", s.root).value, next = $("#fuNext", s.root).value;
+    if (!status) return toast("Choose how it is now");
+    if (status !== "resolved" && !next) return toast("Choose when it should be checked next");
+    const nd = { ...d, status, nextReview: status === "resolved" ? "" : next, followups: [...allFollowups(formId), { ts: Date.now(), byName: session.name || onDuty().name, status, note: $("#fuNote", s.root).value.trim().slice(0, 1000), nextReview: status === "resolved" ? "" : next }] };
+    const rec = saveFormVersion("skin", formId, nd, status === "resolved" ? "closed" : "open", { noteId: r.noteId, flagId: r.flagId }); if (!rec) return;
+    s.close(); render(); toast(status === "resolved" ? "Recorded as healed or resolved" : "Follow-up check saved");
+  };
+}
+function openFormReview(formId) {
+  const r = formLatest(formId), rv = formReview(formId); if (!r) return;
+  const au = clientCountry() === "AU";
+  const sel = (id, label, v) => `<label class="f">${label}<select id="${id}"><option value="">Choose…</option>${Object.entries(NOTIFY).map(([k, l]) => `<option value="${k}" ${v === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>`;
+  const s = sheet(`${sheetHead("Review the incident report")}<p class="small" style="margin:0"><strong>${esc(r.ref)}</strong> · ${esc(formLine(r))}</p>
+    <p class="small" style="margin:0">${au ? "Decide whether this must be reported under the Serious Incident Response Scheme to the Aged Care Quality and Safety Commission (Priority 1 within 24 hours)." : "Decide whether this needs a statutory notification: for example to the CQC without delay for a serious injury, abuse or an allegation of abuse, or an incident reported to or investigated by the police (Regulation 18), or a death (Regulation 16); or to the HSE under RIDDOR."} The app doesn't send anything: notify through the proper channels.</p>
+    ${sel("rvNotify", "Is a statutory notification needed?", rv && rv.notify)}
+    <label class="f">Why (and, if notified, when and the reference)<textarea id="rvWhy" rows="3" maxlength="1000">${esc((rv && rv.why) || "")}</textarea></label>
+    ${au ? "" : sel("rvCandour", "Does the duty of candour apply (moderate or severe harm, or death)?", rv && rv.candour)}
+    ${sel("rvSafe", "Is a safeguarding referral needed?", rv && rv.safeguarding)}
+    <label class="f">Lessons learned, and changes to the care plan or risk assessment<textarea id="rvLessons" rows="3" maxlength="1000">${esc((rv && rv.lessons) || "")}</textarea></label>
+    <button class="btn primary block" id="rvSave">Save the review</button>`);
+  $("#rvSave", s.root).onclick = () => {
+    const notify = $("#rvNotify", s.root).value; if (!notify) return toast("Choose whether a notification is needed");
+    const why = $("#rvWhy", s.root).value.trim(); if (!why) return toast("Say why");
+    const now = Date.now(), rec = { id: uid(), ts: now, formId, notify, why: why.slice(0, 1000), lessons: $("#rvLessons", s.root).value.trim().slice(0, 1000), by: stampId(), byName: session.name || onDuty().name };
+    const c = $("#rvCandour", s.root) && $("#rvCandour", s.root).value, g = $("#rvSafe", s.root).value;
+    if (c) rec.candour = c; if (g) rec.safeguarding = g;
+    touch(rec); (S.reviews = S.reviews || []).push(rec); save(); s.close(); render(); toast("Review saved"); openForm(formId);
+  };
+}
+// All incident reports, newest first (Reports, and the record log's Incidents filter).
+function openFormList(type) {
+  const list = latestForms(type).sort((a, b) => b.ts - a.ts);
+  const s = sheet(`${sheetHead(type === "incident" ? "Incident reports" : "Skin integrity forms")}
+    <p class="small muted" style="margin:0">${type === "incident" ? "Started from an incident flag (open the flag, then Create incident report)." : "Started from a skin flag, or below."}</p>
+    ${type === "skin" && !isFamily() ? `<button class="btn primary block" id="flNew">New skin check</button>` : ""}
+    ${list.length ? list.map((r) => `<button class="btn secondary block fd-link" data-openform="${esc(r.formId)}"><div class="body"><strong>${esc(r.ref)} · ${esc(formLine(r))}</strong><div class="muted small">${esc(dayLabel(formVersions(r.formId)[0].ts))} · ${esc(type === "skin" && r.status === "open" ? "Being followed up" : FORM_STATUS[r.status])}${type === "incident" && isAgency() ? (formReview(r.formId) ? " · reviewed" : " · not reviewed yet") : ""}</div></div></button>`).join("") : `<div class="empty">None yet.</div>`}`);
+  if ($("#flNew", s.root)) $("#flNew", s.root).onclick = () => { s.close(); openFormEdit("skin"); };
+}
+
+/* ---------- catching up after time away ----------
+ * A carer new to the client, or back after a number of days away (7 unless an administrator sets it;
+ * Sam, 2026-10-16), sees what changed since they were last here at the top of Today: the care plan,
+ * medicines, open flags, incident reports and skin. "I've read this" and "I've checked the skin" are
+ * recorded with their name and time. It never stops them recording; it stays until both are ticked.
+ */
+const myActivity = (me) => Math.max(0, ...S.notes.filter((n) => n.carerId === me && !isExample(n)).map((n) => n.ts), ...S.handovers.filter((h) => h.fromId === me && !isExample(h)).map((h) => h.ts), ...(S.acks || []).filter((a) => a.by === me).map((a) => a.ts), ...(S.doses || []).filter((x) => x.by === me).map((x) => x.ts));
+function catchupState() {
+  if (!session || isFamily() || !session.client) return null;
+  if (cloudOn() && !syncState.pulled) return null; // wait until this phone has the latest record
+  const me = stampId(), c = S.catchup;
+  if (c && c.me === me && c.client === session.client.id) {
+    const done = new Set((S.acks || []).filter((a) => a.by === me && a.ts >= c.at).map((a) => a.what));
+    if (!(done.has("read") && done.has("skin"))) return { ...c, done };
+  }
+  const last = myActivity(me), days = (session.client.catchupDays || 7);
+  if (last && Date.now() - last < days * 864e5) return null;
+  if (!last && !S.notes.some((n) => !isExample(n))) return null; // a brand-new client: nothing to catch up on
+  S.catchup = { me, client: session.client.id, at: Date.now(), since: last, isNew: !last }; saveLocal();
+  return { ...S.catchup, done: new Set() };
+}
+function catchupHTML() {
+  const c = catchupState(); if (!c) return "";
+  const since = c.since || 0, li = [];
+  const p = plan();
+  const names = (ms) => { const u = [...new Set(ms.map(medName))]; return esc(u.slice(0, 3).join(", ")) + (u.length > 3 ? ` and ${u.length - 3} more` : ""); };
+  if (p.sections.length && (p.updatedAt || 0) > since) li.push(`Care plan${since ? ` changed ${esc(fmtDay(p.updatedAt))}` : ""}${p.updatedBy ? ` by ${esc(p.updatedBy)}` : ""}: <button class="link small" data-cu="plan">read it</button>`);
+  const meds = medsState().list, newMeds = meds.filter((m) => !m.stoppedAt && (m.createdAt || 0) > since), chMeds = meds.filter((m) => !m.stoppedAt && (m.createdAt || 0) <= since && (m.updatedAt || 0) > since), stopped = meds.filter((m) => m.stoppedAt && m.stoppedAt > since);
+  if (since && (newMeds.length || chMeds.length || stopped.length)) li.push(`Medicines: ${[newMeds.length ? `${names(newMeds)} added` : "", chMeds.length ? `${names(chMeds)} changed` : "", stopped.length ? `${names(stopped)} stopped` : ""].filter(Boolean).join("; ")}. <button class="link small" data-cu="meds">See the list</button>`);
+  else if (!since && meds.some((m) => !m.stoppedAt)) li.push(`Medicines: ${meds.filter((m) => !m.stoppedAt).length} on the list. <button class="link small" data-cu="meds">See the list</button>`);
+  const of = openFlags().filter((f) => !isExample(f));
+  if (of.length) li.push(`${of.length} flag${of.length === 1 ? "" : "s"} still open: ${of.slice(0, 3).map((f) => esc(f.title)).join("; ")}${of.length > 3 ? "…" : ""}`);
+  const inc = latestForms("incident").filter((r) => formVersions(r.formId)[0].ts > since || r.status !== "closed");
+  if (inc.length) li.push(`Incident reports: ${inc.slice(0, 3).map((r) => `<button class="link small" data-openform="${esc(r.formId)}">${esc(r.ref)}</button> (${esc(FORM_STATUS[r.status].toLowerCase())})`).join(", ")}`);
+  const sk = latestForms("skin").filter((r) => r.status !== "closed"), skObs = observations().filter((o) => o.topic === "skin" && o.ts > (since || Date.now() - 14 * 864e5));
+  if (sk.length || skObs.length) li.push(`Skin: ${[sk.length ? `${sk.map((r) => `<button class="link small" data-openform="${esc(r.formId)}">${esc(skinWhere(formData(r)))}</button>`).join(", ")} being followed up` : "", skObs.length ? `${skObs.length} note${skObs.length === 1 ? "" : "s"} about skin${since ? " since you were last here" : " in the last 14 days"}` : ""].filter(Boolean).join("; ")}`);
+  if (since) { const n = S.notes.filter((x) => x.ts > since && !isExample(x)).length; if (n) li.push(`${n} note${n === 1 ? "" : "s"} since you were last here: <button class="link small" data-cu="diary">read them day by day</button>`); }
+  return `<div class="card" id="catchup" style="display:grid;gap:8px;border:2px solid var(--accent, #6b4fa0)"><div class="card-h"><h3>${c.isNew ? `Getting to know ${esc(S.client.name)}` : `Welcome back: catch up on ${esc(S.client.name)}`}</h3></div>
+    <p class="small" style="margin:0">${c.isNew ? "Before your first shift, read what's below." : `Since you were last here (${esc(fmtDay(since))}):`}</p>
+    <ul class="small" style="margin:0;padding-left:18px;display:grid;gap:4px">${li.length ? li.map((x) => `<li>${x}</li>`).join("") : "<li>Nothing has changed.</li>"}</ul>
+    <div style="display:grid;gap:6px">${[["read", "I've read this"], ["skin", "I've checked the skin"]].map(([k, l]) => c.done.has(k) ? `<div class="small">✓ ${l}</div>` : `<button class="btn secondary" data-ack="${k}">${l}</button>`).join("")}</div>
+    <p class="tiny muted" style="margin:0">Recorded with your name and the time. You can record notes before ticking these.</p></div>`;
+}
+function bindCatchup(v) {
+  v.querySelectorAll("[data-ack]").forEach((b) => (b.onclick = () => {
+    const c = S.catchup; if (!c) return;
+    const rec = { id: uid(), ts: Date.now(), what: b.dataset.ack, since: c.since || 0, by: stampId(), byName: session.name || onDuty().name };
+    touch(rec); (S.acks = S.acks || []).push(rec); save();
+    toast(b.dataset.ack === "skin" ? "Skin check recorded" : "Recorded"); render();
+  }));
+  v.querySelectorAll("[data-cu]").forEach((b) => (b.onclick = () => {
+    const k = b.dataset.cu;
+    if (k === "plan") openPlan(); else if (k === "meds") openMeds("list");
+    else { logDay = dayKey(new Date(S.catchup && S.catchup.since ? S.catchup.since : Date.now())); go("log"); }
+  }));
+}
+// Follow-up checks from every version of a skin form (two phones adding a check at once keep both).
+function allFollowups(formId) {
+  const seen = new Map();
+  for (const v of formVersions(formId)) for (const f of formData(v).followups) seen.set(`${f.ts}|${f.byName}`, f);
+  return [...seen.values()].sort((a, b) => a.ts - b.ts);
+}
+// Two versions amending the same one: changed on two phones at once.
+const formConflict = (formId) => { const vs = formVersions(formId), n = new Map(); for (const v of vs) if (v.prevId) n.set(v.prevId, (n.get(v.prevId) || 0) + 1); return [...n.values()].some((x) => x > 1); };
+// For the handover: skin concerns being followed up and incident reports not yet closed.
+function handoverFormFlags() {
+  return [...latestForms("skin").filter((r) => r.status !== "closed").map((r) => { const d = formData(r); return { kind: "To note", title: `Skin concern being followed up (${r.ref}): ${skinWhere(d)}`, detail: `${opt(SKIN_STATUS, d.status) || "Status not given"}${d.nextReview ? `; next check due ${fmtDay(new Date(d.nextReview + "T12:00:00").getTime())}` : ""}.` }; }),
+    ...latestForms("incident").filter((r) => r.status !== "closed").map((r) => ({ kind: "To note", title: `Incident report ${r.ref}: ${FORM_STATUS[r.status].toLowerCase()}`, detail: formLine(r) }))];
 }
 
 let logFilter = "all";
@@ -2966,8 +3425,10 @@ function renderLog() {
     ...S.notes.filter((n) => !isNested(n)).map((n) => ({ type: "note", ts: n.ts, n })),
     ...S.transfers.flatMap((t) => [{ type: "out", ts: t.outTs, t }, ...(t.backTs ? [{ type: "back", ts: t.backTs, t }] : [])]),
     ...S.handovers.map((h) => ({ type: "handover", ts: h.ts, h })),
+    ...latestForms().map((r) => ({ type: "form", ts: formVersions(r.formId)[0].ts, r })),
   ].filter((it) => !logDay || dayKey(new Date(it.ts)) === logDay).filter((it) => {
     if (logFilter === "all") return true;
+    if (it.type === "form") return logFilter === "incident" ? it.r.type === "incident" : it.r.status !== "closed";
     if (it.type !== "note") return false;
     const ids = new Set([it.n.id, ...S.notes.filter((x) => x.amends === it.n.id).map((x) => x.id)]);
     const fl = S.flags.filter((f) => ids.has(f.noteId));
@@ -2976,11 +3437,14 @@ function renderLog() {
   let lastDay = "";
   const rows = items.map((it) => {
     const d = dayLabel(it.ts); const head = d !== lastDay ? `<div class="day-h">${esc(d)}</div>` : ""; lastDay = d;
+    if (it.type === "form") { const r = it.r, vs = formVersions(r.formId); return head + `<div class="card entry system"><div class="entry-top"><span class="t">${fmtTime(it.ts)}</span><span class="chip ${r.type === "incident" ? "incident" : "follow"}">${formTitle(r.type)}</span><span class="muted">${esc(vs[0].byName || "")}</span></div>
+      <button class="link small" data-openform="${esc(r.formId)}" style="justify-self:start;text-align:left;min-height:40px">${esc(r.ref)} · ${esc(formLine(r))} · ${esc(r.type === "skin" && r.status === "open" ? "being followed up" : FORM_STATUS[r.status].toLowerCase())}${vs.length > 1 ? ` · changed ${vs.length - 1} time${vs.length === 2 ? "" : "s"}` : ""}</button></div>`; }
     if (it.type === "note") {
       const n = it.n; const fl = S.flags.filter((f) => f.noteId === n.id);
       return head + `<article class="card entry">
         <div class="entry-top"><span class="t">${fmtTime(n.ts)}</span><span class="muted">${esc(carer(n.carerId, n.carerName).name)}</span>${extraChip(n)}${n.approvedTs && n.approvedTs - n.ts > 30 * 60 * 1000 ? `<span class="chip" title="Recorded ${esc(fmtTime(n.ts))}, saved ${esc(fmtTime(n.approvedTs))}">Saved later</span>` : ""}${n.serverAt && n.serverAt - (n.approvedTs || n.ts) > 30 * 60 * 1000 ? `<span class="chip">Added later: ${dayLabel(n.serverAt)} ${fmtTime(n.serverAt)}</span>` : ""}${n.source === "example" ? '<span class="chip">Example</span>' : ""}</div>
         ${fl.length ? `<div class="chips">${fl.map((f) => `<span class="chip ${f.kind === "incident" ? "incident" : "follow"}">${esc(f.title)}</span>`).join("")}</div>` : ""}
+        ${latestForms().filter((r) => r.noteId === n.id).map((r) => `<button class="link small" data-openform="${esc(r.formId)}" style="justify-self:start;min-height:40px">${formTitle(r.type)} ${esc(r.ref)}</button>`).join("")}
         <p class="note-text">${esc(n.note)}</p>
         <div class="chips">${n.categories.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>
         <details ${logOpen ? "open" : ""}><summary>${n.audioId ? "Recording and words" : "Words"}</summary>
@@ -3290,6 +3754,9 @@ function openSettings() {
       <label class="f">Where the care is<select id="stCountry" ${session.role === "admin" && !session.local ? "" : "disabled"}><option value="UK" ${clientCountry() === "UK" ? "selected" : ""}>United Kingdom</option><option value="AU" ${clientCountry() === "AU" ? "selected" : ""}>Australia</option></select></label>
       <label class="f">How notes refer to ${esc(S.client.name)}<select id="stCPron" ${session.role === "admin" && !session.local ? "" : "disabled"}>${[["", `By name (${S.client.name})`], ["he/him", "He / him"], ["she/her", "She / her"], ["they/them", "They / them"]].map(([v, l]) => `<option value="${esc(v)}" ${(session.client.pronouns || "") === v ? "selected" : ""}>${esc(l)}</option>`).join("")}${session.client.pronouns && !["he/him", "she/her", "they/them"].includes(session.client.pronouns) ? `<option value="${esc(session.client.pronouns)}" selected>${esc(session.client.pronouns)}</option>` : ""}<option value="other">Something else…</option></select></label>
       <p class="tiny muted" style="margin:-6px 0 0">Sets the emergency numbers and contacts under Who to tell, the agreement wording, and the spelling the AI uses.${session.role === "admin" ? "" : " An administrator can change it."}</p>
+      <label class="f">How the care is arranged<select id="stCare" ${session.role === "admin" && !session.local ? "" : "disabled"}><option value="private" ${isAgency() ? "" : "selected"}>Private: the family employs the carers</option><option value="agency" ${isAgency() ? "selected" : ""}>Agency: a care agency provides the carers</option></select></label>
+      <p class="tiny muted" style="margin:-6px 0 0">For an agency, an administrator reviews each incident report and records whether a statutory notification is needed.</p>
+      <label class="f">Ask carers to catch up after this many days away<input type="number" id="stCatch" min="1" max="60" inputmode="numeric" value="${esc(session.client.catchupDays || 7)}" ${session.role === "admin" && !session.local ? "" : "disabled"}></label>
       ${isSharedPhone() ? "" : '<button class="btn secondary" id="stSwitch">Switch or add client</button>'}</div>
     <div class="card" style="display:grid;gap:12px"><h3 style="font-size:17px">Carers for ${esc(S.client.name)}</h3>
       ${roster().filter((x) => !x.notOnRoster).map((x) => `<label class="f">${esc(x.name)}<input type="text" data-cs="${esc(x.id)}" data-was="${esc(x.shift)}" value="${esc(x.shift)}" placeholder="Shift, e.g. Day · 08:00–20:00" maxlength="40" autocomplete="off">${x.shift && !shiftRange(x.shift) ? '<span class="tiny" style="color:var(--follow)">Add the times, like 04:00–13:30, so the app can tell who is on shift.</span>' : ""}</label>`).join("") || `<p class="small muted" style="margin:0">No carers are on ${esc(S.client.name)} yet.</p>`}
@@ -3376,6 +3843,12 @@ function openSettings() {
     }
     catch (err) { e.target.value = was; toast(err.message); }
   };
+  const careSet = async (el, body, msg, was) => {
+    try { const out = await relay("/clients/care", { id: session.client.id, ...body }); session.client.care = out.client.care; session.client.catchupDays = out.client.catchupDays; saveSession(); toast(msg); render(); }
+    catch (err) { el.value = was; toast(err.message); }
+  };
+  if ($("#stCare") && !$("#stCare").disabled) $("#stCare").onchange = (e) => careSet(e.target, { care: e.target.value }, e.target.value === "agency" ? "Agency: incident reports get an administrator's review" : "Private care: no review step", isAgency() ? "agency" : "private");
+  if ($("#stCatch") && !$("#stCatch").disabled) $("#stCatch").onchange = (e) => { const d = Math.floor(Number(e.target.value)); if (!(d >= 1 && d <= 60)) { e.target.value = session.client.catchupDays || 7; return toast("Choose between 1 and 60 days"); } careSet(e.target, { catchupDays: d }, `Carers catch up after ${d} day${d === 1 ? "" : "s"} away`, session.client.catchupDays || 7); };
   $("#stOut").onclick = async (e) => confirmInline(e.currentTarget, async () => {
     if (!session.local) relay("/logout", {}).catch(() => {});
     s.close(); signedOut("You've signed out.");
@@ -4005,9 +4478,9 @@ function openSavedNote(id, { unclear = [], background = [], gaps = [], lostAt = 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-19.19";
+const PRIVACY_VERSION = "2026-10-20.20";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 19 · 19 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 20 · 20 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -4039,6 +4512,7 @@ const PRIVACY_HTML = `
 <p>When you ask the app to write a note, handover, summary or report (such as the falls and mobility report), the <strong>words</strong> of your note (never the recording), the client's first name, the names of the carers involved, the names of the client's care plan sections, and your saved word fixes ("My words"), are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text it sends for tidying; the note you save is stored as described under Care notes and recordings. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
 <p><strong>Writing the care plan.</strong> When you ask the app to write up a care plan section, the words you said or typed for it, the section's current wording, the client's name, and the names and pronouns of the client and their carers are sent to Anthropic in the same way. When you ask it to fill the care plan from a care plan document, a copy of that document is sent to Anthropic to be read. You check and can change everything before it's saved, and each saved version of the care plan is kept with who changed it, and who agreed to it (the client, their attorney, or not yet).</p>
 <p><strong>Reports.</strong> When a note is saved, what it says about drinks (and how much), meals, bowels, passing urine, pain, sleep, behaviour, skin, mobility and any weight or height is also kept as separate entries with the client's record in the EU, so the reports (such as fluid intake or bowels) can be made without carers writing anything twice. The words of the note are sent to Anthropic for this as part of writing the note. Carers can correct these entries; family members don't see them unless a carer shares a report with them.</p>
+<p><strong>Incident reports and skin forms.</strong> When a carer completes an incident report or a skin integrity form, it's kept with the client's record in the EU, with every version (who changed what, and when) and, for an agency, an administrator's review. To start one from a note, the words of that note are sent to Anthropic in the same way, to suggest answers the carer checks. The client's carers and administrators see them; family members see what happened and what was done in incident reports (not safeguarding answers, witnesses or who was told) only if an administrator has let them see incidents. When a carer catches up after time away, "I've read this" and "I've checked the skin" are kept with their name and the time.</p>
 <p><strong>Medicine photos.</strong> If you take a photo of a medicine label, prescription or box to fill in or check the medicines chart, the photo is kept with the client's documents in our cloud storage in the European Union, and sent to Anthropic in the same way to be read. A prescription may show the client's name, address and date of birth. You check every detail before it's saved.</p>
 <h3>Who else handles data for us</h3>
 <ul>
@@ -4836,9 +5310,9 @@ const clientsApi = {
     if (session) accentFromServer(out.accent);
     return out.clients;
   },
-  add: async (name, consent, country = "UK") => {
-    if (!session.local) { const out = await relay("/clients/add", { name, consent, country }); if (out.meId) session.meId = out.meId; return out.client; }
-    const client = { id: uid(), name, country, consent: { name: consent.name, role: consent.role, ts: Date.now(), by: session.username }, createdAt: Date.now(), createdBy: session.username };
+  add: async (name, consent, country = "UK", care = "private") => {
+    if (!session.local) { const out = await relay("/clients/add", { name, consent, country, care }); if (out.meId) session.meId = out.meId; return out.client; }
+    const client = { id: uid(), name, country, care, consent: { name: consent.name, role: consent.role, ts: Date.now(), by: session.username }, createdAt: Date.now(), createdBy: session.username };
     localStorage.setItem(LOCAL_CLIENTS, JSON.stringify([...localClients(), client]));
     return client;
   },
@@ -4867,7 +5341,7 @@ async function checkClient() {
     toast(isFamily() ? `You're no longer linked to ${session.client.name}, or it was removed` : `You're no longer a carer for ${session.client.name}, or it was removed`);
     detachClient();
     session.client = null; saveSession(); KEY = null; S = seed(); showClients(false);
-  } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name || (fresh.country || "UK") !== clientCountry() || JSON.stringify(fresh.family || []) !== JSON.stringify(session.client.family || []) || !!fresh.familyIncidents !== !!session.client.familyIncidents || (fresh.familyAt || "") !== (session.client.familyAt || "") || (fresh.pronouns || "") !== (session.client.pronouns || "")) {
+  } else if (JSON.stringify(fresh.carers) !== JSON.stringify(session.client.carers) || fresh.name !== session.client.name || (fresh.country || "UK") !== clientCountry() || JSON.stringify(fresh.family || []) !== JSON.stringify(session.client.family || []) || !!fresh.familyIncidents !== !!session.client.familyIncidents || (fresh.familyAt || "") !== (session.client.familyAt || "") || (fresh.pronouns || "") !== (session.client.pronouns || "") || (fresh.care || "private") !== (session.client.care || "private") || (fresh.catchupDays || 7) !== (session.client.catchupDays || 7)) {
     // Carers or shifts changed elsewhere (e.g. an administrator assigned someone): pick that up.
     session.client = clientFromServer(fresh);
     saveSession(); loadUser(); render();
@@ -4875,7 +5349,7 @@ async function checkClient() {
 }
 // The client as the app keeps it in session.client, from the relay's record (one place, so a refresh
 // never drops a field).
-const clientFromServer = (c) => ({ id: c.id, name: c.name, country: c.country || "UK", consent: c.consent, carers: c.carers || [], family: c.family || [], familyIncidents: !!c.familyIncidents, familyAt: c.familyAt || "", pronouns: c.pronouns || "", shared: c.shared || [] });
+const clientFromServer = (c) => ({ id: c.id, name: c.name, country: c.country || "UK", consent: c.consent, carers: c.carers || [], family: c.family || [], familyIncidents: !!c.familyIncidents, familyAt: c.familyAt || "", pronouns: c.pronouns || "", care: c.care === "agency" ? "agency" : "private", catchupDays: c.catchupDays || 7, shared: c.shared || [] });
 function chooseClient(client) {
   session.client = clientFromServer(client);
   saveSession(); loadUser(); $("#fullRoot").innerHTML = ""; go("today");
@@ -4894,6 +5368,7 @@ async function showClients(manual) {
       <h3 style="font-size:20px;margin:6px 0 0">New client</h3>
       <label class="f">Client's name<input type="text" id="clName" placeholder="e.g. Nana" autocomplete="off"></label>
       <label class="f">Where is the care?<select id="clCountry"><option value="UK">United Kingdom</option><option value="AU">Australia</option></select></label>
+      <label class="f">How is the care arranged?<select id="clCare"><option value="private">Private: the family employs the carers</option><option value="agency">Agency: a care agency provides the carers</option></select></label>
       <p class="muted" style="margin:0">Carers record short voice notes about the client's day. The app keeps the original recording, writes a tidy note and builds the handover for the next carer.</p>
       <div class="card small" style="display:grid;gap:8px">
         <div><strong>What is recorded:</strong> the carer's voice. Other voices nearby may be picked up.</div>
@@ -4929,7 +5404,7 @@ async function showClients(manual) {
     e.preventDefault();
     const b = $("#cnGo"); b.disabled = true; b.textContent = "Saving…"; $("#clMsg").textContent = "";
     try {
-      chooseClient(await clientsApi.add($("#clName").value.trim(), { name: $("#cnName").value.trim(), role: $("#cnRole").value, agreed: true }, $("#clCountry").value));
+      chooseClient(await clientsApi.add($("#clName").value.trim(), { name: $("#cnName").value.trim(), role: $("#cnRole").value, agreed: true }, $("#clCountry").value, $("#clCare").value));
       toast("Client added");
       if (canEditPlan()) openEmergencyEdit({ then: offerPlanSetup });
     } catch (err) { $("#clMsg").textContent = err.message; b.textContent = "Add client and start"; check(); }

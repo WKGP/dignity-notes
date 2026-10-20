@@ -2,6 +2,8 @@
 
 ## 1.3.0 - 2026-10-15
 
+- 1.3.9: Incident reports and skin integrity forms, started from a flag and filled in from the note (each answer marked "from the note: check"); every amendment kept with who and when; print or save as PDF. Clients are set as private or agency; an administrator reviews an agency client's incident reports (statutory notification needed?). Skin follow-up checks, and a Skin integrity report. A catch-up card for carers new to a client or back after time away ("I've read this", "I've checked the skin"). Privacy notice version 20.
+
 
 ## 1.2.0 - 2026-10-10
 

@@ -255,7 +255,11 @@ table.mar.who td,table.mar.who th{text-align:left;min-width:120px}
   body.printing-mar .mar-wrap{overflow:visible;border:0}
   body.printing-mar table.mar .mn{position:static}
   body.printing-mar table.mar th,body.printing-mar table.mar td{border-color:#999}
+  /* One incident report or skin form printed on its own, even over an open report. */
+  body.printing-form>*:not(#printRoot){display:none!important}
+  body.printing-form #printRoot{display:block!important;color:#000;background:#fff}
 }
+#printRoot{display:none}
 /* Family accounts see only their own screen (no recording, tabs or carer on duty). */
 .family-mode nav.tabs, .family-mode #dutyBtn, .family-mode #outBanner { display: none !important; }
 </style>
@@ -299,6 +303,7 @@ table.mar.who td,table.mar.who th{text-align:left;min-width:120px}
 
 <div id="sheetRoot"></div>
 <div id="fullRoot"></div>
+<div id="printRoot"></div>
 <div class="toast" id="toast" role="status" hidden></div>
 
 <script src="app.js"></script>
