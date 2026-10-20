@@ -1603,12 +1603,14 @@ $("#dutyBtn").addEventListener("click", () => openCarerSheet());
 $("#settingsBtn").addEventListener("click", () => (isFamily() ? openFamilySettings() : openSettings()));
 $("#brandBtn").addEventListener("click", () => { if (session && !appBusy() && !isSharedPhone()) showClients(true); }); // a shared phone only has its own client
 $("#helpBtn").addEventListener("click", () => openHelp());
+$("#findBtn").addEventListener("click", () => openFind());
 $("#returnBtn").addEventListener("click", () => openReturnSheet());
 
 /* ---------- render ---------- */
 function render() {
   $("#clientName").textContent = S.client.name; $("#brandBtn").setAttribute("aria-label", `${S.client.name}. Switch client`);
   document.body.classList.toggle("family-mode", isFamily());
+  $("#findBtn").hidden = !(session && session.client) || isFamily(); // Find is always in the top bar
   if (isFamily()) { if (tab !== "today") { tab = "today"; ["today", "log", "handover", "family"].forEach((x) => ($("#view-" + x).hidden = x !== "today")); } return renderFamilyHome(); }
   $("#dutyName").textContent = onDuty().name;
   $("#dutyAvatar").textContent = onDuty().name.charAt(0).toUpperCase();
@@ -2568,13 +2570,16 @@ const emergForm = () => (S.plan && S.plan.emergency) || null;
 const emergHasForm = (e) => !!(e && ["respect", "dnacpr", "acd"].includes(e.form));
 const emergText = (e) => (emergHasForm(e) ? `${EMERG_LABEL[e.form]}: kept ${e.where}` : EMERG_LABEL[e && e.form] || "Not recorded");
 const emergChecked = (e) => (e ? `Checked ${fmtDay(e.at)}${e.by ? " by " + esc(e.by) : ""}` : "");
-// Today: the red emergency button when there's a form; a reminder when nobody has recorded it yet.
-function emergTodayHTML() {
+// The emergency form as a small tile in the shortcut row (Sam, 2026-10-16 and 18: the full-width banner
+// took too much room; everyone knows the form, they just need to find where it's kept). Red when there
+// is a form, amber when nobody has recorded it yet; the details are one tap away.
+const EMERG_SHORT = { respect: "ReSPECT", dnacpr: "DNR form", acd: "Advance Care Directive" };
+function emergTileHTML() {
   const e = emergForm(), r = respectDoc();
-  if (emergHasForm(e)) return `<button class="emerg" id="emBtn" style="flex-direction:column;gap:2px"><span style="display:flex;gap:8px;align-items:center">${ICON.alert}${esc(EMERG_LABEL[e.form])}</span><span style="font-weight:600;font-size:14px">Kept ${esc(e.where)}</span><span style="font-weight:400;font-size:12px">${emergChecked(e)}</span></button>`;
-  if (e && e.form === "none") return `<button class="link small" id="emBtn" style="justify-self:center;min-height:40px">No emergency form (ReSPECT or DNR) · ${emergChecked(e)}</button>`;
-  const ask = canEditPlan() && S.plan && Array.isArray(S.plan.sections) ? `<button class="warn small" id="emBtn" style="text-align:left;width:100%">Is there a ReSPECT or DNR form? Record where it's kept, for paramedics. <strong>Record it</strong></button>` : "";
-  return (r ? `<button class="emerg" data-opendoc="${esc(r.id)}">${ICON.alert}Emergency care plan</button>` : "") + ask;
+  if (emergHasForm(e)) return `<button class="tile emerg-tile" id="emBtn" aria-label="${esc(EMERG_LABEL[e.form])}: kept ${esc(e.where)}">${ICON.alert}${esc(EMERG_SHORT[e.form])}</button>`;
+  if (e && e.form === "none") return `<button class="tile" id="emBtn" aria-label="No emergency form known">${ICON.alert}No form</button>`;
+  if (r) return `<button class="tile emerg-tile" data-opendoc="${esc(r.id)}" aria-label="Emergency care plan">${ICON.alert}Emergency plan</button>`;
+  return canEditPlan() && S.plan && Array.isArray(S.plan.sections) ? `<button class="tile emerg-ask" id="emBtn" aria-label="Record whether there's a ReSPECT or DNR form">${ICON.alert}ReSPECT?</button>` : "";
 }
 function openEmergency() {
   refreshContacts().catch(() => {}); // the cached list is shown now; the latest next time
@@ -2807,12 +2812,11 @@ function renderToday() {
     <button class="cta" id="ctaRec">${ICON.mic}Record a note</button>
     ${isSharedPhone() ? `<p class="small" style="margin:-4px 0 0;text-align:center">Recording as <strong>${esc(session.name)}</strong> · <button class="link small" id="shSwitch" style="min-height:40px">Not you? Switch carer</button></p>` : ""}
     <div class="tiles">
-      <button class="tile" id="qFind">${ICON.search}Find</button>
+      ${emergTileHTML() || `<button class="tile" id="qFind">${ICON.search}Find</button>`}
       <button class="tile" id="qContacts">${ICON.people}Contacts</button>
       <button class="tile" id="qPlan">${ICON.plan}Care plan</button>
       ${activeTransfer() ? `<button class="tile on" id="ctaBack">${ICON.out}Back in care</button>` : `<button class="tile" id="ctaOut">${ICON.out}Out with someone</button>`}
     </div>
-    ${emergTodayHTML()}
     ${fbQuestionsHTML()}
     ${planProgressHTML()}
     ${familyReadyHTML()}
@@ -2830,7 +2834,7 @@ function renderToday() {
   $("#ctaRec").onclick = () => openRecorder();
   if ($("#shSwitch")) $("#shSwitch").onclick = () => switchCarer();
   $("#qContacts").onclick = () => openContacts();
-  $("#qFind").onclick = () => openFind();
+  if ($("#qFind")) $("#qFind").onclick = () => openFind();
   bindTasks($("#view-today")); bindMeds(v); bindFbQuestions(v);
   v.querySelectorAll("[data-gofamily]").forEach((b) => (b.onclick = () => go("family")));
   autoFamilyUpdate().then((made) => { if (made && tab === "today" && !appBusy() && !userIsReading()) render(); }).catch(() => {});

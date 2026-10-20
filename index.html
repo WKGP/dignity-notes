@@ -116,6 +116,8 @@ details.fold[open]>summary{margin:0}
 .cta:active{transform:scale(.99)}
 /* Shortcut tiles on Today */
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.tile.emerg-tile{background:var(--incident-soft);color:var(--incident);border-color:color-mix(in srgb,var(--incident) 35%,transparent)}
+.tile.emerg-ask{background:var(--follow-soft, #fff4e5);color:var(--ink)}
 .tile{border:1px solid var(--line);background:var(--surface);border-radius:16px;padding:12px 4px 10px;display:grid;justify-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--ink);box-shadow:var(--shadow);min-width:0}
 .tile svg{width:24px;height:24px;color:var(--accent)}
 .tile.on{background:var(--follow-soft)}
@@ -264,6 +266,7 @@ table.mar.who td,table.mar.who th{text-align:left;min-width:120px}
   <div class="wrap">
     <div class="brand"><img class="logo" src="logo-wordmark.png" alt="Dignity Notes" width="720" height="195"><h1><button id="brandBtn" class="client-btn"><span id="clientName">Nana</span><svg class="i chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button></h1></div>
     <button class="duty" id="dutyBtn" aria-label="Change carer on duty"><span class="avatar" id="dutyAvatar">A</span><span id="dutyName">Ann</span></button>
+    <button class="icon-btn" id="findBtn" aria-label="Find: search notes, care plan, contacts" hidden><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg></button>
     <button class="icon-btn" id="helpBtn" aria-label="Help and feedback"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8"/><circle cx="12" cy="17" r=".6" style="fill:currentColor"/></svg></button>
     <button class="icon-btn" id="settingsBtn" aria-label="Settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
   </div>
