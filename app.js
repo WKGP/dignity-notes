@@ -250,7 +250,7 @@ const cloudOn = () => !!(session && session.token && !session.local && session.r
 const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SYNC_SHAPES = {
   note: { req: ["ts", "note"], f: { ts: "num", approvedTs: "num", carerId: "id", carerName: "str:60", planSections: "cats", transcript: "str:30000", heard: "str:30000", heardBy: "str:10", amends: "id", auto: "num", extra: "num", note: "str:20000", categories: "cats", audioId: "id", source: "str:20" } },
-  flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", raisedBy: "id", resolvedNote: "str:200", resolvedTs: "num", resolvedBy: "id" } },
+  flag: { req: ["ts", "kind", "title", "status"], f: { ts: "num", kind: ["incident", "follow_up"], title: "str:200", detail: "str:2000", status: ["open", "resolved"], noteId: "id", raisedBy: "id", resolvedNote: "str:1000", resolvedTs: "num", resolvedBy: "id" } },
   task: { req: ["ts", "taskId", "day", "status"], f: { ts: "num", taskId: "str:40", title: "str:120", day: "str:10", period: ["morning", "afternoon", "evening", "night", "any"], status: ["done", "not_done"], reason: "str:300", by: "id", noteId: "id" } },
   dose: { req: ["ts", "medId", "day", "slot", "code"], f: { ts: "num", medId: "id", med: "str:200", day: "str:10", slot: "str:8", code: ["T", "P", "R", "NT", "NR", "D", "C", "M", "E", "O", "V"], amount: "str:40", reason: "str:300", prnFor: "str:200", note: "str:500", corrects: "id", outcomeOf: "id", outcome: "str:200", by: "id", byName: "str:60" } },
   supply: { req: ["ts", "medId", "matches"], f: { ts: "num", medId: "id", med: "str:200", qty: "str:60", from: "str:80", matches: ["yes", "no"], mismatch: "str:300", by: "id", byName: "str:60" } },
@@ -502,7 +502,7 @@ async function tidy(transcript, addition) { // addition: an addition to an earli
   try {
     const out = await relay("/tidy", { transcript, addition: !!addition, client: S.client.name, carer: onDuty().name, time: fmtTime(Date.now()), vocabulary: dictVocabulary(), country: clientCountry(), containers: CUPS(), clientId: session && session.client ? session.client.id : "", tasks: tasksNow().due.filter((x) => !x.tick).map((x) => x.t.title), planSections: plan().sections.map((x) => x.title) });
     if (!validTidy(out)) throw new Error("Unexpected reply from the relay");
-    return { unclear: [], record_gaps: [], plan_sections: [], tasks_done: [], observations: [], ...out, source: "ai" };
+    return { unclear: [], background: [], record_gaps: [], plan_sections: [], tasks_done: [], observations: [], ...out, source: "ai" };
   } catch (e) {
     return { ...basicTidy(transcript), source: "basic", reason: e.message };
   }
@@ -544,7 +544,7 @@ const familyIncidentsOn = () => (session && !session.local && session.client ? !
 function summaryPayload(mode, toId) {
   return {
     mode, country: clientCountry(), clientId: session && session.client ? session.client.id : "", client: S.client.name, fromCarer: onDuty().name, toCarer: toId ? carer(toId).name : "",
-    notes: (mode === "family" ? familyNotes() : shiftNotes()).map((n) => { const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name + (n.extra && mode !== "family" ? ", extra assistance" : ""), note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
+    notes: [...(mode === "handover" ? S.flags.filter((f) => f.status === "resolved" && f.resolvedTs >= shiftStart() && !isExample(f)).map((f) => ({ ts: f.resolvedTs, note: `Resolved: ${f.title}.${f.resolvedNote ? " How: " + f.resolvedNote : ""}`, carerId: f.resolvedBy, resolvedFlag: true })) : []), ...(mode === "family" ? familyNotes() : shiftNotes())].sort((a, b) => a.ts - b.ts).map((n) => { if (n.resolvedFlag) return { time: fmtTime(n.ts), carer: carer(n.carerId).name, note: n.note }; const o = n.amends && S.notes.find((x) => x.id === n.amends); return { time: fmtTime(n.ts), carer: carer(n.carerId, n.carerName).name + (n.extra && mode !== "family" ? ", extra assistance" : ""), note: o ? `(Added to the note from ${dayLabel(o.ts).toLowerCase()} at ${fmtTime(o.ts)}) ${n.note}` : n.note }; }),
     flags: openFlags().filter((f) => !isExample(f) && !(mode === "family" && f.kind === "incident" && !familyIncidentsOn()) && !(mode === "family" && (f.ts < Date.now() - 24 * 36e5 || MEDS_SAFETY_FLAG.test(f.title)))).map((f) => ({ kind: f.kind === "incident" ? "Incident" : "To note", title: f.title, detail: f.detail })),
     transfers: S.transfers.filter((t) => t.outTs >= (mode === "family" ? Date.now() - 24 * 36e5 : shiftStart()) || !t.backTs).map((t) => `${fmtTime(t.outTs)} out with ${t.withWhom} (${t.purpose || "outing"})${t.backTs ? ", back " + fmtTime(t.backTs) : ", not yet back"}`),
     planGaps: mode === "handover" ? planGaps() : [],
@@ -729,7 +729,10 @@ function dosesDue(from, to) {
 }
 const prnLive = (medId, since) => { const all = doses().filter((d) => d.medId === medId && d.slot === "prn"); return all.filter((d) => d.ts >= since && !all.some((x) => x.corrects === d.id) && GIVEN.has(d.code)); };
 const medsUnchecked = () => medsState().list.filter((m) => !m.stoppedAt && !m.checkedAt);
-const medsListCheckDue = () => { const ms = medsState(), p = medsProfile(); return ms.list.some((m) => !m.stoppedAt) && (!p.listCheckedAt || Date.now() - p.listCheckedAt > 14 * 864e5); };
+// Monthly, when the new month's medicines arrive and a new chart starts (Sam, 2026-10-16: copying last
+// month's chart carried mistakes forward). Due from the 1st until someone checks the list against the boxes.
+const monthStart = () => { const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const medsListCheckDue = () => { const ms = medsState(), p = medsProfile(); return ms.list.some((m) => !m.stoppedAt) && (!p.listCheckedAt || p.listCheckedAt < monthStart()); };
 // With one live-in carer there's often nobody else to check a change: the carer who made it can
 // double-check it (reading the label again and typing the strength and dose, or the allergies). It
 // still counts as not checked until the next carer checks it at handover.
@@ -765,7 +768,7 @@ function medsCardHTML() {
     ${pcheck}
     ${uc.filter((m) => !medSelfChecked(m)).length ? `<button class="warn small" data-openmeds="list" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">${uc.filter((m) => !medSelfChecked(m)).length} change${uc.filter((m) => !medSelfChecked(m)).length > 1 ? "s" : ""} to the list not yet checked against the label: ${esc(uc.filter((m) => !medSelfChecked(m)).map((m) => m.name).join(", "))}. Tap to check.</button>` : ""}
     ${uc.filter(medSelfChecked).length ? `<button class="warn small" data-openmeds="list" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">Double-checked by the carer who changed them, to check at handover: ${esc(uc.filter(medSelfChecked).map((m) => `${m.name} (${m.selfCheck.by})`).join(", "))}. Tap to check against the label.</button>` : ""}
-    ${medsListCheckDue() ? `<button class="warn small" data-openmeds="details" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">Fortnightly check due: does the list still match the labels? Tap to check.</button>` : ""}
+    ${medsListCheckDue() ? `<button class="warn small" data-openmeds="details" style="display:block;width:100%;text-align:left;border:0;margin-bottom:8px">Monthly medicines check due: check the new month's medicines against the list. Tap to check.</button>` : ""}
     <div class="list">${due.length ? due.map(doseRowHTML).join("") : '<div class="empty">No doses due this shift.</div>'}</div>
     ${active.some((m) => m.prn) ? '<button class="btn secondary block" data-mprn style="margin-top:10px">Give a when-required medicine</button>' : ""}
     ${open ? `<p class="tiny muted" style="margin:8px 0 0">${open} to record or check. Record each one at the time.</p>` : ""}
@@ -1012,9 +1015,13 @@ function openMeds(tabName = "today") {
         <label class="f">GP practice<input type="text" id="mpGp" maxlength="120" value="${esc(p.gpPractice || "")}"></label>
         <label class="f" id="mpWhyBox" hidden>Why are who gives the medicines or the allergies changing?<input type="text" id="mpWhy" maxlength="300" placeholder="e.g. Agreed with Peter (LPA) 11 Oct" autocomplete="off"></label>
         ${medsSignOffKnownNo() ? "" : '<button class="btn primary block">Save details</button>'}</form>
-        <div class="card" style="box-shadow:none;display:grid;gap:8px"><h3 style="font-size:17px">Fortnightly check</h3>
-          <p class="small" style="margin:0">${p.listCheckedAt ? `Last checked ${esc(dayLabel(p.listCheckedAt).toLowerCase())} by ${esc(p.listCheckedBy)}.` : "Not checked yet."} Every two weeks, check each medicine on the list against its current label or prescription.</p>
-          ${medsSignOffKnownNo() ? "" : `<button class="btn secondary" id="mpCheck">I've checked the whole list against the labels</button>`}</div>`;
+        <div class="card" style="box-shadow:none;display:grid;gap:8px"><h3 style="font-size:17px">Monthly check</h3>
+          <p class="small" style="margin:0">${p.listCheckedAt ? `Last checked ${esc(dayLabel(p.listCheckedAt).toLowerCase())} by ${esc(p.listCheckedBy)}${p.listCheckNote ? `: ${esc(p.listCheckNote)}` : "."}` : "Not checked yet."} At the start of each month, when the new medicines arrive, check every box against the list. Don't copy last month's chart without checking it.</p>
+          ${medsSignOffKnownNo() ? "" : `<label class="check"><input type="checkbox" class="mpTick"><span>Every medicine on the list has arrived</span></label>
+          <label class="check"><input type="checkbox" class="mpTick"><span>The name, strength (mg) and dose on each box match the list</span></label>
+          <label class="check"><input type="checkbox" class="mpTick"><span>I've looked for anything different from last month</span></label>
+          <label class="f">Anything different or missing (optional)<input type="text" id="mpCheckNote" maxlength="300" placeholder="e.g. Amlodipine now 10 mg: list changed 2 Nov" autocomplete="off"></label>
+          <button class="btn secondary" id="mpCheck">Monthly check done</button>`}</div>`;
       const safetyChanged = () => !!p.updatedAt && ($("#mpMode", s.root).value !== p.mode || $("#mpAll", s.root).value.trim() !== (p.allergies || "") || ($("#mpMode", s.root).value === "self" && $("#mpSelf", s.root).checked !== !!p.selfLog));
       const upd = () => { $("#mpSelfBox", s.root).hidden = $("#mpMode", s.root).value !== "self"; $("#mpWhyBox", s.root).hidden = !safetyChanged(); };
       ["#mpMode", "#mpAll", "#mpSelf"].forEach((q) => { $(q, s.root).oninput = upd; $(q, s.root).onchange = upd; });
@@ -1042,11 +1049,12 @@ function openMeds(tabName = "today") {
         if (out.error) return toast(out.error);
         medsState().profile = out.profile; saveLocal(); draw(); toast(out.profile.checkedAt ? "Saved" : "Saved. Ask someone else to check it.");
       };
-      if ($("#mpCheck", s.root)) $("#mpCheck", s.root).onclick = (e) => confirmInline(e.currentTarget, async () => {
-        const out = await syncJSON("/plan/meds/listcheck", { client: session.client.id }).catch(() => ({ error: "No connection" }));
+      if ($("#mpCheck", s.root)) $("#mpCheck", s.root).onclick = async () => {
+        if ([...s.root.querySelectorAll(".mpTick")].some((c) => !c.checked)) return toast("Tick each check once you've done it");
+        const out = await syncJSON("/plan/meds/listcheck", { client: session.client.id, note: $("#mpCheckNote", s.root).value.trim() }).catch(() => ({ error: "No connection. Try again when you have signal." }));
         if (out.error) return toast(out.error);
-        medsState().profile = out.profile; saveLocal(); draw(); toast("List check recorded");
-      }, "Tap again: every medicine matches its label");
+        medsState().profile = out.profile; saveLocal(); draw(); toast("Monthly check recorded");
+      };
     }
   };
   s.root.querySelectorAll("[data-mtab]").forEach((b) => (b.onclick = () => { tabNow = b.dataset.mtab; draw(); }));
@@ -1290,7 +1298,7 @@ function medsForHandover() {
   if (uc.some((m) => !medSelfChecked(m))) out.push(`Not yet checked against the label: ${uc.filter((m) => !medSelfChecked(m)).map((m) => m.name).join(", ")}`);
   if (uc.some(medSelfChecked)) out.push(`Double-checked by the carer who changed them, not yet checked against the label by a second person: ${uc.filter(medSelfChecked).map((m) => `${m.name} (${m.selfCheck.by})`).join(", ")}`);
   if (profileUnchecked()) out.push(profileSelfChecked() ? `Medicines details (who gives them, allergies) double-checked by ${medsProfile().selfCheck.by}, not yet checked by a second person` : "Medicines details (who gives them, allergies) changed and not yet checked");
-  if (medsListCheckDue()) out.push("Fortnightly medicines list check is due");
+  if (medsListCheckDue()) out.push("Monthly medicines check is due (new month's medicines against the list)");
   return out;
 }
 
@@ -1673,14 +1681,29 @@ const whoToTell = () => {
 function flagHTML(f, actions = true) {
   return `<div class="flag ${f.kind === "incident" ? "incident" : ""}">
     <div class="body"><span class="tiny muted" style="font-weight:600">${f.kind === "incident" ? "Incident" : "To note"} · ${dayLabel(f.ts)} ${fmtTime(f.ts)}${f.raisedBy && roster().some((c) => c.id === f.raisedBy) ? " · " + esc(carer(f.raisedBy).name) : ""}</span>
-    <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span>${f.status === "resolved" ? `<span class="tiny muted">Resolved${f.resolvedBy ? " by " + esc(carer(f.resolvedBy).name) : ""}${f.resolvedTs ? " · " + esc(dayLabel(f.resolvedTs)) + " " + fmtTime(f.resolvedTs) : ""}${f.resolvedNote ? " · " + esc(f.resolvedNote) : ""}</span>` : ""}${f.kind === "incident" ? whoToTell() : ""}</div>
+    <strong>${esc(f.title)}</strong><span class="small">${esc(f.detail)}</span>${f.status === "resolved" ? `<span class="tiny muted">Resolved${f.resolvedBy ? " by " + esc(carer(f.resolvedBy).name) : ""}${f.resolvedTs ? " · " + esc(dayLabel(f.resolvedTs)) + " " + fmtTime(f.resolvedTs) : ""}</span>${f.resolvedNote ? `<span class="small"><strong>How it was resolved:</strong> ${esc(f.resolvedNote)}</span>` : ""}` : ""}${f.kind === "incident" ? whoToTell() : ""}</div>
     ${actions ? `<button class="link small" data-resolve="${esc(f.id)}">Mark resolved</button>` : ""}</div>`;
 }
+// Marking a flag resolved asks, optionally, how it was resolved (Sam, 2026-10-16): spoken or typed, so
+// the next carer sees what worked. Shown on the flag, in the log and in the next handover.
+function openResolve(id) {
+  const f = S.flags.find((x) => x.id === id); if (!f) return;
+  if (f.status !== "open") { render(); return toast("Already resolved"); }
+  const s = sheet(`${sheetHead("Mark as resolved")}<p class="small" style="margin:0"><strong>${esc(f.title)}</strong></p>
+    <label class="f">How was it resolved? (optional)<textarea id="rsWhat" rows="3" maxlength="1000" placeholder="e.g. Used the Zimmer frame and she got back to bed safely"></textarea></label>
+    <div class="row"><button class="btn ghost" id="rsMic" style="flex:0 0 auto"></button></div><div class="small" id="rsMsg" role="status"></div>
+    <button class="btn primary block" id="rsGo">Mark as resolved</button>`, { onClose: () => dict.cancel() });
+  const dict = dictation($("#rsWhat", s.root), $("#rsMic", s.root), (t) => ($("#rsMsg", s.root).textContent = t), { hint: "Check the words, then tap Mark as resolved.", max: 1000 });
+  $("#rsGo", s.root).onclick = async () => {
+    if (dict.busy()) await dict.finish();
+    const cur = S.flags.find((x) => x.id === id); if (!cur || cur.status !== "open") { s.close(); render(); return toast("Already resolved"); }
+    const how = $("#rsWhat", s.root).value.trim().slice(0, 1000);
+    Object.assign(cur, { status: "resolved", resolvedTs: Date.now(), resolvedBy: stampId(), ...(how ? { resolvedNote: how } : {}) }); touch(cur);
+    save(); s.close(); render(); toast("Marked as resolved");
+  };
+}
 function bindResolve(root) {
-  root.querySelectorAll("[data-resolve]").forEach((b) => b.addEventListener("click", () => {
-    const f = S.flags.find((x) => x.id === b.dataset.resolve); f.status = "resolved"; f.resolvedTs = Date.now(); f.resolvedBy = stampId(); touch(f);
-    save(); render(); toast("Marked as resolved");
-  }));
+  root.querySelectorAll("[data-resolve]").forEach((b) => b.addEventListener("click", () => openResolve(b.dataset.resolve)));
 }
 
 /* ---------- storage safety ----------
@@ -2763,7 +2786,7 @@ function recentNotesHTML(latest) {
   return `<div class="card"><div class="card-h"><h3>Latest note</h3><span class="muted small">${esc(carer(latest.carerId, latest.carerName).name)}${latest.extra ? " · extra assistance" : ""} · ${esc(dayLabel(latest.ts))} ${fmtTime(latest.ts)}</span></div><p class="note-text">${esc(latest.note)}</p>
     ${recent.length ? `<details style="margin-top:10px"><summary class="small"><strong>Yesterday and today: ${recent.length} more note${recent.length > 1 ? "s" : ""}</strong></summary>
       ${recent.slice(0, 15).map((n) => `<div style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px"><div class="tiny muted">${esc(dayLabel(n.ts))} ${fmtTime(n.ts)} · ${esc(carer(n.carerId, n.carerName).name)}</div><p class="small" style="margin:4px 0 0">${esc(first(n.note))}</p></div>`).join("")}
-      <button class="link small" id="recentLog" style="margin-top:8px">Open the Record log for everything</button></details>` : ""}</div>`;
+      <button class="link small" id="recentLog" style="margin-top:8px">Earlier days, one at a time</button></details>` : ""}</div>`;
 }
 
 // Questions from the developer about feedback this person sent (worker/tools/feedback.mjs ask). Fetched
@@ -2841,7 +2864,7 @@ function renderToday() {
   loadFbQuestions(false).then((changed) => { if (changed && tab === "today" && !appBusy() && !userIsReading()) render(); });
   loadMeds(false).then((changed) => { if (changed && tab === "today" && !appBusy() && !userIsReading()) render(); });
   if (raiseMissedTimeSensitive()) setTimeout(() => { if (tab === "today" && !appBusy()) render(); }, 0);
-  if ($("#recentLog")) $("#recentLog").onclick = () => go("log");
+  if ($("#recentLog")) $("#recentLog").onclick = () => { const y = new Date(); y.setDate(y.getDate() - 1); logDay = dayKey(y); go("log"); }; // the diary, from yesterday
   $("#qPlan").onclick = () => openPlan();
   if ($("#plGuideGo")) $("#plGuideGo").onclick = () => openPlanGuide();
   if ($("#emBtn")) $("#emBtn").onclick = () => (emergForm() ? openEmergency() : openEmergencyEdit());
@@ -2873,16 +2896,13 @@ function openFlag(id) {
       if (cur && cur.status === "open") { Object.assign(cur, { status: "resolved", resolvedTs: Date.now(), resolvedBy: stampId(), resolvedNote: "Chart corrected to match the box" }); touch(cur); save(); render(); }
     }, `<strong>The box check found:</strong> ${esc(f.detail || "")} Change what's wrong, then say why (for example "Corrected to match the box: typed 500gm instead of 500mg").`);
   };
-  if ($("#flResolve", s.root)) $("#flResolve", s.root).onclick = () => {
-    const cur = S.flags.find((x) => x.id === id); s.close();
-    if (!cur) return toast("This flag is no longer on this phone");
-    if (cur.status !== "open") { render(); return toast("Already resolved"); }
-    cur.status = "resolved"; cur.resolvedTs = Date.now(); cur.resolvedBy = stampId(); touch(cur);
-    save(); render(); toast("Marked as resolved");
-  };
+  if ($("#flResolve", s.root)) $("#flResolve", s.root).onclick = () => { s.close(); if (!S.flags.some((x) => x.id === id)) return toast("This flag is no longer on this phone"); openResolve(id); };
 }
 
 let logFilter = "all";
+// Diary view (Sam, 2026-10-16: she flips back through a paper diary to spot patterns or catch up after
+// leave): one day at a time, oldest first, stepping back and forward. null = everything, newest first.
+let logDay = null;
 let logOpen = false; // "Show all words and recordings" in the record log
 try { logOpen = localStorage.getItem("dignitynotes.logopen") === "1"; } catch {}
 // Where a word appears in a text, with a few words either side ("…had her porridge at…").
@@ -2938,13 +2958,13 @@ function renderLog() {
     ...S.notes.filter((n) => !isNested(n)).map((n) => ({ type: "note", ts: n.ts, n })),
     ...S.transfers.flatMap((t) => [{ type: "out", ts: t.outTs, t }, ...(t.backTs ? [{ type: "back", ts: t.backTs, t }] : [])]),
     ...S.handovers.map((h) => ({ type: "handover", ts: h.ts, h })),
-  ].filter((it) => {
+  ].filter((it) => !logDay || dayKey(new Date(it.ts)) === logDay).filter((it) => {
     if (logFilter === "all") return true;
     if (it.type !== "note") return false;
     const ids = new Set([it.n.id, ...S.notes.filter((x) => x.amends === it.n.id).map((x) => x.id)]);
     const fl = S.flags.filter((f) => ids.has(f.noteId));
     return logFilter === "incident" ? fl.some((f) => f.kind === "incident") : fl.some((f) => f.kind === "follow_up");
-  }).sort((a, b) => b.ts - a.ts);
+  }).sort((a, b) => (logDay ? a.ts - b.ts : b.ts - a.ts));
   let lastDay = "";
   const rows = items.map((it) => {
     const d = dayLabel(it.ts); const head = d !== lastDay ? `<div class="day-h">${esc(d)}</div>` : ""; lastDay = d;
@@ -2975,9 +2995,18 @@ function renderLog() {
   v.innerHTML = `<div class="hello"><h2>Record log</h2><p>Every saved note, outing and handover, newest first.</p></div>
     <button class="searchbar" id="logFind">${ICON.search}<span>Search notes, care plan, contacts…</span></button>
     <div class="seg" role="group" aria-label="Filter">${[["all", "Everything"], ["incident", "Incidents"], ["follow", "To note"]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${logFilter === k}">${l}</button>`).join("")}</div>
+    ${logDay ? `<div class="card" style="display:grid;gap:8px;padding:10px 12px"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><button class="btn ghost" id="ldPrev" aria-label="Previous day" style="flex:0 0 auto">‹ Day before</button><strong class="small" style="text-align:center">${esc(fmtDay(new Date(logDay + "T12:00:00").getTime()))}</strong><button class="btn ghost" id="ldNext" aria-label="Next day" style="flex:0 0 auto" ${logDay >= dayKey(new Date()) ? "disabled" : ""}>Day after ›</button></div>
+      <div class="row" style="gap:8px"><label class="f" style="flex:1">Go to a date<input type="date" id="ldDate" value="${esc(logDay)}" max="${esc(dayKey(new Date()))}"></label><button class="btn secondary" id="ldAll" style="align-self:end">Show everything</button></div></div>`
+      : `<button class="link small" id="ldOpen" style="justify-self:start;min-height:40px">View one day at a time (diary)</button>`}
     ${rows ? `<button class="link small" id="logOpen" style="justify-self:start">${logOpen ? "Hide words and recordings" : "Show all words and recordings"}</button>` : ""}
-    ${rows || '<div class="empty">Nothing here yet.</div>'}`;
+    ${rows || `<div class="empty">${logDay ? "Nothing was recorded on this day." : "Nothing here yet."}</div>`}`;
   v.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { logFilter = b.dataset.f; renderLog(); }));
+  const stepDay = (n) => { const d = new Date(logDay + "T12:00:00"); d.setDate(d.getDate() + n); logDay = dayKey(d); renderLog(); window.scrollTo(0, 0); };
+  if ($("#ldOpen", v)) $("#ldOpen", v).onclick = () => { logDay = dayKey(new Date()); renderLog(); };
+  if ($("#ldPrev", v)) $("#ldPrev", v).onclick = () => stepDay(-1);
+  if ($("#ldNext", v)) $("#ldNext", v).onclick = () => stepDay(1);
+  if ($("#ldAll", v)) $("#ldAll", v).onclick = () => { logDay = null; renderLog(); };
+  if ($("#ldDate", v)) $("#ldDate", v).onchange = (e) => { if (e.target.value) { logDay = e.target.value; renderLog(); } };
   v.querySelectorAll("[data-addto]").forEach((b) => (b.onclick = () => openRecorder({ amends: b.dataset.addto })));
   $("#logFind", v).onclick = () => { openFind(); const q = $("#fdQ"); if (q) q.focus(); };
   if ($("#logOpen", v)) $("#logOpen", v).onclick = () => { logOpen = !logOpen; try { localStorage.setItem("dignitynotes.logopen", logOpen ? "1" : "0"); } catch {} renderLog(); };
@@ -3869,7 +3898,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       }
       scheduleSync(); dropPending(pending);
       s.close(); render();
-      if (autoSave) openSavedNote(id, { unclear: draft.unclear || [], gaps: draft.flags.some((f) => f.kind === "incident") ? draft.record_gaps || [] : [], lostAt, lockedAt, tasksDone: draft.tasks_done || [] });
+      if (autoSave) openSavedNote(id, { unclear: draft.unclear || [], background: draft.background || [], gaps: draft.flags.some((f) => f.kind === "incident") ? draft.record_gaps || [] : [], lostAt, lockedAt, tasksDone: draft.tasks_done || [] });
       const inc = draft.flags.filter((f) => f.kind === "incident").length;
       // The carer's first note of this shift: remind them to hand over at the end of it.
       const firstOfShift = !extra && shiftNotes().filter((n) => n.carerId === stampId()).length === 1;
@@ -3918,7 +3947,7 @@ function openWordFix(n, wrong = "", after) {
     if (after) after();
   };
 }
-function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, tasksDone = [] } = {}) {
+function openSavedNote(id, { unclear = [], background = [], gaps = [], lostAt = 0, lockedAt = 0, tasksDone = [] } = {}) {
   const n = S.notes.find((x) => x.id === id); if (!n) return;
   const original = n.amends ? S.notes.find((x) => x.id === n.amends) : null;
   const fl = S.flags.filter((f) => f.noteId === id);
@@ -3931,6 +3960,7 @@ function openSavedNote(id, { unclear = [], gaps = [], lostAt = 0, lockedAt = 0, 
       return ts.length ? `<div class="card" style="box-shadow:none;display:grid;gap:6px"><strong class="small">This note says these tasks were done. Tick them?</strong>${ts.map((t) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><span class="small">${esc(t.title)}</span><button class="btn secondary" data-svtask="${esc(t.id)}">Done</button></div>`).join("")}</div>` : ""; })()}
     ${noteMedsHTML(n)}
     ${noteObsHTML(n)}
+    ${background.length ? `<div class="small" style="padding:10px 12px;border-radius:12px;background:var(--surface-2, #f3eff7)"><strong>Sounds like TV, radio or someone else in the background</strong>, so it was left out of the note: "${background.map(esc).join('", "')}". It's still in the words and the recording.</div>` : ""}
     ${lostAt || lockedAt ? `<div class="warn small">${lockedAt ? "The recording stopped early because the screen locked or you left the app." : "Only part of the recording was turned into words."} Play it back; tap <strong>Add to this note</strong> for anything missing.</div>` : ""}
     ${unclear.length ? `<div class="warn small" style="display:grid;gap:8px"><span>These words may have been misheard: <strong>${unclear.map(esc).join(", ")}</strong>. They're highlighted below. Play the recording; if something's wrong, tap <strong>Add to this note</strong> and say the correct version.</span>
       ${n.audioId ? `<audio controls preload="none" data-audio="${esc(n.audioId)}" style="width:100%"></audio>` : ""}
