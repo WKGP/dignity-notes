@@ -2917,8 +2917,10 @@ async function loadFbQuestions(force) {
   try { const out = await relay("/feedback/questions", {}); const before = JSON.stringify(fbQuestions.list); fbQuestions.list = out.questions || []; fbQuestions.at = Date.now(); return before !== JSON.stringify(fbQuestions.list); }
   catch { return false; } finally { fbQuestions.busy = false; }
 }
+// Links to this app's own site in a developer message can be tapped (a document to download, say).
+const ownLinks = (t) => esc(t).replace(/https:\/\/dignitynotes\.app\/[A-Za-z0-9._\/-]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
 const fbQuestionsHTML = () => fbQuestions.list.map((q) => q.info ? `<div class="card" style="border-left:4px solid var(--accent)"><div class="card-h"><h3>A message from the developer</h3></div>
-  <p style="margin:0 0 10px;white-space:pre-line">${esc(q.q)}</p>
+  <p style="margin:0 0 10px;white-space:pre-line">${ownLinks(q.q)}</p>
   <button class="btn secondary block" data-fbqseen="${esc(q.id)}|${esc(q.qid)}">Got it</button></div>` : `<div class="card" style="border-left:4px solid var(--accent)"><div class="card-h"><h3>A question about your ${q.kind === "bug" ? "problem report" : "idea"}</h3></div>
   ${q.summary ? `<p class="tiny muted" style="margin:0 0 6px">${esc(q.summary)}</p>` : ""}
   <p style="margin:0 0 10px;white-space:pre-line"><strong>${esc(q.q)}</strong></p>
