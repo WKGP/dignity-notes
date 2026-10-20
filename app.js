@@ -185,6 +185,7 @@ function loadUser() {
   if (!S.observations) { S.observations = []; if (S.sync) S.sync.seq = 0; } // observations for the reports: pull them once
   if (!S.supplies) { S.supplies = []; if (S.sync) S.sync.seq = 0; } // medicine supplies received: pull them once
   if (!S.forms) { S.forms = []; S.reviews = []; S.acks = []; if (S.sync) S.sync.seq = 0; } // forms, reviews, catch-up ticks: pull them once
+  if (!S.pulledV14) { S.pulledV14 = 1; if (S.sync) S.sync.seq = 0; } // 1.3.13/14: assessments, sleep, before and after: an older app skipped them
   if (!S.doses) { S.doses = []; if (S.sync) S.sync.seq = 0; } // medicines chart entries: pull them once
   else { const keep = Date.now() - 70 * 864e5; S.doses = S.doses.filter((d) => d.ts > keep); } // this and last month's chart; older entries stay in the cloud // ticks for this client; an older app skipped them, so pull everything once (duplicates are ignored)
   S.onDuty = myId(); S.detached = false; // back on this client: anything kept unsent goes now
@@ -393,7 +394,7 @@ async function syncNow() {
           const i = arr.findIndex((x) => x.id === id);
           const isNew = i < 0;
           if (isNew) { arr.push(data); changed = true; }
-          else if (mtOf(arr[i]) < mtOf(data) || (kind === "flag" && data.status === "resolved" && arr[i].status !== "resolved") || (kind === "transfer" && data.backTs && !arr[i].backTs)) { arr[i] = { ...arr[i], ...data }; changed = true; }
+          else if (mtOf(arr[i]) < mtOf(data) || (kind === "obs" && mtOf(arr[i]) === mtOf(data) && Object.keys(data).some((k) => arr[i][k] === undefined)) || (kind === "flag" && data.status === "resolved" && arr[i].status !== "resolved") || (kind === "transfer" && data.backTs && !arr[i].backTs)) { arr[i] = { ...arr[i], ...data }; changed = true; }
           const k = kind + ":" + id; si.sent[k] = Math.max(si.sent[k] || 0, mtOf(data));
           // A note new to this phone came from another phone (or from the cloud after this phone was
           // cleared): its recording is the cloud's job. This phone's own recordings are uploaded by step 2.
@@ -2346,6 +2347,7 @@ function openObsFix(id, after) {
     ${["fluids", "food", "bowels", "urinary", "sleep"].includes(f) ? `<label class="f">What happened<select id="ofOut"><option value="">Not said</option>${Object.entries(OBS_OUTCOME).filter(([k]) => ({ sleep: ["slept", "woke", "restless", "napped", "awake_night"], fluids: ["taken", "partly", "refused"], food: ["taken", "partly", "refused"], bowels: ["opened", "not_opened", "accident"], urinary: ["passed", "incontinent", "pad_wet", "pad_dry", "catheter"] })[f].includes(k)).map(([k, l]) => `<option value="${k}" ${o.outcome === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : ""}
     ${f === "food" ? `<label class="f">How much was eaten<select id="ofPor"><option value="">Not said</option>${Object.entries(OBS_PORTION).map(([k, l]) => `<option value="${k}" ${o.portion === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : ""}
     ${f === "bowels" ? `<label class="f">Bristol stool type (only if known)<select id="ofBr"><option value="">Not said</option>${[1, 2, 3, 4, 5, 6, 7].map((k) => `<option ${o.bristol === k ? "selected" : ""}>${k}</option>`).join("")}</select></label>` : ""}
+    ${f === "behaviour" ? `<label class="f">Before (what was happening just before)<input type="text" id="ofBefore" maxlength="300" value="${esc(o.before || "")}"></label><label class="f">After (what you did, and how they responded)<input type="text" id="ofAfter" maxlength="300" value="${esc(o.after || "")}"></label>` : ""}
     ${f === "pain" ? `<div class="row" style="gap:8px"><label class="f" style="flex:1">Score 0 to 10 (only if given)<input type="number" id="ofSc" min="0" max="10" value="${o.painScore ?? ""}"></label><label class="f" style="flex:1">Where<input type="text" id="ofWh" maxlength="80" value="${esc(o.where || "")}"></label></div>` : ""}
     ${f === "weight" ? `<div class="row" style="gap:8px"><label class="f" style="flex:1">Weight (kg)<input type="number" id="ofKg" step="0.1" min="20" max="300" value="${o.kg ?? ""}"></label><label class="f" style="flex:1">Height (cm)<input type="number" id="ofCm" min="80" max="230" value="${o.cm ?? ""}"></label></div>` : ""}
     <button class="btn primary block" id="ofSave">Save</button><button class="btn ghost block" id="ofDel">Not right: remove it from the reports</button>`);
@@ -2353,7 +2355,7 @@ function openObsFix(id, after) {
   const numOr = (v, lo, hi) => (v === undefined ? "keep" : v === "" ? undefined : Number(v) >= lo && Number(v) <= hi ? Number(v) : NaN);
   const done = () => { o.fixedBy = session.name || session.username; o.fixedAt = Date.now(); touch(o); save(); s.close(); toast("Changed for the reports"); if (after) after(); };
   $("#ofSave", s.root).onclick = () => {
-    const set = { drink: val("#ofDrink"), offeredMl: numOr(val("#ofOff"), 0, 3000), drankMl: numOr(val("#ofDrank"), 0, 3000), outcome: val("#ofOut"), portion: val("#ofPor"), bristol: numOr(val("#ofBr"), 1, 7), painScore: numOr(val("#ofSc"), 0, 10), where: val("#ofWh"), kg: numOr(val("#ofKg"), 20, 300), cm: numOr(val("#ofCm"), 80, 230) };
+    const set = { before: val("#ofBefore"), after: val("#ofAfter"), drink: val("#ofDrink"), offeredMl: numOr(val("#ofOff"), 0, 3000), drankMl: numOr(val("#ofDrank"), 0, 3000), outcome: val("#ofOut"), portion: val("#ofPor"), bristol: numOr(val("#ofBr"), 1, 7), painScore: numOr(val("#ofSc"), 0, 10), where: val("#ofWh"), kg: numOr(val("#ofKg"), 20, 300), cm: numOr(val("#ofCm"), 80, 230) };
     if (Object.values(set).some((v) => Number.isNaN(v))) return toast("A number is outside the allowed range");
     for (const [k, v] of Object.entries(set)) { if (v === "keep") continue; if (v === undefined || v === "") delete o[k]; else o[k] = v; }
     done();
@@ -2574,7 +2576,7 @@ function openObsReport(kind, R, range, opts) {
   } else if (R.topic === "sleep") {
     // Each entry belongs to a night: before midday counts as the night before.
     const nightOf = (ts) => { const d = new Date(ts); if (d.getHours() < 12) d.setDate(d.getDate() - 1); return dayKey(d); };
-    const c = (k) => all.filter((o) => o.outcome === k), nights = new Set(all.filter((o) => o.outcome !== "napped").map((o) => nightOf(o.ts)));
+    const c = (k) => all.filter((o) => o.outcome === k), nights = new Set(all.filter((o) => o.outcome !== "napped").map((o) => nightOf(o.ts)).filter((d) => ds.includes(d)));
     summary.push(`Sleep was written about for ${n(nights.size, "night", "nights")} of the ${ds.length}.`);
     const parts = [["slept", "slept well"], ["woke", "woke in the night"], ["restless", "restless or unsettled"], ["awake_night", "awake most of the night"], ["napped", "slept in the day"]].map(([k, l]) => [c(k).length, l]).filter(([x]) => x);
     if (parts.length) summary.push(`Recorded: ${parts.map(([x, l]) => `${x} ${l}`).join(", ")}.`);
@@ -3185,7 +3187,7 @@ function formAttn() {
     const d = formData(r);
     if (r.type === "incident" && isAgency() && isAdminHere() && !formReview(r.formId)) out.push({ r, label: `Incident report ${r.ref}: needs your review` });
     else if (r.type === "incident" && r.status !== "closed") out.push({ r, label: `Incident report ${r.ref}: ${FORM_STATUS[r.status].toLowerCase()}` });
-    if (r.type === "assessment" && d.nextReview && d.nextReview <= today) out.push({ r, label: `${opt(ASSESS_SHORT, d.tool) || "Assessment"} due to be done again (last ${fmtDay(new Date(d.date + "T12:00:00").getTime())})` });
+    if (r.type === "assessment" && d.nextReview && d.nextReview <= today && !latestForms("assessment").some((x) => x !== r && formData(x).tool === d.tool && (formData(x).date || "") > (d.date || ""))) out.push({ r, label: `${opt(ASSESS_SHORT, d.tool) || "Assessment"} due to be done again (last ${fmtDay(new Date(d.date + "T12:00:00").getTime())})` });
     if (r.type === "skin" && r.status !== "closed" && d.nextReview && d.nextReview <= today) out.push({ r, label: `Skin check due: ${skinWhere(d)}` });
   }
   return out;
@@ -3466,7 +3468,7 @@ function mustInfoHTML(weights, height, foodObs) {
   if (w6.length) li.push(`Weights in the last 6 months${w6.length > 8 ? ` (the latest 8 of ${w6.length})` : ""}: ${w6.slice(-8).map((o) => `${o.kg} kg (${day(o.ts)})`).join(", ")}.`);
   else { li.push(last ? `No weight in the last 6 months; the last was ${last.kg} kg on ${day(last.ts)}.` : "No weight has been recorded."); missing.push("a recent weight"); }
   if (height) li.push(`Height: ${height.cm} cm (${day(height.ts)}).`); else missing.push("height (or a measurement a professional can use instead)");
-  if (last && height && height.cm > 50) { const bmi = Math.round((last.kg / (height.cm / 100) ** 2) * 10) / 10; li.push(`BMI worked out from these measurements: ${bmi} kg/m² (weight ${day(last.ts)}, height ${day(height.ts)}). Check the measurements before using it.`); }
+  if (last && height && height.cm > 50 && last.ts >= since) { const bmi = Math.round((last.kg / (height.cm / 100) ** 2) * 10) / 10; li.push(`BMI worked out from these measurements: ${bmi} kg/m² (weight ${last.kg} kg on ${day(last.ts)} ÷ height ${height.cm / 100} m squared, measured ${day(height.ts)}). Check the measurements before using it.`); }
   if (w6.length >= 2) { const a = w6[0], b = w6[w6.length - 1], dk = Math.round((b.kg - a.kg) * 10) / 10, pc = Math.round((dk / a.kg) * 1000) / 10; li.push(`Weight change: ${dk > 0 ? "+" : ""}${dk} kg (${pc > 0 ? "+" : ""}${pc}%) between ${day(a.ts)} and ${day(b.ts)}.`); }
   else missing.push("two or more weights over the last 3 to 6 months");
   const lossNotes = observations().filter((o) => o.topic === "weight" && /unplanned|unintentional|not trying|planned|on purpose|diet/i.test(o.words || ""));
@@ -3475,7 +3477,7 @@ function mustInfoHTML(weights, height, foodObs) {
   li.push(`In this period: ${refused.length} meal${refused.length === 1 ? "" : "s"} refused or nothing eaten, ${little.length} with only a little eaten.`);
   li.push("Illness affecting eating, or days with little or nothing to eat, aren't worked out by the app: check the notes and incidents.");
   return `<div class="card" style="box-shadow:none;display:grid;gap:6px;break-inside:avoid"><h3 style="font-size:17px;margin:0">MUST: supporting information</h3>
-    <p class="small" style="margin:0">For whoever completes the <strong>Malnutrition Universal Screening Tool</strong> (MUST): a trained person, such as a nurse or dietitian. <strong>Dignity Notes doesn't give a MUST score or risk level.</strong></p>
+    <p class="small" style="margin:0">For whoever completes the <strong>Malnutrition Universal Screening Tool</strong> (MUST): someone trained to use it, as the care provider's policy says (often a nurse, dietitian or trained care worker). <strong>Dignity Notes doesn't give a MUST score or risk level.</strong></p>
     <ul class="small" style="margin:0;padding-left:18px;display:grid;gap:3px">${li.map((x) => `<li>${x}</li>`).join("")}</ul>
     ${missing.length ? `<p class="small" style="margin:0"><strong>Missing:</strong> ${esc(missing.join("; "))}. Missing information is never counted as nothing wrong.</p>` : ""}
     ${assessListHTML("must", "Completed MUST assessments")}</div>`;
@@ -4813,9 +4815,9 @@ function openSavedNote(id, { unclear = [], background = [], gaps = [], lostAt = 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-20.21";
+const PRIVACY_VERSION = "2026-10-21.22";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 21 · 20 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 22 · 21 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
@@ -4847,7 +4849,8 @@ const PRIVACY_HTML = `
 <p>When you ask the app to write a note, handover, summary or report (such as the falls and mobility report), the <strong>words</strong> of your note (never the recording), the client's first name, the names of the carers involved, the names of the client's care plan sections, and your saved word fixes ("My words"), are sent through our secure relay to <strong>Anthropic</strong>, which provides the Claude AI service, to be tidied. Our relay doesn't keep the text it sends for tidying; the note you save is stored as described under Care notes and recordings. Anthropic processes it under its commercial terms, which don't allow it to train its AI models on this data.</p>
 <p><strong>Writing the care plan.</strong> When you ask the app to write up a care plan section, the words you said or typed for it, the section's current wording, the client's name, and the names and pronouns of the client and their carers are sent to Anthropic in the same way. When you ask it to fill the care plan from a care plan document, a copy of that document is sent to Anthropic to be read. You check and can change everything before it's saved, and each saved version of the care plan is kept with who changed it, and who agreed to it (the client, their attorney, or not yet).</p>
 <p><strong>Reports.</strong> When a note is saved, what it says about drinks (and how much), meals, bowels, passing urine, pain, sleep, behaviour, skin, mobility and any weight or height is also kept as separate entries with the client's record in the EU, so the reports (such as fluid intake or bowels) can be made without carers writing anything twice. The words of the note are sent to Anthropic for this as part of writing the note. Carers can correct these entries; family members don't see them unless a carer shares a report with them.</p>
-<p><strong>Incident reports and skin forms.</strong> When a carer completes an incident report or a skin integrity form, it's kept with the client's record in the EU, with every version (who changed what, and when) and, for an agency, an administrator's review. To start one from a note, the words of that note are sent to Anthropic in the same way, to suggest answers the carer checks. The client's carers and administrators see them; family members see what happened and what was done in incident reports (not safeguarding answers, witnesses or who was told) only if an administrator has let them see incidents. When a carer catches up after time away, "I've read this" and "I've checked the skin" are kept with their name and the time.</p>
+<p><strong>Incident reports and skin forms.</strong> When a carer completes an incident report or a skin integrity form, it's kept with the client's record in the EU, with every version (who changed what, and when) and, for an agency, an administrator's review. To start one from a note, the words of that note are sent to Anthropic in the same way, to suggest answers the carer checks. Professional assessments you copy in (such as MUST or PAINAD), with who completed them, are kept the same way. The client's carers and administrators see them; family members see what happened and what was done in incident reports (not safeguarding answers, witnesses or who was told) only if an administrator has let them see incidents. When a carer catches up after time away, "I've read this" and "I've checked the skin" are kept with their name and the time.</p>
+<p><strong>Training course.</strong> If you do the training course, which modules you've finished, your final check score and your certificate number are kept with your account. Administrators can see them in Manage people.</p>
 <p><strong>Medicine photos.</strong> If you take a photo of a medicine label, prescription or box to fill in or check the medicines chart, the photo is kept with the client's documents in our cloud storage in the European Union, and sent to Anthropic in the same way to be read. A prescription may show the client's name, address and date of birth. You check every detail before it's saved.</p>
 <h3>Who else handles data for us</h3>
 <ul>
@@ -5143,6 +5146,7 @@ function openTesters() {
           ${u.devices.length ? `<details style="margin-top:4px"><summary>Devices</summary>${u.devices.map((d, i) => `<div class="small" style="padding:4px 0"><strong>${i === 0 ? "Home device" : "Other device"}:</strong> ${esc(d.device)} · ${esc(d.place)}<br><span class="tiny muted">First ${esc(new Date(d.first).toLocaleString("en-GB"))} · last ${esc(new Date(d.last).toLocaleString("en-GB"))}</span></div>`).join("")}</details>` : ""}
           <div class="small" style="margin-top:8px"><strong>${u.role === "family" ? "Family of" : "Cares for"}</strong>${u.role === "admin" ? ' <span class="muted">(administrators can open every client)</span>' : ""}
             <div class="chips" style="margin-top:4px">${clients.length ? clients.map((c) => `<label class="chip" style="display:inline-flex;gap:6px;align-items:center;cursor:pointer"><input type="checkbox" data-assign="${esc(u.username)}" value="${esc(c.id)}" ${u.clients.includes(c.id) ? "checked" : ""} style="accent-color:var(--accent)">${esc(c.name)}</label>`).join("") : '<span class="muted">No clients yet</span>'}</div></div>
+          ${u.training ? `<div class="small" style="margin-top:8px"><strong>Training course</strong> ${u.training.completedAt ? `<span class="chip accent">Completed</span> <span class="muted">${esc(new Date(u.training.completedAt).toLocaleDateString("en-GB"))}, final check ${u.training.score} of ${u.training.of}</span>` : `<span class="muted">${u.training.modulesDone ? `${u.training.modulesDone} of 10 modules done` : "not started"}</span>`}</div>` : ""}
           ${u.role !== "family" ? `<div class="small" style="margin-top:8px"><strong>Medicines</strong> ${u.meds && u.meds.valid ? `<span class="chip accent">Signed off</span> <span class="muted">${u.meds.via === "certificate" ? "verified certificate" : `assessed ${esc(u.meds.assessedOn)} by ${esc(u.meds.assessor)}`} · review by ${esc(u.meds.reviewOn)}</span>` : u.meds && u.meds.competent ? `<span class="chip incident">Review overdue (${esc(u.meds.reviewOn)})</span>` : (u.meds && (u.meds.certificates || []).some((c) => c.verifiedAt && !c.practical)) ? '<span class="chip follow">Course done: observed assessment needed</span>' : u.meds && u.meds.required === false ? '<span class="chip">Private carer</span> <span class="muted">no sign-off required</span>' : '<span class="muted">Not signed off to support with medicines</span>'} <button class="link small" data-medsign="${esc(u.username)}" style="min-height:40px">${u.meds && u.meds.assessedOn ? "Change" : "Record assessment"}</button>
             ${u.username === session.username ? (u.meds && u.meds.carerType ? `<div class="tiny muted">Works as: ${u.meds.carerType === "private" ? "private carer" : "agency carer"}</div>` : "") : `<label class="f" style="margin-top:4px">Works as<select data-carertype="${esc(u.username)}"><option value="" ${u.meds && u.meds.carerType ? "" : "selected"} disabled>Not set: private carer (no sign-off needed)</option><option value="private" ${u.meds && u.meds.carerType === "private" ? "selected" : ""}>Private carer (no sign-off required)</option><option value="agency" ${u.meds && u.meds.carerType === "agency" ? "selected" : ""}>Agency carer (sign-off required)</option></select></label>`}
             ${(() => { const cs = (u.meds && u.meds.certificates) || [], waiting = cs.filter((c) => !c.verifiedAt).length; return `<details style="margin-top:4px" ${waiting ? "open" : ""}><summary>Certificates (${cs.length})${waiting ? ` <span class="chip follow">${waiting} to verify</span>` : ""}</summary><div data-certs="${esc(u.username)}" style="display:grid;gap:8px;margin-top:6px">${cs.map((c) => certRowHTML(c, u.username, { admin: true, self: u.username === session.username, required: !!(u.meds && u.meds.required) })).join("")}<button class="btn ghost" type="button" data-certadd="${esc(u.username)}">Add a certificate for ${esc(u.name || u.username)}</button></div></details>`; })()}</div>` : ""}
@@ -5260,10 +5264,111 @@ const fbSave = (d) => { try { localStorage.setItem(FB_DRAFT(d.kind), JSON.string
 const fbClear = (kind) => { try { localStorage.removeItem(FB_DRAFT(kind)); } catch {} };
 const fbHasDraft = (d) => !!(d && (d.transcript.length || d.screenshot || (d.pending || "").trim()));
 
+/* ---------- training course (Sam, 2026-10-19) ----------
+ * Ten short modules (course.js, loaded when opened), each with a quick check, then a final check that
+ * the relay marks, and a Certificate of Completion for the software training only. Progress is kept on
+ * the person's account, so it follows them to any phone; administrators see it in Manage people.
+ */
+let courseState = null;
+// Emergency and advice numbers for the client's country (the course text uses {999}, {111} and {SAFE}).
+const courseLocal = (html) => { const au = clientCountry() === "AU"; return html.replace(/\{999\}/g, au ? "000" : "999").replace(/\{111\}/g, au ? "healthdirect (1800 022 222)" : "NHS 111").replace(/\{SAFE\}/g, au ? "the Elder Abuse Phone Line (1800 353 374)" : "the council's adult social care team"); };
+function loadCourse() {
+  if (window.DN_COURSE) return Promise.resolve(window.DN_COURSE);
+  return new Promise((ok, no) => { const el = document.createElement("script"); el.src = "course.js"; el.onload = () => (window.DN_COURSE ? ok(window.DN_COURSE) : no(new Error("empty"))); el.onerror = () => no(new Error("load")); document.head.append(el); });
+}
+async function openCourse() {
+  if (!session || session.local || !session.token) return toast("Sign in to use the training course");
+  try { await loadCourse(); courseState = await relay("/me/training/get", {}); }
+  catch { return toast(navigator.onLine ? "Couldn't open the course just now. Try again in a moment." : "The training course needs signal."); }
+  courseHome();
+}
+const courseDone = (i) => !!(courseState && courseState.modules && courseState.modules[i + 1]);
+function courseHome() {
+  const mods = window.DN_COURSE, st = courseState, done = mods.filter((_, i) => courseDone(i)).length, mins = mods.reduce((a, m) => a + m.minutes, 0);
+  const s = sheet(`${sheetHead("Training course")}
+    <p class="small" style="margin:0">Ten short modules on using Dignity Notes well: recording, the reports and the tools they refer to, medicines records, continuity of care and confidentiality. About ${mins} minutes in all; do them in any order, a few at a time.</p>
+    <p class="tiny muted" style="margin:0">It's training in using the software. It isn't a qualification in care and doesn't qualify anyone to carry out clinical assessments.</p>
+    ${st.completedAt ? `<div class="card" style="box-shadow:none;display:grid;gap:6px;border:2px solid var(--accent, #6b4fa0)"><strong>✓ Completed ${esc(fmtDay(st.completedAt))}</strong><span class="small">Final check: ${st.score} of ${st.of}. Certificate ${esc(st.certRef)}.</span><button class="btn secondary" id="crCert">View or print the certificate</button></div>` : ""}
+    <div class="small"><strong>${done} of ${mods.length} modules done</strong></div>
+    <div style="display:grid;gap:6px">${mods.map((m, i) => `<button class="btn ${courseDone(i) ? "ghost" : "secondary"} block fd-link" data-mod="${i}"><div class="body"><strong>${courseDone(i) ? "✓ " : ""}${i + 1}. ${esc(m.title)}</strong><div class="muted small">About ${m.minutes} minutes</div></div></button>`).join("")}</div>
+    <button class="btn primary block" id="crFinal" ${done < mods.length ? "disabled" : ""}>${st.completedAt ? "Take the final check again" : "Final check"}</button>
+    ${done < mods.length ? `<p class="tiny muted" style="margin:-4px 0 0">The final check opens when all ten modules are done. ${esc(st.passMark)} to pass.</p>` : ""}`);
+  s.root.querySelectorAll("[data-mod]").forEach((b) => (b.onclick = () => courseModule(+b.dataset.mod)));
+  $("#crFinal", s.root).onclick = () => courseFinal();
+  if ($("#crCert", s.root)) $("#crCert", s.root).onclick = () => printCertificate();
+}
+function courseModule(i) {
+  const m = window.DN_COURSE[i], last = i === window.DN_COURSE.length - 1;
+  const s = sheet(`${sheetHead(`${i + 1}. ${esc(m.title)}`)}
+    <div class="course" style="display:grid;gap:12px">${m.sections.filter((x) => !x[2] || x[2] === clientCountry()).map(([h, html]) => `<section style="display:grid;gap:4px"><h3 style="font-size:17px;margin:0">${esc(h)}</h3><div class="small" style="display:grid;gap:6px">${courseLocal(html)}</div></section>`).join("")}</div>
+    <div class="card" style="box-shadow:none;display:grid;gap:8px"><strong class="small">Quick check</strong><span class="small">${esc(m.check.q)}</span>
+      ${m.check.options.map((o, k) => `<label class="check"><input type="radio" name="crq" value="${k}"><span>${courseLocal(esc(o))}</span></label>`).join("")}
+      <div class="small" id="crWhy" role="status"></div></div>
+    <button class="btn primary block" id="crDone">${courseDone(i) ? (last ? "Back to the course" : "Next module") : "Check my answer"}</button>
+    <button class="link small" id="crBack" style="justify-self:center;min-height:40px">All modules</button>`);
+  let answered = courseDone(i);
+  $("#crBack", s.root).onclick = () => courseHome();
+  $("#crDone", s.root).onclick = async (e) => {
+    const b = e.currentTarget;
+    if (!answered) {
+      const pick = s.root.querySelector('input[name="crq"]:checked'); if (!pick) return toast("Choose an answer");
+      const right = +pick.value === m.check.answer;
+      $("#crWhy", s.root).innerHTML = `<strong>${right ? "✓ That's right." : `Not quite: the answer is "${courseLocal(esc(m.check.options[m.check.answer]))}".`}</strong> ${courseLocal(esc(m.check.why))}`;
+      answered = true; b.textContent = "Mark as done"; return;
+    }
+    if (!courseDone(i)) {
+      b.disabled = true;
+      try { courseState = await relay("/me/training/module", { module: i + 1 }); }
+      catch { b.disabled = false; return toast(navigator.onLine ? "Couldn't save that just now. Try again." : "No signal: try again when you're connected."); }
+      toast("Module done");
+    }
+    if (last || window.DN_COURSE.every((_, k) => courseDone(k))) courseHome(); else courseModule(i + 1);
+  };
+}
+async function courseFinal() {
+  let qs; try { qs = (await relay("/me/training/start", {})).questions || []; } catch (e) { return toast(e.message || "Couldn't open the final check just now"); }
+  const s = sheet(`${sheetHead("Final check")}<p class="small" style="margin:0">${qs.length} questions about what the course covered. ${esc(courseState.passMark)} to pass; you can try again.</p>
+    ${qs.map((q, i) => `<fieldset class="card" style="box-shadow:none;display:grid;gap:6px;margin:0" data-fq="${i}"><legend class="small" style="font-weight:600;padding:0 4px">${i + 1}. ${esc(q.q)}</legend>${q.options.map((o, k) => `<label class="check"><input type="radio" name="fq${i}" value="${k}"><span>${esc(o)}</span></label>`).join("")}</fieldset>`).join("")}
+    <div class="small" id="fqMsg" role="status"></div>
+    <button class="btn primary block" id="fqGo">Submit</button><button class="link small" id="fqBack" style="justify-self:center;min-height:40px">Back to the course</button>`);
+  $("#fqBack", s.root).onclick = () => courseHome();
+  $("#fqGo", s.root).onclick = async (e) => {
+    const answers = qs.map((_, i) => { const c = s.root.querySelector(`input[name="fq${i}"]:checked`); return c ? +c.value : -1; });
+    if (answers.includes(-1)) return toast(`Answer every question (question ${answers.indexOf(-1) + 1} is blank)`);
+    const b = e.currentTarget; b.disabled = true;
+    let out; try { out = await relay("/me/training/finish", { answers }); } catch (err) { b.disabled = false; return toast(err.message || "Couldn't check it just now"); }
+    courseState = { ...courseState, ...out }; b.disabled = false;
+    s.root.querySelectorAll("[data-fq]").forEach((f) => (f.style.borderColor = ""));
+    const r = out.result;
+    if (r.pass) { s.close(); toast(`Passed: ${r.score} of ${out.of}`); courseHome(); return; }
+    s.close();
+    const t = sheet(`${sheetHead("Final check")}<p class="small" style="margin:0"><strong>${r.score} of ${out.of}</strong>: not quite enough to pass (${esc(courseState.passMark)}).</p>
+      <p class="small" style="margin:0">Have another look at ${r.revisit.length === 1 ? "module" : "modules"} ${r.revisit.map((m) => `<strong>${m}. ${esc(window.DN_COURSE[m - 1].title)}</strong>`).join(", ")}, then try again. The questions come in a new order each time.</p>
+      <button class="btn primary block" id="fqAgain">Try again</button><button class="btn secondary block" id="fqHome">Back to the course</button>`);
+    $("#fqAgain", t.root).onclick = () => courseFinal(); $("#fqHome", t.root).onclick = () => courseHome();
+  };
+}
+function printCertificate() {
+  const st = courseState; if (!st || !st.completedAt) return;
+  const p = $("#printRoot");
+  p.innerHTML = `<div style="border:6px double #4b2f7a;padding:28px 32px;text-align:center;font-family:inherit;color:#1d1a22;display:grid;gap:12px">
+    <img src="logo-wordmark.png" alt="Dignity Notes" style="height:46px;justify-self:center">
+    <div style="font-size:30px;font-weight:700;color:#4b2f7a">Certificate of Completion</div>
+    <div style="font-size:15px">This certifies that</div>
+    <div style="font-size:26px;font-weight:700">${esc(st.name)}</div>
+    <div style="font-size:15px">has completed the <strong>Dignity Notes software training course</strong><br>(ten modules and the final check: ${st.score} of ${st.of})</div>
+    <div style="font-size:15px">on ${esc(fmtDay(st.completedAt))}</div>
+    <div style="font-size:12px;color:#555;max-width:520px;justify-self:center">This confirms training in using the Dignity Notes software. It is not a qualification in care and does not qualify the holder to carry out clinical assessments.</div>
+    <div style="font-size:12px;color:#555">Certificate ${esc(st.certRef)} · course version ${esc(st.version || "")} · Workgroup (WA) Pty Ltd</div></div>`;
+  document.body.classList.add("printing-form");
+  const done = () => { document.body.classList.remove("printing-form"); p.innerHTML = ""; window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done); window.print(); setTimeout(done, 30000);
+}
 function openHelp() {
   const drafts = ["bug", "idea"].map(fbLoad).filter(fbHasDraft);
   const s = sheet(`${sheetHead("Help")}
     <a class="btn primary block" href="manual.html" target="_blank" rel="noopener">Open the user manual</a>
+    ${session && !session.local && !isFamily() ? `<button class="btn secondary block" id="hpCourse">Training course</button>` : ""}
     ${drafts.map((d) => `<div class="warn" style="display:grid;gap:8px"><span>You have an unsent ${d.kind === "bug" ? "problem report" : "suggestion"}.</span><button class="btn secondary" data-resume="${d.kind}">Carry on with it</button></div>`).join("")}
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Tell us what you think</h3>
       <p class="small muted" style="margin:0">A helper asks a few short questions so the developer can understand. Nothing is sent until you press Submit, and a person reads every report.</p>
@@ -5275,6 +5380,7 @@ function openHelp() {
   $("#hpBug").onclick = () => { s.close(); openFeedback("bug"); };
   $("#hpIdea").onclick = () => { s.close(); openFeedback("idea"); };
   if ($("#hpAdmin")) $("#hpAdmin").onclick = () => { s.close(); openFeedbackAdmin(); };
+  if ($("#hpCourse")) $("#hpCourse").onclick = () => { s.close(); openCourse(); };
 }
 
 // Phone screenshots are several megabytes: shrink to 1280px JPEG before sending.

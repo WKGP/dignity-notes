@@ -2,6 +2,7 @@
 
 ## 1.3.0 - 2026-10-15
 
+- 1.3.14: Training course: ten modules on using Dignity Notes well, a final check and a Certificate of Completion (software training, not a qualification); administrators see who has completed it. Before and after in the ABC chart can be corrected. Privacy notice version 22.
 - 1.3.13: Sleep and rest report, and a Behaviour (ABC) report with what happened before and after. The Food and nutrition report has MUST supporting information (weights, height, BMI from the measurements, what's missing; never a score). Professional assessments (MUST, PAINAD, Waterlow and others) can be recorded as completed, with a due date.
 - 1.3.12: Recordings are turned into words by the more accurate speech-to-text whenever there's signal, with the client's and carers' first names, medicines and your saved words as spelling hints (the phone's words are kept as the preview and used if the two disagree). Voice set-up: read 8 sentences once and the app learns the words it mishears in your voice. Privacy notice version 21.
 - 1.3.10: Adding or changing a medicine works without signal: kept on the phone, shown as "not on the chart yet" (and in the handover), sent by itself when there's signal, once only, and never over someone else's newer change.
