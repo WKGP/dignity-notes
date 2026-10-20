@@ -1738,9 +1738,9 @@ function gapsHTML(draft) {
     <button class="btn secondary" id="rvGapAdd" style="justify-self:start;min-height:40px;padding:8px 14px;font-size:14px">Add details</button>
     <span class="tiny muted">Type or use the keyboard's microphone, then tap Rewrite. You can also save it as it is.</span></div>`;
 }
-// Who to tell about an incident, for the client's country. Shown with every incident flag; information, not a decision.
 // Who can agree to Dignity Notes being used, by the country the care is in (as the relay checks).
 const CONSENT_ROLES = { UK: ["The client", "Lasting Power of Attorney (health and welfare)", "Other authorised family member"], AU: ["The client", "Enduring guardian", "Guardian appointed by a tribunal (e.g. SAT)", "Person responsible (family member)"] };
+// Who to tell about an incident, for the client's country. Shown with every incident flag; information, not a decision.
 const clientCountry = () => (session && session.client && session.client.country) || "UK";
 const WHO_TO_TELL_AU = `<details class="small" style="margin-top:6px"><summary>Who to tell</summary>
   <ul style="margin:6px 0 0;padding-left:18px">
