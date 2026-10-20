@@ -405,7 +405,7 @@ async function syncNow() {
       }
       if (still() && !syncState.pulled) { syncState.pulled = true; changed = true; }
     } catch (e) { errors.push(e.message); }
-    try { if (still() && (await sendMedPending())) changed = true; } catch {}
+    try { if (still() && (await sendMedPending())) changed = true; } catch (e) { errors.push(e.message); }
     if (still()) { await loadPlan(); syncState.error = errors[0] || ""; if (!errors.length) syncState.last = Date.now(); }
   } finally {
     syncState.busy = false;
@@ -1739,6 +1739,8 @@ function gapsHTML(draft) {
     <span class="tiny muted">Type or use the keyboard's microphone, then tap Rewrite. You can also save it as it is.</span></div>`;
 }
 // Who to tell about an incident, for the client's country. Shown with every incident flag; information, not a decision.
+// Who can agree to Dignity Notes being used, by the country the care is in (as the relay checks).
+const CONSENT_ROLES = { UK: ["The client", "Lasting Power of Attorney (health and welfare)", "Other authorised family member"], AU: ["The client", "Enduring guardian", "Guardian appointed by a tribunal (e.g. SAT)", "Person responsible (family member)"] };
 const clientCountry = () => (session && session.client && session.client.country) || "UK";
 const WHO_TO_TELL_AU = `<details class="small" style="margin-top:6px"><summary>Who to tell</summary>
   <ul style="margin:6px 0 0;padding-left:18px">
@@ -3377,6 +3379,15 @@ function openForm(formId) {
   if ($("#fvReview", s.root)) $("#fvReview", s.root).onclick = () => { s.close(); openFormReview(formId); };
   $("#fvPrint", s.root).onclick = () => printForm(formId);
 }
+// Print what's in #printRoot on its own (over a report too, which keeps its own screen), then clear it.
+function printAlone() {
+  const p = $("#printRoot");
+  document.body.classList.add("printing-form");
+  const done = () => { document.body.classList.remove("printing-form"); p.innerHTML = ""; window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done);
+  window.print();
+  setTimeout(done, 30000); // some phones never send "afterprint"
+}
 // Print one form on its own (works over a report, which keeps its own screen).
 function printForm(formId) {
   const r = formLatest(formId); if (!r) return;
@@ -3387,11 +3398,7 @@ function printForm(formId) {
     ${rv ? `<section><h3 style="font-size:16px;margin:6px 0 2px">Manager review</h3><div class="small">${esc(rv.byName || "")}, ${esc(dayLabel(rv.ts))} ${fmtTime(rv.ts)}. Statutory notification needed: ${esc(NOTIFY[rv.notify] || "")}${rv.why ? `. ${esc(rv.why)}` : ""}${rv.candour ? `. Duty of candour: ${esc(NOTIFY[rv.candour])}` : ""}${rv.safeguarding ? `. Safeguarding referral: ${esc(NOTIFY[rv.safeguarding])}` : ""}${rv.lessons ? `. Lessons learned: ${esc(rv.lessons)}` : ""}</div></section>` : ""}
     <section><h3 style="font-size:16px;margin:6px 0 2px">History</h3>${vs.map((v, i) => `<div class="small">${esc(dayLabel(v.ts))} ${fmtTime(v.ts)}, ${esc(v.byName || "")}: ${i ? esc(formChanges(vs[i - 1], v, r.type).join("; ")) : "started"}</div>`).join("")}</section>
     <div class="tiny">${internalNoteHTML()}</div><div class="tiny">Dignity Notes · pilot, made-up data only</div></div>`;
-  document.body.classList.add("printing-form");
-  const done = () => { document.body.classList.remove("printing-form"); p.innerHTML = ""; window.removeEventListener("afterprint", done); };
-  window.addEventListener("afterprint", done);
-  window.print();
-  setTimeout(done, 30000); // some phones never send "afterprint"
+  printAlone();
 }
 function openSkinFollowUp(formId) {
   const r = formLatest(formId); if (!r) return;
@@ -4025,7 +4032,7 @@ function openSettings() {
     const was = clientCountry(), want = e.target.value;
     try {
       const out = await relay("/clients/country", { id: session.client.id, country: want }); session.client.country = out.client.country; saveSession(); render();
-      const roles = { UK: ["The client", "Lasting Power of Attorney (health and welfare)", "Other authorised family member"], AU: ["The client", "Enduring guardian", "Guardian appointed by a tribunal (e.g. SAT)", "Person responsible (family member)"] }[want];
+      const roles = CONSENT_ROLES[want];
       const role = session.client.consent && session.client.consent.role;
       toast(role && !roles.includes(role) ? `Changed. The agreement was given as "${role}", which doesn't apply there: record a new agreement with the right person.` : want === "AU" ? "Care is in Australia" : "Care is in the United Kingdom");
     }
@@ -5360,9 +5367,7 @@ function printCertificate() {
     <div style="font-size:15px">on ${esc(fmtDay(st.completedAt))}</div>
     <div style="font-size:12px;color:#555;max-width:520px;justify-self:center">This confirms training in using the Dignity Notes software. It is not a qualification in care and does not qualify the holder to carry out clinical assessments.</div>
     <div style="font-size:12px;color:#555">Certificate ${esc(st.certRef)} · course version ${esc(st.version || "")} · Workgroup (WA) Pty Ltd</div></div>`;
-  document.body.classList.add("printing-form");
-  const done = () => { document.body.classList.remove("printing-form"); p.innerHTML = ""; window.removeEventListener("afterprint", done); };
-  window.addEventListener("afterprint", done); window.print(); setTimeout(done, 30000);
+  printAlone();
 }
 function openHelp() {
   const drafts = ["bug", "idea"].map(fbLoad).filter(fbHasDraft);
@@ -5828,8 +5833,6 @@ async function showClients(manual) {
     <p class="tiny muted" style="margin:0;text-align:center">Prototype for testing with fictional information only.</p>
   </div></div>`;
   const listEl = $("#clList");
-  // Who can agree depends on the country the care is in.
-  const CONSENT_ROLES = { UK: ["The client", "Lasting Power of Attorney (health and welfare)", "Other authorised family member"], AU: ["The client", "Enduring guardian", "Guardian appointed by a tribunal (e.g. SAT)", "Person responsible (family member)"] };
   const fillRoles = () => {
     const c = $("#clCountry").value;
     $("#cnRole").innerHTML = CONSENT_ROLES[c].map((r) => `<option>${esc(r)}</option>`).join("");
