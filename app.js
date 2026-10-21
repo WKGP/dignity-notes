@@ -3037,7 +3037,7 @@ function renderToday() {
     ${handoverCardHTML(ho)}
     <div class="card"><div class="card-h"><h3>Coming up</h3></div>
       <div class="list">${sched.length ? sched.map((s) => `<div class="item ${s.when < Date.now() ? "past" : ""}"><div class="when">${fmtTime(s.when)}</div><div class="body"><div><strong>${esc(s.label)}</strong></div><div class="muted small">${dayLabel(s.when)}${s.detail ? " · " + esc(s.detail) : ""}</div></div></div>`).join("") : '<div class="empty">Nothing scheduled.</div>'}</div>
-      <div style="margin-top:10px"><button class="link" id="addEvent">+ Add appointment or plan</button></div></div>
+      <div style="margin-top:10px;display:flex;gap:16px;flex-wrap:wrap"><button class="link" id="addEvent">+ Add appointment or plan</button><button class="link" id="evDiary">Look ahead in the diary</button></div></div>
     ${recentNotesHTML(latest)}`;
   $("#ctaRec").onclick = () => openRecorder();
   if ($("#shSwitch")) $("#shSwitch").onclick = () => switchCarer();
@@ -3055,6 +3055,7 @@ function renderToday() {
   if ($("#emBtn")) $("#emBtn").onclick = () => (emergForm() ? openEmergency() : openEmergencyEdit());
   bindStorageBanner(v); bindCatchup(v); bindVoiceCard(v);
   $("#addEvent").onclick = () => openEventSheet();
+  $("#evDiary").onclick = () => { logDay = dayKey(new Date()); go("log"); };
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
   if ($("#ctaBack")) $("#ctaBack").onclick = () => openReturnSheet();
   bindResolve(v);
@@ -3563,6 +3564,15 @@ let logFilter = "all";
 // Diary view (Sam, 2026-10-16: she flips back through a paper diary to spot patterns or catch up after
 // leave): one day at a time, oldest first, stepping back and forward. null = everything, newest first.
 let logDay = null;
+// The diary looks ahead too (Sam, 2026-10-21: "I still want to see what else I have on that day"),
+// up to two years, with that day's appointments at the top.
+const diaryLast = () => { const d = new Date(); d.setFullYear(d.getFullYear() + 2); return dayKey(d); };
+function diaryApptsHTML(day) {
+  const list = S.schedule.filter((e) => !isExample(e) && dayKey(new Date(e.when)) === day).sort((a, b) => a.when - b.when);
+  return `<div class="card" style="display:grid;gap:6px;padding:10px 12px"><strong class="small">Appointments and plans</strong>
+    ${list.length ? list.map((e) => `<div class="small"><strong>${fmtTime(e.when)}</strong> ${esc(e.label)}${e.detail ? ` · <span class="muted">${esc(e.detail)}</span>` : ""}</div>`).join("") : `<div class="small muted">None on this day.</div>`}
+    ${day >= dayKey(new Date()) && !isFamily() ? `<button class="link small" id="ldAddAppt" style="justify-self:start;min-height:40px">+ Add an appointment on this day</button>` : ""}</div>`;
+}
 let logOpen = false; // "Show all words and recordings" in the record log
 try { logOpen = localStorage.getItem("dignitynotes.logopen") === "1"; } catch {}
 // Where a word appears in a text, with a few words either side ("…had her porridge at…").
@@ -3660,17 +3670,19 @@ function renderLog() {
   v.innerHTML = `<div class="hello"><h2>Record log</h2><p>Every saved note, outing and handover, newest first.</p></div>
     <button class="searchbar" id="logFind">${ICON.search}<span>Search notes, care plan, contacts…</span></button>
     <div class="seg" role="group" aria-label="Filter">${[["all", "Everything"], ["incident", "Incidents"], ["follow", "To note"]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${logFilter === k}">${l}</button>`).join("")}</div>
-    ${logDay ? `<div class="card" style="display:grid;gap:8px;padding:10px 12px"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><button class="btn ghost" id="ldPrev" aria-label="Previous day" style="flex:0 0 auto">‹ Day before</button><strong class="small" style="text-align:center">${esc(fmtDay(new Date(logDay + "T12:00:00").getTime()))}</strong><button class="btn ghost" id="ldNext" aria-label="Next day" style="flex:0 0 auto" ${logDay >= dayKey(new Date()) ? "disabled" : ""}>Day after ›</button></div>
-      <div class="row" style="gap:8px"><label class="f" style="flex:1">Go to a date<input type="date" id="ldDate" value="${esc(logDay)}" max="${esc(dayKey(new Date()))}"></label><button class="btn secondary" id="ldAll" style="align-self:end">Show everything</button></div></div>`
+    ${logDay ? `<div class="card" style="display:grid;gap:8px;padding:10px 12px"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><button class="btn ghost" id="ldPrev" aria-label="Previous day" style="flex:0 0 auto">‹ Day before</button><strong class="small" style="text-align:center">${esc(fmtDay(new Date(logDay + "T12:00:00").getTime()))}</strong><button class="btn ghost" id="ldNext" aria-label="Next day" style="flex:0 0 auto" ${logDay >= diaryLast() ? "disabled" : ""}>Day after ›</button></div>
+      <div class="row" style="gap:8px"><label class="f" style="flex:1">Go to a date<input type="date" id="ldDate" value="${esc(logDay)}" max="${esc(diaryLast())}"></label><button class="btn secondary" id="ldAll" style="align-self:end">Show everything</button></div></div>
+      ${diaryApptsHTML(logDay)}`
       : `<button class="link small" id="ldOpen" style="justify-self:start;min-height:40px">View one day at a time (diary)</button>`}
     ${rows ? `<button class="link small" id="logOpen" style="justify-self:start">${logOpen ? "Hide words and recordings" : "Show all words and recordings"}</button>` : ""}
-    ${rows || `<div class="empty">${logDay ? "Nothing was recorded on this day." : "Nothing here yet."}</div>`}`;
+    ${rows || `<div class="empty">${logDay ? (logDay > dayKey(new Date()) ? "This day hasn't happened yet: appointments for it are above." : "Nothing was recorded on this day.") : "Nothing here yet."}</div>`}`;
   v.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { logFilter = b.dataset.f; renderLog(); }));
   const stepDay = (n) => { const d = new Date(logDay + "T12:00:00"); d.setDate(d.getDate() + n); logDay = dayKey(d); renderLog(); window.scrollTo(0, 0); };
   if ($("#ldOpen", v)) $("#ldOpen", v).onclick = () => { logDay = dayKey(new Date()); renderLog(); };
   if ($("#ldPrev", v)) $("#ldPrev", v).onclick = () => stepDay(-1);
   if ($("#ldNext", v)) $("#ldNext", v).onclick = () => stepDay(1);
   if ($("#ldAll", v)) $("#ldAll", v).onclick = () => { logDay = null; renderLog(); };
+  if ($("#ldAddAppt", v)) $("#ldAddAppt", v).onclick = () => openEventSheet(logDay, () => renderLog());
   if ($("#ldDate", v)) $("#ldDate", v).onchange = (e) => { if (e.target.value) { logDay = e.target.value; renderLog(); } };
   v.querySelectorAll("[data-addto]").forEach((b) => (b.onclick = () => openRecorder({ amends: b.dataset.addto })));
   $("#logFind", v).onclick = () => { openFind(); const q = $("#fdQ"); if (q) q.focus(); };
@@ -3864,23 +3876,28 @@ function openReturnSheet() {
     if ($("#bkHosp", s.root) && $("#bkHosp", s.root).checked) openEmergencyEdit({ why: "<strong>Back from hospital:</strong> a new ReSPECT form is usually given on discharge. Check which form there is now and where it's kept." });
   };
 }
-function openEventSheet() {
+function openEventSheet(day = "", after) {
   const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1);
   const pad = (n) => String(n).padStart(2, "0");
   const s = sheet(`${sheetHead("Add appointment or plan")}
-    <label class="f">What<input type="text" id="evLabel" placeholder="e.g. Hairdresser" autocomplete="off"></label>
+    <label class="f">What<input type="text" id="evLabel" placeholder="e.g. B12 injection at the surgery" autocomplete="off"></label>
     <label class="f">Details (optional)<input type="text" id="evDetail" placeholder="e.g. Coming to the house" autocomplete="off"></label>
-    <div class="row"><label class="f" style="flex:1">Day<select id="evDay"><option value="0">Today</option><option value="1">Tomorrow</option><option value="2">In 2 days</option></select></label>
+    <div class="row"><label class="f" style="flex:1">Date<input type="date" id="evDay" value="${esc(day || dayKey(new Date()))}" min="${esc(dayKey(new Date()))}" max="${esc(diaryLast())}"></label>
     <label class="f" style="flex:1">Time<input type="text" id="evTime" value="${pad(d.getHours())}:00" inputmode="numeric" placeholder="e.g. 14:30 or 1430" aria-describedby="evTimeHelp"><span class="tiny muted" id="evTimeHelp">Type 11, 1130 or 11:30</span></label></div>
+    <div class="small muted" id="evSame" role="status"></div>
     <button class="btn primary block" id="evSave">Add</button>`);
+  // What else is on that day, so it's easy to see whether it fits.
+  const same = () => { const k = $("#evDay").value, l = S.schedule.filter((e) => !isExample(e) && dayKey(new Date(e.when)) === k).sort((x, y) => x.when - y.when); $("#evSame").textContent = k ? (l.length ? `Already on that day: ${l.map((e) => `${fmtTime(e.when)} ${e.label}`).join("; ")}` : "Nothing else on that day.") : ""; };
+  $("#evDay").onchange = same; same();
   $("#evSave").onclick = () => {
-    const label = $("#evLabel").value.trim(); const m = parseClock($("#evTime").value);
-    if (!label) return toast("Enter what it is"); if (!m) return toast("Type the time like 11, 1130 or 11:30");
-    const w = new Date(); w.setHours(+m[1], +m[2], 0, 0);
-    w.setDate(w.getDate() + +$("#evDay").value); // calendar days, so a clock change doesn't move it by an hour
-    if (w.getTime() < Date.now() - 60000) return toast(`${pad(m[1])}:${pad(m[2])} today has already passed. Check the time or the day.`);
+    const label = $("#evLabel").value.trim(); const m = parseClock($("#evTime").value), k = $("#evDay").value;
+    if (!label) return toast("Enter what it is"); if (!k) return toast("Choose the date"); if (!m) return toast("Type the time like 11, 1130 or 11:30");
+    const w = new Date(k + "T00:00:00"); w.setHours(+m[1], +m[2], 0, 0); // that calendar day, so a clock change doesn't move it by an hour
+    if (w.getTime() < Date.now() - 60000) return toast(`${pad(m[1])}:${pad(m[2])} on that day has already passed. Check the time or the date.`);
+    if (k > diaryLast()) return toast("Choose a date within the next two years");
     S.schedule.push({ id: uid(), ts: Date.now(), when: w.getTime(), label, detail: $("#evDetail").value.trim() });
-    save(); s.close(); render(); toast(`Added: ${label}, ${["today", "tomorrow", "in 2 days"][+$("#evDay").value] || ""} at ${pad(m[1])}:${pad(m[2])}`);
+    save(); s.close(); render(); toast(`Added: ${label}, ${dayLabel(w.getTime())} at ${pad(m[1])}:${pad(m[2])}`);
+    if (after) after();
   };
 }
 
