@@ -2073,12 +2073,13 @@ function openPlan() {
     <div class="card" style="box-shadow:none;display:grid;gap:8px"><h3 style="font-size:17px;margin:0">Documents</h3>
       ${docs.length ? docs.map((d) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><button class="link" data-opendoc="${esc(d.id)}" style="text-align:left">${esc(d.name)}</button><span class="tiny muted">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</span>${canEditPlan() && d.kind === "care_plan" ? `<button class="link small" data-filldoc="${esc(d.id)}">Fill the care plan from this</button>` : ""}${isAdminHere() ? `<button class="link small" data-deldoc="${esc(d.id)}" style="color:var(--incident)">Remove</button>` : ""}</div>`).join("") : '<p class="small muted" style="margin:0">No documents yet.</p>'}
     </div>
-    ${p.updatedAt ? `<p class="tiny muted" style="margin:0">Last changed ${fmtDay(p.updatedAt)} ${fmtTime(p.updatedAt)}${p.updatedBy ? " by " + esc(p.updatedBy) : ""}.</p>` : ""}
+    ${p.updatedAt ? `<p class="tiny muted" style="margin:0">Last changed ${fmtDay(p.updatedAt)} ${fmtTime(p.updatedAt)}${p.updatedBy ? " by " + esc(p.updatedBy) : ""}.${isAdminHere() && cloudOn() ? ` <button class="link tiny" id="plHist">Earlier versions</button>` : ""}</p>` : ""}
     ${canEditPlan() ? `${planDoneCount() < PLAN_DEFAULTS.length ? `<button class="btn primary block" id="plGuide">${planDoneCount() ? "Finish it step by step" : "Set it up step by step"} (${planDoneCount()} of ${PLAN_DEFAULTS.length} done)</button>` : ""}
       <button class="btn secondary block" id="plReports">Reports</button>
       <div class="row"><button class="btn secondary" id="plEdit">${p.sections.length ? "Edit care plan" : "Write it all at once"}</button><button class="btn secondary" id="plUpload">Add a document</button></div>` : ""}`);
   if ($("#plGuide", s.root)) $("#plGuide", s.root).onclick = () => { s.close(); openPlanGuide(); };
   if ($("#plReports", s.root)) $("#plReports", s.root).onclick = () => { s.close(); openReports(); };
+  if ($("#plHist", s.root)) $("#plHist", s.root).onclick = () => openPlanHistory();
   s.root.querySelectorAll("[data-filldoc]").forEach((b) => (b.onclick = () => { s.close(); openPlanFromDoc(b.dataset.filldoc); }));
   if ($("#plEdit", s.root)) $("#plEdit", s.root).onclick = () => { s.close(); openPlanEdit(); };
   if ($("#tkEdit", s.root)) $("#tkEdit", s.root).onclick = () => { s.close(); openTasksEdit(); };
@@ -2087,6 +2088,38 @@ function openPlan() {
     try { await syncJSON("/plan/doc/delete", { client: session.client.id, id: b.dataset.deldoc }); audioDB.del(["doc_" + b.dataset.deldoc]); S.plan.docs = planDocs().filter((d) => d.id !== b.dataset.deldoc); saveLocal(); s.close(); openPlan(); toast("Document removed"); }
     catch (e) { toast(e.message); }
   })));
+}
+// Earlier versions of the care plan (administrators): every save keeps the one it replaced. Restoring
+// one saves it as the newest version, so the version it replaces is kept too and nothing is lost.
+async function openPlanHistory() {
+  const seen = plan().updatedAt || 0; // restore only over the plan as it was when this list was opened
+  const s = sheet(`${sheetHead("Earlier versions")}<div id="phBody" style="display:grid;gap:8px"><div class="recorder"><div class="spinner"></div></div></div>`, { onClose: () => openPlan() });
+  let versions;
+  try { versions = (await syncJSON("/plan/history", { client: session.client.id })).versions || []; }
+  catch (e) { const b = $("#phBody", s.root); if (b) b.innerHTML = `<p class="warn">${esc(e.message || "Couldn't load them. Try again when you have signal.")}</p>`; return; }
+  const b = $("#phBody", s.root); if (!b) return;
+  b.innerHTML = versions.length ? `<p class="small muted" style="margin:0">Each one is the care plan as it was before someone changed it. Tap one to read it.</p>${versions.map((v, i) => `<button class="card" data-phv="${i}" style="box-shadow:none;text-align:left;display:grid;gap:2px"><strong class="small">${esc(fmtDay(v.savedAt))} ${esc(fmtTime(v.savedAt))}${v.savedBy ? " · " + esc(v.savedBy) : ""}</strong><span class="tiny muted">${v.sections.length} section${v.sections.length === 1 ? "" : "s"} · replaced ${esc(fmtDay(v.replacedAt))} ${esc(fmtTime(v.replacedAt))}${v.replacedBy ? " by " + esc(v.replacedBy) : ""}</span></button>`).join("")}`
+    : '<div class="empty">No earlier versions yet. One is kept each time the care plan is changed.</div>';
+  if (versions.length >= 50) b.insertAdjacentHTML("beforeend", '<p class="tiny muted" style="margin:0">Showing the latest 50.</p>');
+  b.querySelectorAll("[data-phv]").forEach((x) => (x.onclick = () => openPlanVersion(versions[+x.dataset.phv], seen)));
+}
+function openPlanVersion(v, seen) {
+  const s = sheet(`${sheetHead("Earlier version")}
+    <p class="small" style="margin:0">As saved ${esc(fmtDay(v.savedAt))} ${esc(fmtTime(v.savedAt))}${v.savedBy ? " by " + esc(v.savedBy) : ""}. Replaced ${esc(fmtDay(v.replacedAt))} ${esc(fmtTime(v.replacedAt))}${v.replacedBy ? " by " + esc(v.replacedBy) : ""}.</p>
+    ${v.sections.length ? v.sections.map((x) => `<details class="card" style="box-shadow:none"><summary><strong>${esc(x.title)}</strong> ${urgencyPill(x.urgency)}</summary><p class="small" style="margin:8px 0 0">${planTextHTML(x.text)}</p></details>`).join("") : '<div class="empty">This version had no sections.</div>'}
+    ${v.tasks ? `<p class="small muted" style="margin:0">Shift tasks: ${v.tasks.length ? v.tasks.map((t) => esc(t.title)).join(", ") : "none"}.</p>` : ""}
+    <button class="btn secondary block" id="pvRestore">Restore this version</button>
+    <p class="tiny muted" style="margin:0">Restoring makes this the care plan again${v.tasks ? ", with its shift tasks" : " (today's shift tasks stay)"}. The current version is kept under Earlier versions, so it can be brought back.</p>`, { onClose: () => (restored ? openPlan() : openPlanHistory()) });
+  let restored = false;
+  $("#pvRestore", s.root).onclick = (e) => confirmInline(e.currentTarget, async () => {
+    const btn = $("#pvRestore", s.root); if (btn) { btn.disabled = true; btn.textContent = "Restoring…"; }
+    try {
+      // If someone changed the plan since the list was opened, the relay refuses: look again first.
+      const out = await syncJSON("/plan/restore", { client: session.client.id, replacedAt: v.replacedAt, baseUpdatedAt: seen });
+      S.plan = { ...plan(), ...out.plan, docs: planDocs() }; saveLocal(); render();
+      restored = true; s.close(); toast("Earlier version restored");
+    } catch (err) { if (btn) { btn.disabled = false; btn.textContent = "Restore this version"; } toast(err.message || "Couldn't restore it. Try again."); }
+  }, "Tap again to restore");
 }
 async function openPlanEdit() {
   // Start from the latest saved plan, so a phone that hadn't loaded it never overwrites it.
@@ -4625,7 +4658,7 @@ function speechLang() {
 function openRecorder(opts = {}) {
   rec.amends = opts.amends || null; // an addition to an earlier note (see openSavedNote)
   if (activeTransfer()) toast(`Note: ${S.client.name} is out with ${activeTransfer().withWhom}`);
-  rec.final = rec.interim = ""; rec.blob = null; rec.speechOK = !!SR; rec.cancelled = false; rec.speechLostAt = 0; rec.stoppedAt = 0;
+  rec.final = rec.interim = rec.shown = ""; rec.blob = null; rec.diag = { parts: 0, ends: 0, err: "", muted: false, late: 0 }; rec.speechOK = !!SR; rec.cancelled = false; rec.speechLostAt = 0; rec.stoppedAt = 0;
   if (rec.abort) rec.abort.abort(); rec.finishing = false; // an earlier recording still being turned into words is dropped
   rec.gen = (rec.gen || 0) + 1; rec.skipServer = false; // each recording has its own number, so a late answer can't land on a newer one
   const s = sheet(`${sheetHead(rec.amends ? "Add to the note" : "Record care note")}
@@ -4662,12 +4695,24 @@ async function startRecording() {
   rec.starting = false;
   if (rec.cancelled || !$("#micBtn")) { rec.stream.getTracks().forEach((t) => t.stop()); return; } // closed while starting
   rec.chunks = [];
-  try { try { rec.media = new MediaRecorder(rec.stream, { audioBitsPerSecond: 32000 }); } catch { rec.media = new MediaRecorder(rec.stream); } rec.media.ondataavailable = (e) => e.data.size && rec.chunks.push(e.data); rec.media.start(1000); }
+  try { try { rec.media = new MediaRecorder(rec.stream, { audioBitsPerSecond: 32000 }); } catch { rec.media = new MediaRecorder(rec.stream); } rec.media.ondataavailable = (e) => { if (e.data.size) { rec.chunks.push(e.data); rec.diag.parts++; } }; rec.media.start(1000); }
   catch { rec.media = null; }
+  // For the "Nothing was picked up" details: did the phone silence the microphone part-way through?
+  try { const tr = rec.stream.getAudioTracks()[0]; if (tr) tr.onmute = () => (rec.diag.muted = true); } catch {}
   if (SR) {
     try {
       rec.recog = new SR(); rec.recog.lang = speechLang(); rec.recog.continuous = true; rec.recog.interimResults = true;
       rec.recog.onresult = (e) => {
+        // iPhones (Sam, 2026-10-21) can start the list of words afresh part-way through without ending,
+        // and never mark words final: the words already shown would vanish. Keep them before the new ones.
+        // Only a real restart counts: nothing in this event is final (a final replaces the words itself), there
+        // are new words, and they share little with the words before (a corrected word isn't a restart).
+        const prevInterim = rec.interim.trim(), prevLen = rec.resultsLen || 0;
+        let fresh = "", anyFinal = false;
+        for (let i = e.resultIndex; i < e.results.length; i++) { if (e.results[i].isFinal) anyFinal = true; else fresh += e.results[i][0].transcript; }
+        if (!anyFinal && !fresh.trim()) return; // an empty event (iPhones send one after Stop) doesn't wipe the words shown
+        rec.resultsLen = e.results.length;
+        if (!anyFinal && fresh.trim() && prevInterim.split(/\s+/).length >= 3 && e.resultIndex === 0 && e.results.length <= prevLen && !agreesWith(fresh, prevInterim) && !rec.final.trimEnd().endsWith(prevInterim)) rec.final += prevInterim + " ";
         rec.interim = "";
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const r = e.results[i];
@@ -4676,13 +4721,14 @@ async function startRecording() {
         }
         drawLive();
       };
-      rec.recog.onerror = (e) => { if (["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"].includes(e.error)) { rec.speechOK = false; if (rec.on) rec.speechLostAt = Date.now() - rec.started; drawLive(); } };
+      rec.recog.onerror = (e) => { rec.diag.err = e.error || "?"; if (["not-allowed", "service-not-allowed", "audio-capture", "language-not-supported"].includes(e.error)) { rec.speechOK = false; if (rec.on) rec.speechLostAt = Date.now() - rec.started; drawLive(); } };
       // Some phones (iPhone Safari) end recognition repeatedly; restarting at once can lock up the page,
       // so wait a moment, and give up on live words after 4 quick endings in a row (the audio keeps recording).
       rec.recogEnds = [];
       rec.recog.onend = () => {
         // iPhones end recognition now and then: keep any words not yet marked final before restarting.
         if (rec.interim.trim()) { rec.final += rec.interim.trim() + " "; rec.interim = ""; }
+        rec.diag.ends++; rec.resultsLen = 0;
         if (!rec.on || !rec.speechOK) return;
         const now = Date.now(); rec.recogEnds = rec.recogEnds.filter((t) => now - t < 5000).concat(now);
         if (rec.recogEnds.length >= 4) { rec.speechOK = false; rec.speechLostAt = Date.now() - rec.started; drawLive(); return; }
@@ -4713,9 +4759,16 @@ document.addEventListener("visibilitychange", () => {
   else if (document.visibilityState === "visible" && rec.on) keepAwake(true);
 });
 function drawLive() {
+  // The words the carer saw are never lost: the longest version shown is kept as a fallback (Sam, 2026-10-21).
+  const now = (rec.final + " " + rec.interim).trim(); if (now.length >= (rec.shown || "").length) rec.shown = now;
   const l = $("#live"); if (!l) return;
   l.innerHTML = rec.final || rec.interim ? `${esc(rec.final)}<span class="interim">${esc(rec.interim)}</span>${!rec.speechOK && rec.speechLostAt ? '<div class="warn small" style="margin-top:8px">The phone stopped turning your words into text. Keep talking: the recording carries on, and you can add the rest when you check the note.</div>' : ""}`
     : `<span class="interim">${rec.speechOK ? "Your words will appear here as you speak…" : "Live words aren't available in this browser. Your recording is still being kept."}</span>`;
+}
+// Small print under "Nothing was picked up", so a screenshot sent with feedback shows what the phone did.
+function recDiag() {
+  const d = rec.diag; if (!d) return "";
+  return `<div class="tiny muted" style="margin-top:6px">Details for support: audio ${d.parts} part${d.parts === 1 ? "" : "s"}, ${d.bytes || 0} bytes${d.late ? `, waited ${d.late / 1000}s` : ""}; live words ${rec.shown ? "shown" : "none"}${SR ? "" : " (not available)"}; listening ended ${d.ends}×${d.err ? `, error ${esc(d.err)}` : ""}${d.muted ? "; microphone muted by the phone" : ""}.</div>`;
 }
 // Words from a recording, worked out on the relay (Cloudflare speech-to-text). Empty when offline or not set up.
 // Do two versions of what was said mostly agree? (Share of the speech-to-text's words the phone heard too.)
@@ -4772,10 +4825,16 @@ function stopRecording(cancel) {
     if (done) return; done = true;
     rec.stream && rec.stream.getTracks().forEach((t) => t.stop());
     if (rec.cancelled) return;
+    // Some iPhones hand over the audio only after "stop", and late: wait up to 6 more seconds for it.
+    for (let w = 0; !rec.chunks.length && rec.media && gen === rec.gen && !rec.cancelled && !rec.skipServer && w < 30; w++) { await new Promise((r) => setTimeout(r, 200)); rec.diag.late = (w + 1) * 200; }
+    if (rec.cancelled || gen !== rec.gen) return; // discarded while waiting (a new recording may have started)
     let blob = rec.chunks.length ? new Blob(rec.chunks, { type: (rec.media && rec.media.mimeType) || "audio/webm" }) : null;
+    // Words that were on screen but went missing as the phone stopped listening are put back.
+    if (!(rec.final + " " + rec.interim).trim() && rec.shown) rec.final = rec.shown;
     // A clip under ~2 KB is silence or a failed capture: don't claim it was kept.
     if (blob && blob.size < 2000) blob = null;
     rec.blob = blob;
+    rec.diag.bytes = blob ? blob.size : (rec.chunks.length ? new Blob(rec.chunks).size : 0);
     const pending = await keepPending({ blob, transcript: (rec.final + " " + rec.interim).trim(), recordedAt: rec.started, amends: rec.amends, lostAt: rec.speechLostAt, lockedAt: rec.stoppedAt });
     // Closed (discarded) or a new recording started while the recording was being stored.
     if (rec.cancelled && gen === rec.gen) { dropPending(pending); if (pending && pending.audioId) audioDB.del([pending.audioId]); rec.finishing = false; return; }
@@ -4974,7 +5033,7 @@ async function openReview({ transcript, blob, typed, lostAt, lockedAt, byRelay, 
       toast((inc ? "Saved. Incident report added to Needs attention." : "Saved to the record.") + (firstOfShift ? " Don't forget to do a handover at the end of your shift." : "") + (keep.length ? ` Remembered ${keep.length} word fix${keep.length > 1 ? "es" : ""}.` : ""));
     };
   };
-  if (typed || !transcript) showInput(!typed ? (blob ? (serverError && !/took too long|abort/i.test(serverError) ? serverError : "We couldn't turn your speech into words. Play it back and type a short version below.") : rec.firstUse ? "Nothing was picked up, because the phone was asking for permission to use the microphone. Close this and tap Record again: it works from now on." : "Nothing was picked up. Check the microphone, try again, or type the note.") : "");
+  if (typed || !transcript) showInput(!typed ? (blob ? (serverError && !/took too long|abort/i.test(serverError) ? esc(serverError) : "We couldn't turn your speech into words. Play it back and type a short version below.") : rec.firstUse ? "Nothing was picked up, because the phone was asking for permission to use the microphone. Close this and tap Record again: it works from now on." : `Nothing was picked up. Check the microphone, try again, or type the note.${recDiag()}`) : "");
   else run();
 }
 
