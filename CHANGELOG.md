@@ -2,6 +2,7 @@
 
 ## 1.3.0 - 2026-10-15
 
+- 1.3.20: The calendar works like Google Calendar: each day shows its appointments by name; tap a day to list them underneath (add one on that day, or open it in the diary); tap an appointment to see, change or cancel it and come back to the calendar. Month or List view, Today, and swipe to change month.
 - 1.3.19: Appointments: reminders you choose when adding one (at the time, 15 minutes, 1 or 2 hours, the day before, 2 days or a week before), for everyone caring for the client or just you, popping up in the app and as a phone notification. Repeating appointments (daily, weekly, fortnightly, every 4 weeks or monthly, until a date). Tap an appointment to change or cancel it (with a reason; cancelled ones stay, struck through). A calendar shows a month at a time. Notifications stay on for whoever signs in on that phone. Privacy notice version 23.
 - 1.3.18: Messages from the developer are kept and can be searched (Help, and Find), even after Got it. Find's appointments open that day in the diary.
 - 1.3.17: Appointments can be added on any date (not just the next 3 days), showing what else is on that day. The diary looks ahead too: each day shows its appointments, with Add an appointment on this day; Coming up has Look ahead in the diary.

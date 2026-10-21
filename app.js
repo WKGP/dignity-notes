@@ -3705,7 +3705,7 @@ function renderLog() {
   if ($("#ldPrev", v)) $("#ldPrev", v).onclick = () => stepDay(-1);
   if ($("#ldNext", v)) $("#ldNext", v).onclick = () => stepDay(1);
   if ($("#ldAll", v)) $("#ldAll", v).onclick = () => { logDay = null; renderLog(); };
-  if ($("#ldCal", v)) $("#ldCal", v).onclick = () => openCalendar(logDay.slice(0, 7));
+  if ($("#ldCal", v)) $("#ldCal", v).onclick = () => openCalendar(undefined, logDay);
   if ($("#ldAddAppt", v)) $("#ldAddAppt", v).onclick = () => openEventSheet(logDay, () => renderLog());
   if ($("#ldDate", v)) $("#ldDate", v).onchange = (e) => { if (e.target.value) { logDay = e.target.value; renderLog(); } };
   v.querySelectorAll("[data-addto]").forEach((b) => (b.onclick = () => openRecorder({ amends: b.dataset.addto })));
@@ -3945,28 +3945,67 @@ function openEventSheet(day = "", after, preset = null) {
   };
 }
 
-// A month at a time, like a paper calendar (Gavin, 2026-10-21): each day shows how many appointments it
-// has; tap a day to open it in the diary.
-function openCalendar(month) {
-  const now = new Date(), first = month ? new Date(month + "-01T12:00:00") : new Date(now.getFullYear(), now.getMonth(), 1, 12);
+// The calendar (Gavin, 2026-10-21, after Google Calendar): a month grid with each day's appointments
+// named inside it; tap a day to see its appointments listed underneath (and add one on that day); tap an
+// appointment to see it, change it or cancel it. List shows everything coming up, day by day. Swipe the
+// month sideways, or use ‹ › and Today. The calendar remembers the day and view while the app is open.
+let calView = "month", calDay = "";
+function openCalendar(month, day) {
+  const now = new Date(), today = dayKey(now);
+  if (day) calDay = day; else if (!calDay || (month && calDay.slice(0, 7) !== month)) calDay = month && month !== today.slice(0, 7) ? month + "-01" : today;
+  const first = new Date(calDay.slice(0, 7) + "-01T12:00:00");
   const y = first.getFullYear(), mo = first.getMonth(), days = new Date(y, mo + 1, 0).getDate(), lead = (first.getDay() + 6) % 7; // Monday first
-  const key = (d) => dayKey(new Date(y, mo, d, 12)), today = dayKey(now), byDay = new Map();
+  const key = (d) => dayKey(new Date(y, mo, d, 12)), byDay = new Map();
   for (const e of liveAppts()) { const k = dayKey(new Date(e.when)); byDay.set(k, [...(byDay.get(k) || []), e]); }
+  for (const l of byDay.values()) l.sort((a, b) => a.when - b.when);
   const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  const s = sheet(`${sheetHead("Calendar")}
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><button class="btn ghost" id="caPrev" aria-label="Previous month" style="flex:0 0 auto">‹</button><strong>${esc(first.toLocaleDateString("en-GB", { month: "long", year: "numeric" }))}</strong><button class="btn ghost" id="caNext" aria-label="Next month" style="flex:0 0 auto">›</button></div>
-    <div role="grid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center">
-      ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => `<div class="tiny muted" role="columnheader">${d}</div>`).join("")}
-      ${Array(lead).fill('<div></div>').join("")}
-      ${Array.from({ length: days }, (_, i) => { const k = key(i + 1), list = byDay.get(k) || []; return `<button data-cday="${k}" aria-label="${esc(fmtDay(new Date(k + "T12:00:00").getTime()))}${list.length ? `, ${list.length} appointment${list.length === 1 ? "" : "s"}` : ""}" style="min-height:48px;border-radius:10px;border:${k === today ? "2px solid var(--accent, #6b4fa0)" : "1px solid var(--line, #ddd)"};background:${list.length ? "var(--accent-soft, #efe8f8)" : "transparent"};color:inherit;font:inherit;display:grid;align-content:center;gap:2px;padding:2px"><span class="small" style="font-weight:${k === today ? 700 : 500}">${i + 1}</span>${list.length ? `<span class="tiny" style="color:var(--accent, #6b4fa0);font-weight:700">● ${list.length}</span>` : ""}</button>`; }).join("")}
+  const back = () => openCalendar(undefined, calDay); // where a closed appointment returns to
+  const canAdd = (k) => !isFamily() && k >= today && k <= diaryLast();
+  const icons = (e) => `${e.seriesId ? " ↻" : ""}${e.remind ? " 🔔" : ""}`;
+  const item = (e) => `<button class="cal-item${e.cancelledTs ? " off" : ""}" data-calappt="${esc(e.id)}"><span class="cal-when">${fmtTime(e.when)}</span><span style="display:grid;gap:2px;min-width:0"><strong>${esc(e.label)}${icons(e)}</strong>${e.detail ? `<span class="small muted">${esc(e.detail)}</span>` : ""}${e.cancelledTs ? `<span class="small muted">Cancelled${e.cancelReason ? `: ${esc(e.cancelReason)}` : ""}</span>` : ""}</span></button>`;
+  const dayName = (k) => new Date(k + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+  let body;
+  if (calView === "list") {
+    // Everything from today, a day at a time (cancelled ones left out here; they stay in the day view).
+    const ahead = liveAppts().filter((e) => e.when >= new Date(today + "T00:00:00").getTime()).sort((a, b) => a.when - b.when).slice(0, 100), groups = new Map();
+    for (const e of ahead) { const k = dayKey(new Date(e.when)); groups.set(k, [...(groups.get(k) || []), e]); }
+    let lastMonth = "";
+    body = groups.size ? `<div style="display:grid;gap:8px">${[...groups].map(([k, l]) => { const m = k.slice(0, 7), mh = m !== lastMonth ? `<h3 style="margin:10px 0 0;font-size:16px">${esc(new Date(k + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }))}</h3>` : ""; lastMonth = m; return `${mh}<p class="cal-dayh">${esc(dayName(k))}${k === today ? " · Today" : ""}</p>${l.map(item).join("")}`; }).join("")}</div>`
+      : `<p class="small muted" style="margin:0">Nothing coming up.</p>`;
+  } else {
+    const sel = S.schedule.filter((e) => !isExample(e) && dayKey(new Date(e.when)) === calDay).sort((a, b) => a.when - b.when);
+    body = `<div class="cal-grid" id="caGrid">
+      ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => `<div class="cal-dow" aria-hidden="true">${d}</div>`).join("")}
+      ${Array(lead).fill("<div></div>").join("")}
+      ${Array.from({ length: days }, (_, i) => { const k = key(i + 1), list = byDay.get(k) || [];
+        return `<button class="cal-day${k === today ? " today" : ""}${k < today ? " past" : ""}" data-cday="${k}" aria-pressed="${k === calDay}" aria-label="${esc(dayName(k))}${list.length ? `: ${esc(list.map((e) => `${fmtTime(e.when)} ${e.label}`).join(", "))}` : ", nothing on"}"><span class="cal-num">${i + 1}</span>${list.slice(0, 2).map((e) => `<span class="cal-chip">${esc(e.label)}</span>`).join("")}${list.length > 2 ? `<span class="cal-more">+${list.length - 2} more</span>` : ""}</button>`; }).join("")}
     </div>
-    <p class="tiny muted" style="margin:0">● the number of appointments that day. Tap a day to see it in the diary and add an appointment.</p>
-    ${(() => { const inMonth = liveAppts().filter((e) => ym(new Date(e.when)) === ym(first)).sort((a, b) => a.when - b.when); return inMonth.length ? `<div style="display:grid;gap:4px"><strong class="small">This month</strong>${inMonth.map((e) => `<button class="link small" data-appt="${esc(e.id)}" style="justify-self:start;text-align:left;min-height:36px">${esc(new Date(e.when).toLocaleDateString("en-GB", { weekday: "short", day: "numeric" }))} ${fmtTime(e.when)} · ${esc(e.label)}</button>`).join("")}</div>` : `<p class="small muted" style="margin:0">No appointments this month.</p>`; })()}
+    <div style="display:grid;gap:8px">
+      <p class="cal-dayh" style="margin-top:4px">${esc(dayName(calDay))}${calDay === today ? " · Today" : ""}</p>
+      ${sel.length ? sel.map(item).join("") : `<p class="small muted" style="margin:0">Nothing on this day.</p>`}
+      <div style="display:flex;gap:16px;flex-wrap:wrap">${canAdd(calDay) ? `<button class="link" id="caAddDay" style="min-height:44px">+ Add on this day</button>` : ""}<button class="link" id="caDiary" style="min-height:44px">Open this day in the diary</button></div>
+    </div>`;
+  }
+  const s = sheet(`${sheetHead("Calendar")}
+    <div class="seg" role="group" aria-label="Calendar view"><button data-cview="month" aria-pressed="${calView === "month"}">Month</button><button data-cview="list" aria-pressed="${calView === "list"}">List</button></div>
+    ${calView === "month" ? `<div style="display:flex;align-items:center;gap:8px"><button class="btn ghost" id="caPrev" aria-label="Previous month" style="flex:0 0 auto">‹</button><strong style="flex:1;text-align:center" aria-live="polite">${esc(first.toLocaleDateString("en-GB", { month: "long", year: "numeric" }))}</strong><button class="btn ghost" id="caToday" style="flex:0 0 auto">Today</button><button class="btn ghost" id="caNext" aria-label="Next month" style="flex:0 0 auto">›</button></div>` : ""}
+    ${body}
     ${isFamily() ? "" : `<button class="btn secondary block" id="caAdd">+ Add appointment or plan</button>`}`);
-  $("#caPrev", s.root).onclick = () => openCalendar(ym(new Date(y, mo - 1, 1)));
-  $("#caNext", s.root).onclick = () => openCalendar(ym(new Date(y, mo + 1, 1)));
-  if ($("#caAdd", s.root)) $("#caAdd", s.root).onclick = () => openEventSheet(ym(first) > ym(now) ? key(1) : "", () => openCalendar(ym(first)));
-  s.root.querySelectorAll("[data-cday]").forEach((b) => (b.onclick = () => { s.close(); logDay = b.dataset.cday; go("log"); }));
+  const month2 = (n) => openCalendar(ym(new Date(y, mo + n, 1)));
+  s.root.querySelectorAll("[data-cview]").forEach((b) => (b.onclick = () => { calView = b.dataset.cview; openCalendar(undefined, calDay); }));
+  if ($("#caPrev", s.root)) { $("#caPrev", s.root).onclick = () => month2(-1); $("#caNext", s.root).onclick = () => month2(1); $("#caToday", s.root).onclick = () => openCalendar(undefined, today); }
+  s.root.querySelectorAll("[data-cday]").forEach((b) => (b.onclick = () => openCalendar(undefined, b.dataset.cday)));
+  s.root.querySelectorAll("[data-calappt]").forEach((b) => (b.onclick = () => openAppt(b.dataset.calappt, back)));
+  const addOn = (k) => openEventSheet(k, () => openCalendar(undefined, calDay));
+  if ($("#caAddDay", s.root)) $("#caAddDay", s.root).onclick = () => addOn(calDay);
+  if ($("#caAdd", s.root)) $("#caAdd", s.root).onclick = () => addOn(canAdd(calDay) ? calDay : "");
+  if ($("#caDiary", s.root)) $("#caDiary", s.root).onclick = () => { s.close(); logDay = calDay; go("log"); };
+  // Swipe the month sideways, like turning a paper calendar's page.
+  const grid = $("#caGrid", s.root); let x0 = null, y0 = 0;
+  if (grid) {
+    grid.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
+    grid.addEventListener("touchend", (e) => { if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null; if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) month2(dx < 0 ? 1 : -1); });
+  }
 }
 const REMIND_OPTS = [[0, "At the time"], [15, "15 minutes before"], [60, "1 hour before"], [120, "2 hours before"], [1440, "The day before (24 hours)"], [2880, "2 days before"], [10080, "A week before"]];
 // How a repeating appointment steps: from the first date, the i-th repeat (a month keeps the same date,
@@ -4007,7 +4046,7 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 const liveAppts = () => S.schedule.filter((e) => !isExample(e) && !e.cancelledTs);
 // One appointment: change it (cancel this one, add the new one) or cancel it (Sam, 2026-10-21). The
 // original stays in the record, shown as cancelled, with who cancelled it and when.
-function openAppt(id) {
+function openAppt(id, back) {
   const e = S.schedule.find((x) => x.id === id); if (!e) return;
   const s = sheet(`${sheetHead(esc(e.label))}
     <p class="small" style="margin:0"><strong>${esc(fmtDay(e.when))} ${fmtTime(e.when)}</strong>${e.detail ? ` · ${esc(e.detail)}` : ""}</p>
@@ -4018,9 +4057,9 @@ function openAppt(id) {
       : isFamily() || isExample(e) ? "" : `<button class="btn secondary block" id="apChange">Change the date, time or details</button>
       <label class="f">Why it's cancelled (optional)<input type="text" id="apWhy" maxlength="200" placeholder="e.g. Surgery rang to cancel" autocomplete="off"></label>
       ${e.seriesId ? `<label class="check"><input type="checkbox" id="apLater"><span>Also cancel the later ones in this series</span></label>` : ""}
-      <button class="btn ghost block" id="apCancel">Cancel the appointment</button>`}`);
+      <button class="btn ghost block" id="apCancel">Cancel the appointment</button>`}`, back ? { onClose: back } : {});
   const cancel = (why) => { const cur = S.schedule.find((x) => x.id === id); if (!cur || cur.cancelledTs) return; Object.assign(cur, { cancelledTs: Date.now(), cancelledBy: stampId(), ...(why ? { cancelReason: why.slice(0, 200) } : {}) }); touch(cur); save(); };
-  if ($("#apChange", s.root)) $("#apChange", s.root).onclick = () => { s.close(); openEventSheet(dayKey(new Date(Math.max(e.when, Date.now()))), (rec) => { cancel(`Moved to ${fmtDay(rec.when)} ${fmtTime(rec.when)}`); render(); }, e); };
+  if ($("#apChange", s.root)) $("#apChange", s.root).onclick = () => openEventSheet(dayKey(new Date(Math.max(e.when, Date.now()))), (rec) => { cancel(`Moved to ${fmtDay(rec.when)} ${fmtTime(rec.when)}`); render(); if (back) openCalendar(undefined, dayKey(new Date(rec.when))); }, e); // replaces this sheet
   if ($("#apCancel", s.root)) $("#apCancel", s.root).onclick = (ev) => confirmInline(ev.currentTarget, () => {
     const why = $("#apWhy", s.root).value.trim(), later = $("#apLater", s.root) && $("#apLater", s.root).checked;
     const ids = later ? S.schedule.filter((x) => x.seriesId === e.seriesId && x.when >= e.when && !x.cancelledTs).map((x) => x.id) : [id];
