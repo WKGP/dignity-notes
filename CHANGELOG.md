@@ -2,6 +2,7 @@
 
 ## 1.3.0 - 2026-10-15
 
+- 1.3.22: Settings, About: Check for updates (gets the newest version straight away). What's new opens inside the app, with Close. Coming up has just Calendar (adding and looking ahead are in the calendar).
 - 1.3.21: Print or share for PDFs (messages from the developer, certificates, documents): opens the phone's share sheet with Print, since a PDF opened inside the installed app on an iPhone has no Share button. Calendar: tapping a day keeps your place and shows that day's list; screen readers hear the day or month; closing an unsaved change goes back to the calendar; a fresh open starts on today.
 - 1.3.20: The calendar works like Google Calendar: each day shows its appointments by name; tap a day to list them underneath (add one on that day, or open it in the diary); tap an appointment to see, change or cancel it and come back to the calendar. Month or List view, Today, and swipe to change month.
 - 1.3.19: Appointments: reminders you choose when adding one (at the time, 15 minutes, 1 or 2 hours, the day before, 2 days or a week before), for everyone caring for the client or just you, popping up in the app and as a phone notification. Repeating appointments (daily, weekly, fortnightly, every 4 weeks or monthly, until a date). Tap an appointment to change or cancel it (with a reason; cancelled ones stay, struck through). A calendar shows a month at a time. Notifications stay on for whoever signs in on that phone. Privacy notice version 23.

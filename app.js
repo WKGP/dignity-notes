@@ -3076,7 +3076,7 @@ function renderToday() {
     ${handoverCardHTML(ho)}
     <div class="card"><div class="card-h"><h3>Coming up</h3></div>
       <div class="list">${sched.length ? sched.map((s) => `<div class="item ${s.when < Date.now() ? "past" : ""}" data-appt="${esc(s.id)}" role="button" tabindex="0" style="cursor:pointer"><div class="when">${fmtTime(s.when)}</div><div class="body"><div><strong>${esc(s.label)}</strong></div><div class="muted small">${dayLabel(s.when)}${s.detail ? " · " + esc(s.detail) : ""}</div></div></div>`).join("") : '<div class="empty">Nothing scheduled.</div>'}</div>
-      <div style="margin-top:10px;display:flex;gap:16px;flex-wrap:wrap"><button class="link" id="addEvent">+ Add appointment or plan</button><button class="link" id="evCal">Calendar</button><button class="link" id="evDiary">Look ahead in the diary</button></div></div>
+      <div style="margin-top:10px;display:flex;gap:16px;flex-wrap:wrap"><button class="link" id="evCal">Calendar</button></div></div>
     ${recentNotesHTML(latest)}`;
   $("#ctaRec").onclick = () => openRecorder();
   if ($("#shSwitch")) $("#shSwitch").onclick = () => switchCarer();
@@ -3093,8 +3093,6 @@ function renderToday() {
   if ($("#plGuideGo")) $("#plGuideGo").onclick = () => openPlanGuide();
   if ($("#emBtn")) $("#emBtn").onclick = () => (emergForm() ? openEmergency() : openEmergencyEdit());
   bindStorageBanner(v); bindCatchup(v); bindVoiceCard(v);
-  $("#addEvent").onclick = () => openEventSheet();
-  $("#evDiary").onclick = () => { logDay = dayKey(new Date()); go("log"); };
   $("#evCal").onclick = () => openCalendar();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
   if ($("#ctaBack")) $("#ctaBack").onclick = () => openReturnSheet();
@@ -4112,10 +4110,39 @@ function parseClock(v) {
 }
 
 // App version comes from package.json (bumped on every commit); the relay reports its own on /health.
+// The version this copy of the app was opened as (Check for updates compares the published one with it).
+let loadedVersion = "";
+const latestVersion = async () => (await (await fetch("package.json", { cache: "no-store" })).json()).version || "";
+latestVersion().then((v) => { loadedVersion = v; }).catch(() => {});
+// Check for updates (Gavin, 2026-10-22): asks for the newest version now, instead of waiting for the next
+// time the app is opened, and reloads into it.
+async function checkForUpdates(btn) {
+  const say = (t) => { const el = $("#abUpd"); if (el) el.textContent = t; };
+  btn.disabled = true; say("Checking…");
+  try {
+    const reg = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    if (reg) await reg.update().catch(() => {});
+    const v = await latestVersion();
+    if (loadedVersion && v && v !== loadedVersion) { say(`Updating to ${v}…`); setTimeout(() => location.reload(), 800); return; }
+    say(`You have the latest version${v ? ` (${v})` : ""}.`);
+  } catch { say("Couldn't check: no signal. Try again when you're online."); }
+  btn.disabled = false;
+}
+// What's new, inside the app with a Close button (opened as a page, it had no way back on an installed
+// iPhone app: Gavin, 2026-10-22).
+async function openWhatsNew(back) {
+  const s = sheet(`${sheetHead("What's new")}<div id="wnBody" class="small" style="display:grid;gap:6px"><div class="recorder"><div class="spinner"></div></div></div><button class="btn primary block" data-close>Close</button>`, back ? { onClose: back } : {});
+  let md = "";
+  try { md = await (await fetch("CHANGELOG.md", { cache: "no-cache" })).text(); } catch {}
+  const body = $("#wnBody", s.root); if (!body) return;
+  if (!md) { body.innerHTML = `<p class="muted" style="margin:0">Couldn't load it: no signal. Try again when you're online.</p>`; return; }
+  const inline = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  body.innerHTML = md.split(/\r?\n/).filter((l) => l.trim() && !/^# /.test(l)).map((l) => /^#{2,3} /.test(l) ? `<h3 style="margin:8px 0 0;font-size:16px">${inline(l.replace(/^#+ /, ""))}</h3>` : /^\s*[-*] /.test(l) ? `<p style="margin:0;padding-left:14px;text-indent:-10px">• ${inline(l.replace(/^\s*[-*] /, ""))}</p>` : `<p style="margin:0">${inline(l)}</p>`).join("");
+}
 async function showVersions(root) {
   const set = (id, v) => { const el = root.querySelector(id); if (el) el.textContent = v; };
-  let app = "", relayV = "";
-  try { app = (await (await fetch("package.json", { cache: "no-cache" })).json()).version || ""; } catch {}
+  let app = loadedVersion, relayV = "";
+  if (!app) try { app = await latestVersion(); } catch {}
   set("#abApp", app || "unknown (offline)");
   try { if (relayBase()) relayV = (await (await fetch(relayBase() + "/health", { cache: "no-store" })).json()).version || ""; } catch {}
   set("#abRelay", relayV || (relayBase() ? "unknown (offline)" : "not connected"));
@@ -4189,10 +4216,13 @@ function openSettings() {
       <div>Cloud copy: <strong>${esc(cloudStatus())}</strong></div>
       <div>Notes on this phone: <strong>${storageState.privateLikely ? "may be deleted (private tab)" : storageState.installed || storageState.persisted ? "kept permanently" : "may be cleared by the browser"}</strong></div>
       <div class="muted" id="abMatch"></div>
-      <a class="link" href="CHANGELOG.md" target="_blank" rel="noopener" style="justify-self:start">What's new</a>
+      <button class="btn secondary" id="abCheck" style="justify-self:start">Check for updates</button><div class="muted" id="abUpd" role="status"></div>
+      <button class="link" id="abNew" style="justify-self:start;min-height:44px">What's new</button>
       <p class="tiny muted" style="margin:4px 0 0">Dignity Notes pilot · fictional test use only<br>${COPYRIGHT}</p></div>`);
   foldSections(s.root);
   showVersions(s.root);
+  $("#abCheck", s.root).onclick = (e) => checkForUpdates(e.currentTarget);
+  $("#abNew", s.root).onclick = () => openWhatsNew(openSettings);
   $("#stPrivacy").onclick = () => { s.close(); viewPrivacy(); };
   const drawDict = () => {
     const d = loadDict(); const keys = Object.keys(d).sort((a, b) => d[b].t - d[a].t);
