@@ -1630,7 +1630,24 @@ function findItems(q) {
     events: S.schedule.filter((e) => hit(e.label, e.detail)).sort((a, b) => b.when - a.when).slice(0, 10),
     notes: S.notes.filter((n) => hit(n.note, n.transcript)).sort(byNew).slice(0, 30),
     handovers: S.handovers.filter((h) => hit(h.text)).sort(byNew).slice(0, 10),
+    devMsgs: devMsgs.list.filter((m) => hit(m.text)).slice(0, 10),
   };
+}
+// Messages from the developer, kept after "Got it" so they can be found again (Sam, 2026-10-21).
+const devMsgs = { list: [], at: 0 };
+async function loadDevMsgs() {
+  if (!session || session.local || !navigator.onLine || Date.now() - devMsgs.at < 60000) return false;
+  try { const out = await relay("/feedback/messages", {}); devMsgs.list = out.messages || []; devMsgs.at = Date.now(); return true; } catch { return false; }
+}
+async function openDevMessages() {
+  const s = sheet(`${sheetHead("Messages from the developer")}<input type="search" id="dmQ" placeholder="Search the messages" aria-label="Search the messages" autocomplete="off" style="width:100%"><div id="dmOut" style="display:grid;gap:8px"><div class="empty">Loading…</div></div>`);
+  devMsgs.at = 0; await loadDevMsgs();
+  const draw = () => {
+    const q = $("#dmQ", s.root).value.trim().toLowerCase(), list = devMsgs.list.filter((m) => !q || q.split(/\s+/).every((w) => m.text.toLowerCase().includes(w)));
+    $("#dmOut", s.root).innerHTML = list.length ? list.map((m) => `<div class="card" style="box-shadow:none;padding:10px 12px;display:grid;gap:4px"><span class="tiny muted">${esc(fmtDay(m.at))} ${fmtTime(m.at)}</span><p class="small" style="white-space:pre-line;margin:0">${ownLinks(m.text)}</p></div>`).join("")
+      : `<div class="empty">${devMsgs.list.length ? "No message matches that." : navigator.onLine ? "No messages yet." : "Connect to the internet to see the messages."}</div>`;
+  };
+  $("#dmQ", s.root).oninput = draw; draw();
 }
 function openFind() {
   loadPlan();
@@ -1663,7 +1680,8 @@ function openFind() {
       f.docs.length && head("Documents", f.docs.length) + `<div class="list">${f.docs.map((d) => `<button class="btn secondary block fd-link" data-opendoc="${esc(d.id)}"><div class="body"><strong>${esc(d.name)}</strong><div class="muted small">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</div></div></button>`).join("")}</div>`,
       f.plan.length && head("Care plan", f.plan.length) + f.plan.map((x) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><strong>${esc(x.title)}</strong></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "")}</p></details>`).join(""),
       f.flags.length && head("Flags", f.flags.length) + f.flags.map((x) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><strong>${esc(x.title)}</strong> <span class="tiny muted">${x.kind === "incident" ? "Incident" : "To note"} · ${when(x.ts)}${x.status === "resolved" ? " · resolved" : ""}</span></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.detail || "")}${x.resolvedNote ? "\n\nResolved: " + esc(x.resolvedNote) : ""}</p></details>`).join(""),
-      f.events.length && head("Appointments and plans", f.events.length) + f.events.map((e) => `<div class="small"><strong>${esc(e.label)}</strong> <span class="muted">· ${when(e.when)}${e.detail ? " · " + esc(e.detail) : ""}</span></div>`).join(""),
+      f.events.length && head("Appointments and plans", f.events.length) + f.events.map((e) => `<button class="link small" data-dday="${esc(dayKey(new Date(e.when)))}" style="justify-self:start;text-align:left;min-height:40px"><strong>${esc(e.label)}</strong> <span class="muted">· ${when(e.when)}${e.detail ? " · " + esc(e.detail) : ""}${e.when > Date.now() ? " · coming up" : ""}</span></button>`).join(""),
+      f.devMsgs.length && head("Messages from the developer", f.devMsgs.length) + f.devMsgs.map((m) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><span class="tiny muted">${when(m.at)}</span><div class="small">${esc(m.text.slice(0, 90))}${m.text.length > 90 ? "…" : ""}</div></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${ownLinks(m.text)}</p></details>`).join(""),
       f.notes.length && head("Notes", f.notes.length) + f.notes.map((x) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><span class="tiny muted">${when(x.ts)} · ${esc(carer(x.carerId, x.carerName).name)}</span><div class="small">${esc(String(x.note || "").slice(0, 110))}${String(x.note || "").length > 110 ? "…" : ""}</div></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.note || "")}</p></details>`).join(""),
       f.handovers.length && head("Handovers", f.handovers.length) + f.handovers.map((h) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><span class="tiny muted">${when(h.ts)}${h.fromName ? " · from " + esc(h.fromName) : ""}</span></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(h.text || "")}</p></details>`).join(""),
     ].filter(Boolean).join("");
@@ -1671,7 +1689,9 @@ function openFind() {
   const q = $("#fdQ", s.root);
   let t; q.oninput = () => { clearTimeout(t); t = setTimeout(() => (q.value.trim().length >= 2 ? results(q.value.trim()) : links()), 200); };
   q.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); q.blur(); } };
+  loadDevMsgs().then((changed) => { if (changed && q.value.trim().length >= 2 && s.root.isConnected) results(q.value.trim()); });
   out.onclick = (e) => {
+    const dd = e.target.closest("[data-dday]"); if (dd) { s.close(); logDay = dd.dataset.dday; go("log"); return; }
     const b = e.target.closest("[data-go]"); if (!b) return;
     s.close();
     ({ emerg: openEmergency, reports: openReports, plan: openPlan, contacts: openContacts, meds: () => openMeds("today"), log: () => go("log"), handover: () => go("handover") })[b.dataset.go]();
@@ -5391,6 +5411,7 @@ function openHelp() {
   const s = sheet(`${sheetHead("Help")}
     <a class="btn primary block" href="manual.html" target="_blank" rel="noopener">Open the user manual</a>
     ${session && !session.local && !isFamily() ? `<button class="btn secondary block" id="hpCourse">Training course</button>` : ""}
+    ${session && !session.local ? `<button class="btn secondary block" id="hpMsgs">Messages from the developer</button>` : ""}
     ${drafts.map((d) => `<div class="warn" style="display:grid;gap:8px"><span>You have an unsent ${d.kind === "bug" ? "problem report" : "suggestion"}.</span><button class="btn secondary" data-resume="${d.kind}">Carry on with it</button></div>`).join("")}
     <div class="card" style="display:grid;gap:10px"><h3 style="font-size:17px">Tell us what you think</h3>
       <p class="small muted" style="margin:0">A helper asks a few short questions so the developer can understand. Nothing is sent until you press Submit, and a person reads every report.</p>
@@ -5403,6 +5424,7 @@ function openHelp() {
   $("#hpIdea").onclick = () => { s.close(); openFeedback("idea"); };
   if ($("#hpAdmin")) $("#hpAdmin").onclick = () => { s.close(); openFeedbackAdmin(); };
   if ($("#hpCourse")) $("#hpCourse").onclick = () => { s.close(); openCourse(); };
+  if ($("#hpMsgs")) $("#hpMsgs").onclick = () => { s.close(); openDevMessages(); };
 }
 
 // Phone screenshots are several megabytes: shrink to 1280px JPEG before sending.
