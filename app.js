@@ -186,6 +186,7 @@ function loadUser() {
   if (!S.supplies) { S.supplies = []; if (S.sync) S.sync.seq = 0; } // medicine supplies received: pull them once
   if (!S.forms) { S.forms = []; S.reviews = []; S.acks = []; if (S.sync) S.sync.seq = 0; } // forms, reviews, catch-up ticks: pull them once
   if (!S.pulledV14) { S.pulledV14 = 1; if (S.sync) S.sync.seq = 0; } // 1.3.13/14: assessments, sleep, before and after: an older app skipped them
+  if (!S.pulledV19) { S.pulledV19 = 1; if (S.sync) S.sync.seq = 0; } // 1.3.19: cancelled appointments: an older app dropped the cancellation
   if (!S.doses) { S.doses = []; if (S.sync) S.sync.seq = 0; } // medicines chart entries: pull them once
   else { const keep = Date.now() - 70 * 864e5; S.doses = S.doses.filter((d) => d.ts > keep); } // this and last month's chart; older entries stay in the cloud // ticks for this client; an older app skipped them, so pull everything once (duplicates are ignored)
   S.onDuty = myId(); S.detached = false; // back on this client: anything kept unsent goes now
@@ -240,7 +241,7 @@ const SYNC_KINDS = { note: "notes", obs: "observations", flag: "flags", handover
 const DEMO_IDS = new Set(["n0", "f0", "h0", "s1", "s2", "s3", "m0"]);
 const SYNC_RECORD_MAX = 58000, SYNC_BATCH_MAX = 400000; // the relay allows 60,000 a record, 1,000,000 a request
 // When a record last changed (older records have no mt, so use their latest time).
-const mtOf = (r) => r.mt || Math.max(r.ts || 0, r.approvedTs || 0, r.outTs || 0, r.backTs || 0, r.resolvedTs || 0);
+const mtOf = (r) => r.mt || Math.max(r.ts || 0, r.approvedTs || 0, r.outTs || 0, r.backTs || 0, r.resolvedTs || 0, r.cancelledTs || 0);
 // Mark a record as changed now, later than any earlier change even if phone clocks differ.
 const touch = (r) => { r.mt = Math.max(Date.now(), mtOf(r) + 1); };
 const syncState = { busy: false, again: false, last: null, error: "", pending: 0, audioPending: 0, failed: 0, blocked: null };
@@ -266,7 +267,7 @@ const SYNC_SHAPES = {
   form: { req: ["ts", "formId", "type", "data", "status"], f: { ts: "num", formId: "id", prevId: "id", type: ["incident", "skin", "assessment"], noteId: "id", flagId: "id", ref: "str:20", data: "str:20000", status: ["open", "follow_up", "closed"], by: "id", byName: "str:60" } },
   review: { req: ["ts", "formId", "notify"], f: { ts: "num", formId: "id", notify: ["yes", "no", "unsure"], why: "str:1000", candour: ["yes", "no", "unsure"], safeguarding: ["yes", "no", "unsure"], lessons: "str:1000", by: "id", byName: "str:60" } },
   ack: { req: ["ts", "what"], f: { ts: "num", what: ["read", "skin"], since: "num", by: "id", byName: "str:60" } },
-  event: { req: ["ts", "when", "label"], f: { ts: "num", when: "num", label: "str:120", detail: "str:300", by: "id" } },
+  event: { req: ["ts", "when", "label"], f: { ts: "num", when: "num", label: "str:120", detail: "str:300", by: "id", cancelledTs: "num", cancelledBy: "id", cancelReason: "str:200", remind: "str:40", remindWho: ["all", "me"], seriesId: "id", repeat: "str:60" } },
   transfer: { req: ["outTs", "withWhom"], f: { outTs: "num", withWhom: "str:100", relationship: "str:100", purpose: "str:200", carerId: "id", backTs: "num", backNote: "str:2000", backCarerId: "id" } },
 };
 function cleanRecord(kind, data) {
@@ -394,7 +395,7 @@ async function syncNow() {
           const i = arr.findIndex((x) => x.id === id);
           const isNew = i < 0;
           if (isNew) { arr.push(data); changed = true; }
-          else if (mtOf(arr[i]) < mtOf(data) || (kind === "obs" && mtOf(arr[i]) === mtOf(data) && Object.keys(data).some((k) => arr[i][k] === undefined)) || (kind === "flag" && data.status === "resolved" && arr[i].status !== "resolved") || (kind === "transfer" && data.backTs && !arr[i].backTs)) { arr[i] = { ...arr[i], ...data }; changed = true; }
+          else if (mtOf(arr[i]) < mtOf(data) || (kind === "obs" && mtOf(arr[i]) === mtOf(data) && Object.keys(data).some((k) => arr[i][k] === undefined)) || (kind === "flag" && data.status === "resolved" && arr[i].status !== "resolved") || (kind === "transfer" && data.backTs && !arr[i].backTs) || (kind === "event" && data.cancelledTs && !arr[i].cancelledTs)) { arr[i] = { ...arr[i], ...data }; changed = true; }
           const k = kind + ":" + id; si.sent[k] = Math.max(si.sent[k] || 0, mtOf(data));
           // A note new to this phone came from another phone (or from the cloud after this phone was
           // cleared): its recording is the cloud's job. This phone's own recordings are uploaded by step 2.
@@ -559,7 +560,7 @@ function summaryPayload(mode, toId) {
     planGaps: mode === "handover" ? planGaps() : [],
     tasksMissed: mode === "handover" ? tasksMissedForHandover() : [],
     medsSummary: mode === "handover" ? medsForHandover() : [],
-    schedule: S.schedule.filter((s) => s.when > Date.now() && !isExample(s)).sort((a, b) => a.when - b.when).slice(0, 4).map((s) => `${dayLabel(s.when)} ${fmtTime(s.when)}: ${s.label}${s.detail ? " - " + s.detail : ""}`),
+    schedule: liveAppts().filter((s) => s.when > Date.now()).sort((a, b) => a.when - b.when).slice(0, 4).map((s) => `${dayLabel(s.when)} ${fmtTime(s.when)}: ${s.label}${s.detail ? " - " + s.detail : ""}`),
   };
 }
 // Medicine-safety follow-ups are for the carers, not the family update.
@@ -1680,7 +1681,7 @@ function openFind() {
       f.docs.length && head("Documents", f.docs.length) + `<div class="list">${f.docs.map((d) => `<button class="btn secondary block fd-link" data-opendoc="${esc(d.id)}"><div class="body"><strong>${esc(d.name)}</strong><div class="muted small">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</div></div></button>`).join("")}</div>`,
       f.plan.length && head("Care plan", f.plan.length) + f.plan.map((x) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><strong>${esc(x.title)}</strong></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.text || "")}</p></details>`).join(""),
       f.flags.length && head("Flags", f.flags.length) + f.flags.map((x) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><strong>${esc(x.title)}</strong> <span class="tiny muted">${x.kind === "incident" ? "Incident" : "To note"} · ${when(x.ts)}${x.status === "resolved" ? " · resolved" : ""}</span></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.detail || "")}${x.resolvedNote ? "\n\nResolved: " + esc(x.resolvedNote) : ""}</p></details>`).join(""),
-      f.events.length && head("Appointments and plans", f.events.length) + f.events.map((e) => `<button class="link small" data-dday="${esc(dayKey(new Date(e.when)))}" style="justify-self:start;text-align:left;min-height:40px"><strong>${esc(e.label)}</strong> <span class="muted">· ${when(e.when)}${e.detail ? " · " + esc(e.detail) : ""}${e.when > Date.now() ? " · coming up" : ""}</span></button>`).join(""),
+      f.events.length && head("Appointments and plans", f.events.length) + f.events.map((e) => `<button class="link small" data-dday="${esc(dayKey(new Date(e.when)))}" style="justify-self:start;text-align:left;min-height:40px"><strong>${esc(e.label)}</strong> <span class="muted">· ${when(e.when)}${e.detail ? " · " + esc(e.detail) : ""}${e.cancelledTs ? " · cancelled" : e.when > Date.now() ? " · coming up" : ""}</span></button>`).join(""),
       f.devMsgs.length && head("Messages from the developer", f.devMsgs.length) + f.devMsgs.map((m) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><span class="tiny muted">${when(m.at)}</span><div class="small">${esc(m.text.slice(0, 90))}${m.text.length > 90 ? "…" : ""}</div></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${ownLinks(m.text)}</p></details>`).join(""),
       f.notes.length && head("Notes", f.notes.length) + f.notes.map((x) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><span class="tiny muted">${when(x.ts)} · ${esc(carer(x.carerId, x.carerName).name)}</span><div class="small">${esc(String(x.note || "").slice(0, 110))}${String(x.note || "").length > 110 ? "…" : ""}</div></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(x.note || "")}</p></details>`).join(""),
       f.handovers.length && head("Handovers", f.handovers.length) + f.handovers.map((h) => `<details class="card" style="box-shadow:none;padding:10px 12px"><summary><span class="tiny muted">${when(h.ts)}${h.fromName ? " · from " + esc(h.fromName) : ""}</span></summary><p class="small" style="white-space:pre-line;margin:8px 0 0">${esc(h.text || "")}</p></details>`).join(""),
@@ -3028,7 +3029,7 @@ function renderToday() {
   const real = (arr) => { const r = arr.filter((x) => x.source !== "example" && !DEMO_IDS.has(x.id)); return r.length ? r : arr; };
   const ho = [...real(S.handovers)].filter((h) => h.ts <= Date.now() + 10 * 60 * 1000).sort((a, b) => b.ts - a.ts)[0];
   const latest = [...real(S.notes)].sort((a, b) => b.ts - a.ts)[0];
-  const sched = [...S.schedule].filter((s) => s.when > Date.now() - 6 * 36e5).sort((a, b) => a.when - b.when);
+  const sched = S.schedule.filter((s) => s.when > Date.now() - 6 * 36e5 && !s.cancelledTs).sort((a, b) => a.when - b.when);
   const flags = openFlags().sort((a, b) => (a.kind === "incident" ? -1 : 1) - (b.kind === "incident" ? -1 : 1) || b.ts - a.ts);
   const attn = [...formAttn().map(formAttnRowHTML), ...flags.map(attnRowHTML)];
   v.innerHTML = `
@@ -3056,8 +3057,8 @@ function renderToday() {
     ${medsCardHTML()}
     ${handoverCardHTML(ho)}
     <div class="card"><div class="card-h"><h3>Coming up</h3></div>
-      <div class="list">${sched.length ? sched.map((s) => `<div class="item ${s.when < Date.now() ? "past" : ""}"><div class="when">${fmtTime(s.when)}</div><div class="body"><div><strong>${esc(s.label)}</strong></div><div class="muted small">${dayLabel(s.when)}${s.detail ? " · " + esc(s.detail) : ""}</div></div></div>`).join("") : '<div class="empty">Nothing scheduled.</div>'}</div>
-      <div style="margin-top:10px;display:flex;gap:16px;flex-wrap:wrap"><button class="link" id="addEvent">+ Add appointment or plan</button><button class="link" id="evDiary">Look ahead in the diary</button></div></div>
+      <div class="list">${sched.length ? sched.map((s) => `<div class="item ${s.when < Date.now() ? "past" : ""}" data-appt="${esc(s.id)}" role="button" tabindex="0" style="cursor:pointer"><div class="when">${fmtTime(s.when)}</div><div class="body"><div><strong>${esc(s.label)}</strong></div><div class="muted small">${dayLabel(s.when)}${s.detail ? " · " + esc(s.detail) : ""}</div></div></div>`).join("") : '<div class="empty">Nothing scheduled.</div>'}</div>
+      <div style="margin-top:10px;display:flex;gap:16px;flex-wrap:wrap"><button class="link" id="addEvent">+ Add appointment or plan</button><button class="link" id="evCal">Calendar</button><button class="link" id="evDiary">Look ahead in the diary</button></div></div>
     ${recentNotesHTML(latest)}`;
   $("#ctaRec").onclick = () => openRecorder();
   if ($("#shSwitch")) $("#shSwitch").onclick = () => switchCarer();
@@ -3076,6 +3077,7 @@ function renderToday() {
   bindStorageBanner(v); bindCatchup(v); bindVoiceCard(v);
   $("#addEvent").onclick = () => openEventSheet();
   $("#evDiary").onclick = () => { logDay = dayKey(new Date()); go("log"); };
+  $("#evCal").onclick = () => openCalendar();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
   if ($("#ctaBack")) $("#ctaBack").onclick = () => openReturnSheet();
   bindResolve(v);
@@ -3590,7 +3592,7 @@ const diaryLast = () => { const d = new Date(); d.setFullYear(d.getFullYear() + 
 function diaryApptsHTML(day) {
   const list = S.schedule.filter((e) => !isExample(e) && dayKey(new Date(e.when)) === day).sort((a, b) => a.when - b.when);
   return `<div class="card" style="display:grid;gap:6px;padding:10px 12px"><strong class="small">Appointments and plans</strong>
-    ${list.length ? list.map((e) => `<div class="small"><strong>${fmtTime(e.when)}</strong> ${esc(e.label)}${e.detail ? ` · <span class="muted">${esc(e.detail)}</span>` : ""}</div>`).join("") : `<div class="small muted">None on this day.</div>`}
+    ${list.length ? list.map((e) => `<button class="link small" data-appt="${esc(e.id)}" style="justify-self:start;text-align:left;min-height:36px;${e.cancelledTs ? "text-decoration:line-through;opacity:.7" : ""}"><strong>${fmtTime(e.when)}</strong> ${esc(e.label)}${e.detail ? ` · ${esc(e.detail)}` : ""}${e.seriesId ? " ↻" : ""}${e.remind ? " 🔔" : ""}${e.cancelledTs ? " (cancelled)" : ""}</button>`).join("") : `<div class="small muted">None on this day.</div>`}
     ${day >= dayKey(new Date()) && !isFamily() ? `<button class="link small" id="ldAddAppt" style="justify-self:start;min-height:40px">+ Add an appointment on this day</button>` : ""}</div>`;
 }
 let logOpen = false; // "Show all words and recordings" in the record log
@@ -3691,7 +3693,8 @@ function renderLog() {
     <button class="searchbar" id="logFind">${ICON.search}<span>Search notes, care plan, contacts…</span></button>
     <div class="seg" role="group" aria-label="Filter">${[["all", "Everything"], ["incident", "Incidents"], ["follow", "To note"]].map(([k, l]) => `<button data-f="${k}" aria-pressed="${logFilter === k}">${l}</button>`).join("")}</div>
     ${logDay ? `<div class="card" style="display:grid;gap:8px;padding:10px 12px"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><button class="btn ghost" id="ldPrev" aria-label="Previous day" style="flex:0 0 auto">‹ Day before</button><strong class="small" style="text-align:center">${esc(fmtDay(new Date(logDay + "T12:00:00").getTime()))}</strong><button class="btn ghost" id="ldNext" aria-label="Next day" style="flex:0 0 auto" ${logDay >= diaryLast() ? "disabled" : ""}>Day after ›</button></div>
-      <div class="row" style="gap:8px"><label class="f" style="flex:1">Go to a date<input type="date" id="ldDate" value="${esc(logDay)}" max="${esc(diaryLast())}"></label><button class="btn secondary" id="ldAll" style="align-self:end">Show everything</button></div></div>
+      <div class="row" style="gap:8px"><label class="f" style="flex:1">Go to a date<input type="date" id="ldDate" value="${esc(logDay)}" max="${esc(diaryLast())}"></label><button class="btn secondary" id="ldAll" style="align-self:end">Show everything</button></div>
+      <button class="link small" id="ldCal" style="justify-self:start;min-height:40px">Calendar (a month at a time)</button></div>
       ${diaryApptsHTML(logDay)}`
       : `<button class="link small" id="ldOpen" style="justify-self:start;min-height:40px">View one day at a time (diary)</button>`}
     ${rows ? `<button class="link small" id="logOpen" style="justify-self:start">${logOpen ? "Hide words and recordings" : "Show all words and recordings"}</button>` : ""}
@@ -3702,6 +3705,7 @@ function renderLog() {
   if ($("#ldPrev", v)) $("#ldPrev", v).onclick = () => stepDay(-1);
   if ($("#ldNext", v)) $("#ldNext", v).onclick = () => stepDay(1);
   if ($("#ldAll", v)) $("#ldAll", v).onclick = () => { logDay = null; renderLog(); };
+  if ($("#ldCal", v)) $("#ldCal", v).onclick = () => openCalendar(logDay.slice(0, 7));
   if ($("#ldAddAppt", v)) $("#ldAddAppt", v).onclick = () => openEventSheet(logDay, () => renderLog());
   if ($("#ldDate", v)) $("#ldDate", v).onchange = (e) => { if (e.target.value) { logDay = e.target.value; renderLog(); } };
   v.querySelectorAll("[data-addto]").forEach((b) => (b.onclick = () => openRecorder({ amends: b.dataset.addto })));
@@ -3896,31 +3900,135 @@ function openReturnSheet() {
     if ($("#bkHosp", s.root) && $("#bkHosp", s.root).checked) openEmergencyEdit({ why: "<strong>Back from hospital:</strong> a new ReSPECT form is usually given on discharge. Check which form there is now and where it's kept." });
   };
 }
-function openEventSheet(day = "", after) {
+function openEventSheet(day = "", after, preset = null) {
   const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1);
   const pad = (n) => String(n).padStart(2, "0");
-  const s = sheet(`${sheetHead("Add appointment or plan")}
-    <label class="f">What<input type="text" id="evLabel" placeholder="e.g. B12 injection at the surgery" autocomplete="off"></label>
-    <label class="f">Details (optional)<input type="text" id="evDetail" placeholder="e.g. Coming to the house" autocomplete="off"></label>
+  const s = sheet(`${sheetHead(preset ? "Change the appointment" : "Add appointment or plan")}
+    ${preset ? `<p class="small muted" style="margin:0">Change what you need and tap Save: the old one shows as cancelled ("moved") in the diary.</p>` : ""}
+    <label class="f">What<input type="text" id="evLabel" placeholder="e.g. B12 injection at the surgery" autocomplete="off" value="${esc(preset ? preset.label : "")}"></label>
+    <label class="f">Details (optional)<input type="text" id="evDetail" placeholder="e.g. Coming to the house" autocomplete="off" value="${esc(preset ? preset.detail || "" : "")}"></label>
     <div class="row"><label class="f" style="flex:1">Date<input type="date" id="evDay" value="${esc(day || dayKey(new Date()))}" min="${esc(dayKey(new Date()))}" max="${esc(diaryLast())}"></label>
-    <label class="f" style="flex:1">Time<input type="text" id="evTime" value="${pad(d.getHours())}:00" inputmode="numeric" placeholder="e.g. 14:30 or 1430" aria-describedby="evTimeHelp"><span class="tiny muted" id="evTimeHelp">Type 11, 1130 or 11:30</span></label></div>
+    <label class="f" style="flex:1">Time<input type="text" id="evTime" value="${preset ? fmtTime(preset.when) : `${pad(d.getHours())}:00`}" inputmode="numeric" placeholder="e.g. 14:30 or 1430" aria-describedby="evTimeHelp"><span class="tiny muted" id="evTimeHelp">Type 11, 1130 or 11:30</span></label></div>
     <div class="small muted" id="evSame" role="status"></div>
-    <button class="btn primary block" id="evSave">Add</button>`);
+    <fieldset style="border:0;padding:0;margin:0;display:grid;gap:4px"><legend class="small" style="font-weight:600;margin-bottom:4px">Remind</legend>
+      ${REMIND_OPTS.map(([m, l]) => `<label class="check"><input type="checkbox" data-rem="${m}" ${(preset ? String(preset.remind || "").split(",") : ["60"]).includes(String(m)) ? "checked" : ""}><span>${l}</span></label>`).join("")}</fieldset>
+    <label class="f">Who gets the reminders<select id="evWho"><option value="all">Everyone caring for ${esc(S.client.name)}</option><option value="me" ${preset && preset.remindWho === "me" ? "selected" : ""}>Just me</option></select></label>
+    ${preset ? (preset.seriesId ? `<p class="tiny muted" style="margin:0">This changes only this one; the others in the series stay as they are.</p>` : "") : `<div class="row" style="gap:8px"><label class="f" style="flex:1">Repeats<select id="evRep">${Object.entries(REPEATS).map(([k, r]) => `<option value="${k}">${r.label}</option>`).join("")}</select></label>
+      <label class="f" style="flex:1" id="evUntilBox" hidden>Until<input type="date" id="evUntil" min="${esc(dayKey(new Date()))}" max="${esc(diaryLast())}"></label></div>`}
+    <p class="tiny muted" style="margin:0">Reminders pop up in the app, and come as a phone notification if notifications are on (Settings). The notification never says what the appointment is.</p>
+    <button class="btn primary block" id="evSave">${preset ? "Save the change" : "Add"}</button>`);
   // What else is on that day, so it's easy to see whether it fits.
-  const same = () => { const k = $("#evDay").value, l = S.schedule.filter((e) => !isExample(e) && dayKey(new Date(e.when)) === k).sort((x, y) => x.when - y.when); $("#evSame").textContent = k ? (l.length ? `Already on that day: ${l.map((e) => `${fmtTime(e.when)} ${e.label}`).join("; ")}` : "Nothing else on that day.") : ""; };
+  const same = () => { const k = $("#evDay").value, l = liveAppts().filter((e) => dayKey(new Date(e.when)) === k && (!preset || e.id !== preset.id)).sort((x, y) => x.when - y.when); $("#evSame").textContent = k ? (l.length ? `Already on that day: ${l.map((e) => `${fmtTime(e.when)} ${e.label}`).join("; ")}` : "Nothing else on that day.") : ""; };
   $("#evDay").onchange = same; same();
+  if ($("#evRep")) $("#evRep").onchange = (e) => { const on = e.target.value !== "none"; $("#evUntilBox").hidden = !on; if (on && !$("#evUntil").value) { const u = new Date(($("#evDay").value || dayKey(new Date())) + "T12:00:00"); u.setMonth(u.getMonth() + 3); $("#evUntil").value = dayKey(u); } };
   $("#evSave").onclick = () => {
     const label = $("#evLabel").value.trim(); const m = parseClock($("#evTime").value), k = $("#evDay").value;
     if (!label) return toast("Enter what it is"); if (!k) return toast("Choose the date"); if (!m) return toast("Type the time like 11, 1130 or 11:30");
     const w = new Date(k + "T00:00:00"); w.setHours(+m[1], +m[2], 0, 0); // that calendar day, so a clock change doesn't move it by an hour
     if (w.getTime() < Date.now() - 60000) return toast(`${pad(m[1])}:${pad(m[2])} on that day has already passed. Check the time or the date.`);
     if (k > diaryLast()) return toast("Choose a date within the next two years");
-    S.schedule.push({ id: uid(), ts: Date.now(), when: w.getTime(), label, detail: $("#evDetail").value.trim() });
-    save(); s.close(); render(); toast(`Added: ${label}, ${dayLabel(w.getTime())} at ${pad(m[1])}:${pad(m[2])}`);
-    if (after) after();
+    const remind = [...s.root.querySelectorAll("[data-rem]")].filter((c) => c.checked).map((c) => c.dataset.rem).join(",");
+    const base = { label, detail: $("#evDetail").value.trim(), by: stampId(), remindWho: $("#evWho").value, ...(remind ? { remind } : {}) };
+    // A repeating appointment is one entry per date (each can be changed or cancelled on its own).
+    const rep = $("#evRep") ? REPEATS[$("#evRep").value] : REPEATS.none, dates = [w];
+    if (rep.step) {
+      const until = $("#evUntil").value; if (!until) return toast("Choose when it stops repeating");
+      if (until < k) return toast("The Until date is before the first appointment"); if (until > diaryLast()) return toast("Choose an Until date within the next two years");
+      const end = new Date(until + "T23:59:59");
+      for (let i = 1; ; i++) { const n = rep.step(new Date(w), i); if (n > end) break; dates.push(n); if (dates.length > 120) return toast("That's more than 120 appointments: choose an earlier Until date"); }
+    }
+    const seriesId = dates.length > 1 ? uid() : "";
+    const recs = dates.map((d) => ({ id: uid(), ts: Date.now(), when: d.getTime(), ...base, ...(seriesId ? { seriesId, repeat: `${rep.label}, until ${fmtDay(dates[dates.length - 1].getTime())}`.slice(0, 60) } : {}) }));
+    S.schedule.push(...recs);
+    save(); s.close(); render(); toast(`${preset ? "Changed to" : "Added"}: ${label}, ${dayLabel(w.getTime())} at ${pad(m[1])}:${pad(m[2])}${recs.length > 1 ? ` (and ${recs.length - 1} more, ${rep.label.toLowerCase()})` : ""}`);
+    if (after) after(recs[0]);
   };
 }
 
+// A month at a time, like a paper calendar (Gavin, 2026-10-21): each day shows how many appointments it
+// has; tap a day to open it in the diary.
+function openCalendar(month) {
+  const now = new Date(), first = month ? new Date(month + "-01T12:00:00") : new Date(now.getFullYear(), now.getMonth(), 1, 12);
+  const y = first.getFullYear(), mo = first.getMonth(), days = new Date(y, mo + 1, 0).getDate(), lead = (first.getDay() + 6) % 7; // Monday first
+  const key = (d) => dayKey(new Date(y, mo, d, 12)), today = dayKey(now), byDay = new Map();
+  for (const e of liveAppts()) { const k = dayKey(new Date(e.when)); byDay.set(k, [...(byDay.get(k) || []), e]); }
+  const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const s = sheet(`${sheetHead("Calendar")}
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><button class="btn ghost" id="caPrev" aria-label="Previous month" style="flex:0 0 auto">‹</button><strong>${esc(first.toLocaleDateString("en-GB", { month: "long", year: "numeric" }))}</strong><button class="btn ghost" id="caNext" aria-label="Next month" style="flex:0 0 auto">›</button></div>
+    <div role="grid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;text-align:center">
+      ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => `<div class="tiny muted" role="columnheader">${d}</div>`).join("")}
+      ${Array(lead).fill('<div></div>').join("")}
+      ${Array.from({ length: days }, (_, i) => { const k = key(i + 1), list = byDay.get(k) || []; return `<button data-cday="${k}" aria-label="${esc(fmtDay(new Date(k + "T12:00:00").getTime()))}${list.length ? `, ${list.length} appointment${list.length === 1 ? "" : "s"}` : ""}" style="min-height:48px;border-radius:10px;border:${k === today ? "2px solid var(--accent, #6b4fa0)" : "1px solid var(--line, #ddd)"};background:${list.length ? "var(--accent-soft, #efe8f8)" : "transparent"};color:inherit;font:inherit;display:grid;align-content:center;gap:2px;padding:2px"><span class="small" style="font-weight:${k === today ? 700 : 500}">${i + 1}</span>${list.length ? `<span class="tiny" style="color:var(--accent, #6b4fa0);font-weight:700">● ${list.length}</span>` : ""}</button>`; }).join("")}
+    </div>
+    <p class="tiny muted" style="margin:0">● the number of appointments that day. Tap a day to see it in the diary and add an appointment.</p>
+    ${(() => { const inMonth = liveAppts().filter((e) => ym(new Date(e.when)) === ym(first)).sort((a, b) => a.when - b.when); return inMonth.length ? `<div style="display:grid;gap:4px"><strong class="small">This month</strong>${inMonth.map((e) => `<button class="link small" data-appt="${esc(e.id)}" style="justify-self:start;text-align:left;min-height:36px">${esc(new Date(e.when).toLocaleDateString("en-GB", { weekday: "short", day: "numeric" }))} ${fmtTime(e.when)} · ${esc(e.label)}</button>`).join("")}</div>` : `<p class="small muted" style="margin:0">No appointments this month.</p>`; })()}
+    ${isFamily() ? "" : `<button class="btn secondary block" id="caAdd">+ Add appointment or plan</button>`}`);
+  $("#caPrev", s.root).onclick = () => openCalendar(ym(new Date(y, mo - 1, 1)));
+  $("#caNext", s.root).onclick = () => openCalendar(ym(new Date(y, mo + 1, 1)));
+  if ($("#caAdd", s.root)) $("#caAdd", s.root).onclick = () => openEventSheet(ym(first) > ym(now) ? key(1) : "", () => openCalendar(ym(first)));
+  s.root.querySelectorAll("[data-cday]").forEach((b) => (b.onclick = () => { s.close(); logDay = b.dataset.cday; go("log"); }));
+}
+const REMIND_OPTS = [[0, "At the time"], [15, "15 minutes before"], [60, "1 hour before"], [120, "2 hours before"], [1440, "The day before (24 hours)"], [2880, "2 days before"], [10080, "A week before"]];
+// How a repeating appointment steps: from the first date, the i-th repeat (a month keeps the same date,
+// or the month's last day when it's shorter).
+const REPEATS = {
+  none: { label: "Doesn't repeat" },
+  daily: { label: "Every day", step: (d, i) => (d.setDate(d.getDate() + i), d) },
+  weekly: { label: "Every week", step: (d, i) => (d.setDate(d.getDate() + 7 * i), d) },
+  fortnightly: { label: "Every 2 weeks", step: (d, i) => (d.setDate(d.getDate() + 14 * i), d) },
+  four: { label: "Every 4 weeks", step: (d, i) => (d.setDate(d.getDate() + 28 * i), d) },
+  monthly: { label: "Every month", step: (d, i) => { const day = d.getDate(); d.setDate(1); d.setMonth(d.getMonth() + i); d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate())); return d; } },
+};
+// Reminders pop up in the app when they're due (and come as phone notifications from the relay).
+// Each shows once on this phone; "just me" reminders only for the person who added the appointment.
+const REM_SEEN = () => "dignitynotes.remseen." + (session ? session.username : "");
+function dueReminders() {
+  let seen = {}; try { seen = JSON.parse(localStorage.getItem(REM_SEEN()) || "{}"); } catch {}
+  const now = Date.now();
+  return liveAppts().filter((e) => e.remind && (e.remindWho !== "me" || e.by === stampId())).flatMap((e) => String(e.remind).split(",").map(Number).filter((m) => Number.isFinite(m) && m >= 0).map((m) => ({ e, m, due: e.when - m * 60000 })))
+    .filter((x) => x.due <= now && x.due > now - 12 * 36e5 && x.e.when > now - 36e5 && !seen[x.e.id + ":" + x.m]);
+}
+function checkReminders() {
+  if (!session || !S || !S.schedule || isFamily() || appBusy() || document.visibilityState !== "visible") return;
+  const due = dueReminders(); if (!due.length) return;
+  let seen = {}; try { seen = JSON.parse(localStorage.getItem(REM_SEEN()) || "{}"); } catch {}
+  for (const x of due) seen[x.e.id + ":" + x.m] = Date.now();
+  for (const k of Object.keys(seen)) if (Date.now() - seen[k] > 30 * 864e5) delete seen[k]; // forget old ones
+  try { localStorage.setItem(REM_SEEN(), JSON.stringify(seen)); } catch {}
+  const events = [...new Map(due.map((x) => [x.e.id, x.e])).values()].sort((a, b) => a.when - b.when);
+  const inWords = (t) => { const mins = Math.round((t - Date.now()) / 60000); return mins <= 0 ? "now" : mins < 60 ? `in ${mins} minutes` : mins < 1440 ? `in ${Math.round(mins / 60)} hour${Math.round(mins / 60) === 1 ? "" : "s"}` : `in ${Math.round(mins / 1440)} day${Math.round(mins / 1440) === 1 ? "" : "s"}`; };
+  const s = sheet(`${sheetHead("Reminder")}${events.map((e) => `<div class="card" style="box-shadow:none;padding:10px 12px;display:grid;gap:4px"><strong>${esc(e.label)}</strong><span class="small">${esc(fmtDay(e.when))} ${fmtTime(e.when)} · ${inWords(e.when)}</span>${e.detail ? `<span class="small muted">${esc(e.detail)}</span>` : ""}<button class="link small" data-remday="${esc(dayKey(new Date(e.when)))}" style="justify-self:start;min-height:40px">Open that day in the diary</button></div>`).join("")}
+    <button class="btn primary block" data-close>OK</button>`);
+  s.root.querySelectorAll("[data-remday]").forEach((b) => (b.onclick = () => { s.close(); logDay = b.dataset.remday; go("log"); }));
+}
+setInterval(checkReminders, 30000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") setTimeout(checkReminders, 1500); });
+// Appointments not cancelled (examples left out).
+const liveAppts = () => S.schedule.filter((e) => !isExample(e) && !e.cancelledTs);
+// One appointment: change it (cancel this one, add the new one) or cancel it (Sam, 2026-10-21). The
+// original stays in the record, shown as cancelled, with who cancelled it and when.
+function openAppt(id) {
+  const e = S.schedule.find((x) => x.id === id); if (!e) return;
+  const s = sheet(`${sheetHead(esc(e.label))}
+    <p class="small" style="margin:0"><strong>${esc(fmtDay(e.when))} ${fmtTime(e.when)}</strong>${e.detail ? ` · ${esc(e.detail)}` : ""}</p>
+    ${e.by && roster().some((c) => c.id === e.by) ? `<p class="tiny muted" style="margin:0">Added by ${esc(carer(e.by).name)}</p>` : ""}
+    ${e.repeat ? `<p class="small" style="margin:0">Repeats: ${esc(e.repeat)}</p>` : ""}
+    <p class="small" style="margin:0">Reminders: ${e.remind ? esc(String(e.remind).split(",").map((m) => (REMIND_OPTS.find(([k]) => String(k) === m) || [0, m + " minutes before"])[1].toLowerCase()).join(", ")) + (e.remindWho === "me" ? " (just the person who added it)" : " (everyone caring for " + esc(S.client.name) + ")") : "none"}</p>
+    ${e.cancelledTs ? `<div class="warn small">Cancelled ${esc(dayLabel(e.cancelledTs).toLowerCase())} ${fmtTime(e.cancelledTs)}${e.cancelledBy && roster().some((c) => c.id === e.cancelledBy) ? ` by ${esc(carer(e.cancelledBy).name)}` : ""}${e.cancelReason ? `: ${esc(e.cancelReason)}` : ""}</div>`
+      : isFamily() || isExample(e) ? "" : `<button class="btn secondary block" id="apChange">Change the date, time or details</button>
+      <label class="f">Why it's cancelled (optional)<input type="text" id="apWhy" maxlength="200" placeholder="e.g. Surgery rang to cancel" autocomplete="off"></label>
+      ${e.seriesId ? `<label class="check"><input type="checkbox" id="apLater"><span>Also cancel the later ones in this series</span></label>` : ""}
+      <button class="btn ghost block" id="apCancel">Cancel the appointment</button>`}`);
+  const cancel = (why) => { const cur = S.schedule.find((x) => x.id === id); if (!cur || cur.cancelledTs) return; Object.assign(cur, { cancelledTs: Date.now(), cancelledBy: stampId(), ...(why ? { cancelReason: why.slice(0, 200) } : {}) }); touch(cur); save(); };
+  if ($("#apChange", s.root)) $("#apChange", s.root).onclick = () => { s.close(); openEventSheet(dayKey(new Date(Math.max(e.when, Date.now()))), (rec) => { cancel(`Moved to ${fmtDay(rec.when)} ${fmtTime(rec.when)}`); render(); }, e); };
+  if ($("#apCancel", s.root)) $("#apCancel", s.root).onclick = (ev) => confirmInline(ev.currentTarget, () => {
+    const why = $("#apWhy", s.root).value.trim(), later = $("#apLater", s.root) && $("#apLater", s.root).checked;
+    const ids = later ? S.schedule.filter((x) => x.seriesId === e.seriesId && x.when >= e.when && !x.cancelledTs).map((x) => x.id) : [id];
+    for (const x of ids) { const cur = S.schedule.find((y) => y.id === x); if (cur && !cur.cancelledTs) { Object.assign(cur, { cancelledTs: Date.now(), cancelledBy: stampId(), ...(why ? { cancelReason: why.slice(0, 200) } : {}) }); touch(cur); } }
+    save(); s.close(); render(); toast(ids.length > 1 ? `Cancelled ${ids.length} appointments` : "Cancelled");
+  }, "Tap again to cancel it");
+}
+document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-appt]"); if (b) openAppt(b.dataset.appt); });
 // A time typed on a phone keypad (no ":" on an iPhone number pad): 11, 930, 1130, 11.30, 11:30, 2pm, 2.30pm.
 // 1 to 6 on their own mean the afternoon (3 = 15:00); type 03:00 for the early morning.
 function parseClock(v) {
@@ -4859,7 +4967,7 @@ function openSavedNote(id, { unclear = [], background = [], gaps = [], lostAt = 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-21.22";
+const PRIVACY_VERSION = "2026-10-21.23";
 const PRIVACY_HTML = `
 <p class="small muted" style="margin:0">Version 22 · 21 October 2026 · Pilot</p>
 <h3>Who we are</h3>
@@ -4902,7 +5010,7 @@ const PRIVACY_HTML = `
 <li><strong>GitHub (Microsoft):</strong> hosts the app's web pages.</li>
 <li><strong>Anthropic:</strong> AI note writing, as described above.</li>
 <li><strong>Apple or Google:</strong> your phone's own speech recognition, as described above.</li>
-<li><strong>Notifications:</strong> if you turn on notifications, your phone's notification service (Apple, Google, Mozilla or Microsoft) delivers them. We keep the address that service gives your phone, and send only an encrypted note of the kind of thing that's waiting (a handover or an incident): never a name or care details. Turn them off in Settings at any time; signing out also turns them off on that phone.</li>
+<li><strong>Notifications:</strong> if you turn on notifications, your phone's notification service (Apple, Google, Mozilla or Microsoft) delivers them. We keep the address that service gives your phone, and send only an encrypted note of the kind of thing that's waiting (a handover, an incident or an appointment reminder): never a name or care details. For appointment reminders we also note which reminders have been sent (the appointment's reference and the time), so each is sent once. Turn them off in Settings at any time; signing out stops them for you on that phone.</li>
 </ul>
 <p>These providers may process data outside the UK and Australia, including in the United States, under their own data protection safeguards.</p>
 <h3>Why we use it</h3>
@@ -5456,6 +5564,11 @@ const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
 const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 const pushKeyBytes = (b64) => Uint8Array.from(atob(b64.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(b64.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
 const PUSH_REC = "dignitynotes.push"; // { u: username, endpoint, key }: who turned notifications on, on this phone
+// Notifications were turned on for this phone (Sam, 2026-10-21): whoever signs in here next gets their
+// own switched back on, without going to Settings. Only Turn off notifications clears it.
+const PUSH_WANTED = "dignitynotes.pushwanted";
+const pushWanted = () => { try { return localStorage.getItem(PUSH_WANTED) === "1"; } catch { return false; } };
+const setPushWanted = (on) => { try { on ? localStorage.setItem(PUSH_WANTED, "1") : localStorage.removeItem(PUSH_WANTED); } catch {} };
 const pushRec = () => { try { return JSON.parse(localStorage.getItem(PUSH_REC) || "null"); } catch { return null; } };
 const setPushRec = (r) => { try { r ? localStorage.setItem(PUSH_REC, JSON.stringify(r)) : localStorage.removeItem(PUSH_REC); } catch {} };
 let pushKeyCache = null;
@@ -5473,12 +5586,16 @@ async function subscribePush() {
 async function checkPush() {
   try {
     const r = pushRec();
-    if (!r || !session || r.u !== session.username || session.local || !pushSupported() || Notification.permission !== "granted" || !navigator.onLine) return;
+    if (!session || session.local || !pushSupported() || Notification.permission !== "granted" || !navigator.onLine) return;
+    if (r && !pushWanted()) setPushWanted(true); // turned on before this was remembered
+    // On for this phone: sign this person up (not on a client's shared phone: each carer chooses there).
+    if (!r || r.u !== session.username) { if (pushWanted() && !session.shared) await subscribePush(); return; }
     const sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription();
     if (!sub || sub.endpoint !== r.endpoint || (await getPushKey()) !== r.key) await subscribePush();
   } catch {}
 }
-// Signing out turns notifications off on this phone (they're the person's, not the phone's).
+// Signing out stops this person's notifications on this phone (they're the person's); the next person
+// to sign in here gets their own, if notifications are on for this phone.
 function dropPush(token) {
   const r = pushRec(); if (!r) return;
   setPushRec(null);
@@ -5493,18 +5610,18 @@ async function drawPushSetting(box) {
   let sub = null; try { sub = await (await navigator.serviceWorker.ready).pushManager.getSubscription(); } catch {}
   const r = pushRec(); if (sub && !(r && r.u === session.username && r.endpoint === sub.endpoint)) sub = null; // someone else's, or not registered
   try { await getPushKey(); } catch {} // fetched now, so the tap only asks for permission (iPhone needs that)
-  say(`<p class="small muted" style="margin:0">${isFamily() ? `Tells you when the carers send a message or share a daily update${session.client && session.client.familyIncidents ? ", or record an incident" : ""}.` : session.role === "admin" ? "Tells you when a handover is waiting for you, a family member sends a message, or an incident is recorded." : "Tells you when a handover is waiting for you, or a family member sends a message."} They never show the client's name or any care details.</p>
+  say(`<p class="small muted" style="margin:0">${isFamily() ? `Tells you when the carers send a message or share a daily update${session.client && session.client.familyIncidents ? ", or record an incident" : ""}.` : session.role === "admin" ? "Tells you when a handover is waiting for you, a family member sends a message, an incident is recorded, or an appointment reminder is due." : "Tells you when a handover is waiting for you, a family member sends a message, or an appointment reminder is due."} They never show the client's name or any care details.</p>
     <button class="btn ${sub ? "ghost" : "secondary"}" id="pushBtn">${sub ? "Turn off notifications" : "Turn on notifications"}</button><div class="small" id="pushMsg" role="status"></div>`);
   $("#pushBtn", box).onclick = async () => {
     const m = $("#pushMsg", box), b = $("#pushBtn", box);
     const asked = sub ? null : Notification.requestPermission(); // first thing in the tap (iPhone)
     b.disabled = true; m.textContent = "";
     try {
-      if (sub) { await relay("/push/unsubscribe", { endpoint: sub.endpoint }); await sub.unsubscribe(); setPushRec(null); toast("Notifications off on this phone"); }
+      if (sub) { await relay("/push/unsubscribe", { endpoint: sub.endpoint }); await sub.unsubscribe(); setPushRec(null); setPushWanted(false); toast("Notifications off on this phone"); }
       else {
         if ((await asked) !== "granted") throw new Error("Notifications weren't allowed.");
-        await subscribePush();
-        toast("Notifications on for this phone");
+        await subscribePush(); setPushWanted(true);
+        toast("Notifications on for this phone. They stay on when you sign out and in again.");
       }
       drawPushSetting(box);
     } catch (e) { b.disabled = false; m.style.color = "var(--incident)"; m.textContent = e.message; }
