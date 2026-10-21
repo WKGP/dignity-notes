@@ -1422,7 +1422,7 @@ async function viewCert(who, id, type, back) {
   try {
     const r = await syncFetch("/me/medscert/get", { body: JSON.stringify({ username: who, id }) }), blob = await r.blob();
     url = URL.createObjectURL(new Blob([blob], { type }));
-    $("#cvBody", s.root).innerHTML = type.startsWith("image/") ? `<img src="${url}" alt="Certificate" style="width:100%;border-radius:10px;border:1px solid var(--line)">` : `<a class="btn primary block" href="${url}" target="_blank" rel="noopener">Open the PDF</a>`;
+    $("#cvBody", s.root).innerHTML = type.startsWith("image/") ? `<img src="${url}" alt="Certificate" style="width:100%;border-radius:10px;border:1px solid var(--line)">` : `<a class="btn primary block" href="${url}" target="_blank" rel="noopener">Open the PDF</a><button class="btn secondary block" data-sharepdf="${url}" data-name="certificate.pdf" style="margin-top:8px">Print or share</button>`;
   } catch (e) { if ($("#cvBody", s.root)) $("#cvBody", s.root).innerHTML = `<div class="warn">Couldn't open it: ${esc(e.message)}</div>`; }
 }
 function openCertUpload(who, back) {
@@ -1940,7 +1940,7 @@ async function openDoc(id) {
   const url = urlFor("doc_" + id, new Blob([blob], { type: d.type }));
   body.innerHTML = d.type.startsWith("image/")
     ? `<img src="${url}" alt="${esc(d.name)}" style="width:100%;border-radius:10px;border:1px solid var(--line)">`
-    : `<div style="display:grid;gap:10px"><p class="small muted" style="margin:0">${esc(DOC_KIND_LABEL[d.kind] || "Document")} · PDF</p><a class="btn primary block" href="${url}" target="_blank" rel="noopener">Open the PDF</a><p class="tiny muted" style="margin:0">It opens in your phone's PDF viewer. Come back to Dignity Notes when you've finished.</p></div>`;
+    : `<div style="display:grid;gap:10px"><p class="small muted" style="margin:0">${esc(DOC_KIND_LABEL[d.kind] || "Document")} · PDF</p><a class="btn primary block" href="${url}" target="_blank" rel="noopener">Open the PDF</a><button class="btn secondary block" data-sharepdf="${url}" data-name="${esc((d.name || "document").replace(/\.pdf$/i, "") + ".pdf")}">Print or share</button><p class="tiny muted" style="margin:0">It opens in your phone's PDF viewer. Come back to Dignity Notes when you've finished.</p></div>`;
 }
 // Buttons anywhere with data-opendoc="<id>" open that document.
 // A flag row (Today, Family) opens the whole flag.
@@ -2999,7 +2999,25 @@ async function loadFbQuestions(force) {
   catch { return false; } finally { fbQuestions.busy = false; }
 }
 // Links to this app's own site in a developer message can be tapped (a document to download, say).
-const ownLinks = (t) => esc(t).replace(/https:\/\/dignitynotes\.app\/[A-Za-z0-9._\/-]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+const ownLinks = (t) => esc(t).replace(/https:\/\/dignitynotes\.app\/[A-Za-z0-9._\/-]+/g, (u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>${/\.pdf$/i.test(u) ? ` <button class="link small" data-sharepdf="${u}" style="min-height:40px">Print or share</button>` : ""}`);
+// Print a PDF (Sam, 2026-10-22): a PDF opened inside the installed app on an iPhone shows with no Share
+// button, so there's no way to print. This hands the PDF to the phone's share sheet (Print, Save to Files,
+// Mail, AirDrop); where a phone can't share files, it opens the PDF instead.
+// An iPhone only shares straight after a tap, so if fetching the PDF took too long the button asks for one
+// more tap (the PDF is ready by then).
+const pdfFiles = new Map();
+async function sharePdf(btn) {
+  const url = btn.dataset.sharepdf, ready = pdfFiles.get(url);
+  const share = async (file) => { try { await navigator.share({ files: [file] }); } catch (e) { if (e && e.name === "NotAllowedError" && !ready) { btn.textContent = "Ready: tap again to print or share"; return; } if (!e || e.name !== "AbortError") window.open(url, "_blank", "noopener"); } };
+  if (ready) return share(ready);
+  try {
+    const blob = await (await fetch(url)).blob();
+    const file = new File([blob], btn.dataset.name || decodeURIComponent(url.split("/").pop()) || "document.pdf", { type: "application/pdf" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { pdfFiles.set(url, file); return share(file); }
+  } catch {}
+  window.open(url, "_blank", "noopener"); // can't share files here: open it instead
+}
+document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-sharepdf]"); if (b) sharePdf(b); });
 const fbQuestionsHTML = () => fbQuestions.list.map((q) => q.info ? `<div class="card" style="border-left:4px solid var(--accent)"><div class="card-h"><h3>A message from the developer</h3></div>
   <p style="margin:0 0 10px;white-space:pre-line">${ownLinks(q.q)}</p>
   <button class="btn secondary block" data-fbqseen="${esc(q.id)}|${esc(q.qid)}">Got it</button></div>` : `<div class="card" style="border-left:4px solid var(--accent)"><div class="card-h"><h3>A question about your ${q.kind === "bug" ? "problem report" : "idea"}</h3></div>
@@ -3900,7 +3918,7 @@ function openReturnSheet() {
     if ($("#bkHosp", s.root) && $("#bkHosp", s.root).checked) openEmergencyEdit({ why: "<strong>Back from hospital:</strong> a new ReSPECT form is usually given on discharge. Check which form there is now and where it's kept." });
   };
 }
-function openEventSheet(day = "", after, preset = null) {
+function openEventSheet(day = "", after, preset = null, onClose) {
   const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1);
   const pad = (n) => String(n).padStart(2, "0");
   const s = sheet(`${sheetHead(preset ? "Change the appointment" : "Add appointment or plan")}
@@ -3916,7 +3934,8 @@ function openEventSheet(day = "", after, preset = null) {
     ${preset ? (preset.seriesId ? `<p class="tiny muted" style="margin:0">This changes only this one; the others in the series stay as they are.</p>` : "") : `<div class="row" style="gap:8px"><label class="f" style="flex:1">Repeats<select id="evRep">${Object.entries(REPEATS).map(([k, r]) => `<option value="${k}">${r.label}</option>`).join("")}</select></label>
       <label class="f" style="flex:1" id="evUntilBox" hidden>Until<input type="date" id="evUntil" min="${esc(dayKey(new Date()))}" max="${esc(diaryLast())}"></label></div>`}
     <p class="tiny muted" style="margin:0">Reminders pop up in the app, and come as a phone notification if notifications are on (Settings). The notification never says what the appointment is.</p>
-    <button class="btn primary block" id="evSave">${preset ? "Save the change" : "Add"}</button>`);
+    <button class="btn primary block" id="evSave">${preset ? "Save the change" : "Add"}</button>`, onClose ? { onClose: () => { if (!saved) onClose(); } } : {});
+  let saved = false;
   // What else is on that day, so it's easy to see whether it fits.
   const same = () => { const k = $("#evDay").value, l = liveAppts().filter((e) => dayKey(new Date(e.when)) === k && (!preset || e.id !== preset.id)).sort((x, y) => x.when - y.when); $("#evSame").textContent = k ? (l.length ? `Already on that day: ${l.map((e) => `${fmtTime(e.when)} ${e.label}`).join("; ")}` : "Nothing else on that day.") : ""; };
   $("#evDay").onchange = same; same();
@@ -3940,7 +3959,7 @@ function openEventSheet(day = "", after, preset = null) {
     const seriesId = dates.length > 1 ? uid() : "";
     const recs = dates.map((d) => ({ id: uid(), ts: Date.now(), when: d.getTime(), ...base, ...(seriesId ? { seriesId, repeat: `${rep.label}, until ${fmtDay(dates[dates.length - 1].getTime())}`.slice(0, 60) } : {}) }));
     S.schedule.push(...recs);
-    save(); s.close(); render(); toast(`${preset ? "Changed to" : "Added"}: ${label}, ${dayLabel(w.getTime())} at ${pad(m[1])}:${pad(m[2])}${recs.length > 1 ? ` (and ${recs.length - 1} more, ${rep.label.toLowerCase()})` : ""}`);
+    saved = true; save(); s.close(); render(); toast(`${preset ? "Changed to" : "Added"}: ${label}, ${dayLabel(w.getTime())} at ${pad(m[1])}:${pad(m[2])}${recs.length > 1 ? ` (and ${recs.length - 1} more, ${rep.label.toLowerCase()})` : ""}`);
     if (after) after(recs[0]);
   };
 }
@@ -3948,18 +3967,19 @@ function openEventSheet(day = "", after, preset = null) {
 // The calendar (Gavin, 2026-10-21, after Google Calendar): a month grid with each day's appointments
 // named inside it; tap a day to see its appointments listed underneath (and add one on that day); tap an
 // appointment to see it, change it or cancel it. List shows everything coming up, day by day. Swipe the
-// month sideways, or use ‹ › and Today. The calendar remembers the day and view while the app is open.
+// month sideways, or use ‹ › and Today. Moving around inside it keeps the scroll and focus where they were.
 let calView = "month", calDay = "";
-function openCalendar(month, day) {
+function openCalendar(month, day, focus) {
   const now = new Date(), today = dayKey(now);
-  if (day) calDay = day; else if (!calDay || (month && calDay.slice(0, 7) !== month)) calDay = month && month !== today.slice(0, 7) ? month + "-01" : today;
+  calDay = day || (month && month !== today.slice(0, 7) ? month + "-01" : today);
+  if (!day && !month) calView = "month"; // a fresh open: this month, today
   const first = new Date(calDay.slice(0, 7) + "-01T12:00:00");
   const y = first.getFullYear(), mo = first.getMonth(), days = new Date(y, mo + 1, 0).getDate(), lead = (first.getDay() + 6) % 7; // Monday first
   const key = (d) => dayKey(new Date(y, mo, d, 12)), byDay = new Map();
   for (const e of liveAppts()) { const k = dayKey(new Date(e.when)); byDay.set(k, [...(byDay.get(k) || []), e]); }
   for (const l of byDay.values()) l.sort((a, b) => a.when - b.when);
   const ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  const back = () => openCalendar(undefined, calDay); // where a closed appointment returns to
+  const back = () => openCalendar(undefined, calDay); // where a closed appointment (or an unsaved change) returns to
   const canAdd = (k) => !isFamily() && k >= today && k <= diaryLast();
   const icons = (e) => `${e.seriesId ? " ↻" : ""}${e.remind ? " 🔔" : ""}`;
   const item = (e) => `<button class="cal-item${e.cancelledTs ? " off" : ""}" data-calappt="${esc(e.id)}"><span class="cal-when">${fmtTime(e.when)}</span><span style="display:grid;gap:2px;min-width:0"><strong>${esc(e.label)}${icons(e)}</strong>${e.detail ? `<span class="small muted">${esc(e.detail)}</span>` : ""}${e.cancelledTs ? `<span class="small muted">Cancelled${e.cancelReason ? `: ${esc(e.cancelReason)}` : ""}</span>` : ""}</span></button>`;
@@ -3967,10 +3987,10 @@ function openCalendar(month, day) {
   let body;
   if (calView === "list") {
     // Everything from today, a day at a time (cancelled ones left out here; they stay in the day view).
-    const ahead = liveAppts().filter((e) => e.when >= new Date(today + "T00:00:00").getTime()).sort((a, b) => a.when - b.when).slice(0, 100), groups = new Map();
+    const all = liveAppts().filter((e) => e.when >= new Date(today + "T00:00:00").getTime()).sort((a, b) => a.when - b.when), ahead = all.slice(0, 100), groups = new Map();
     for (const e of ahead) { const k = dayKey(new Date(e.when)); groups.set(k, [...(groups.get(k) || []), e]); }
     let lastMonth = "";
-    body = groups.size ? `<div style="display:grid;gap:8px">${[...groups].map(([k, l]) => { const m = k.slice(0, 7), mh = m !== lastMonth ? `<h3 style="margin:10px 0 0;font-size:16px">${esc(new Date(k + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }))}</h3>` : ""; lastMonth = m; return `${mh}<p class="cal-dayh">${esc(dayName(k))}${k === today ? " · Today" : ""}</p>${l.map(item).join("")}`; }).join("")}</div>`
+    body = groups.size ? `<div style="display:grid;gap:8px">${[...groups].map(([k, l]) => { const m = k.slice(0, 7), mh = m !== lastMonth ? `<h3 style="margin:10px 0 0;font-size:16px">${esc(new Date(k + "T12:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" }))}</h3>` : ""; lastMonth = m; return `${mh}<p class="cal-dayh">${esc(dayName(k))}${k === today ? " · Today" : ""}</p>${l.map(item).join("")}`; }).join("")}${all.length > ahead.length ? `<p class="small muted" style="margin:0">Showing the next 100. Use Month to see later ones.</p>` : ""}</div>`
       : `<p class="small muted" style="margin:0">Nothing coming up.</p>`;
   } else {
     const sel = S.schedule.filter((e) => !isExample(e) && dayKey(new Date(e.when)) === calDay).sort((a, b) => a.when - b.when);
@@ -3980,23 +4000,31 @@ function openCalendar(month, day) {
       ${Array.from({ length: days }, (_, i) => { const k = key(i + 1), list = byDay.get(k) || [];
         return `<button class="cal-day${k === today ? " today" : ""}${k < today ? " past" : ""}" data-cday="${k}" aria-pressed="${k === calDay}" aria-label="${esc(dayName(k))}${list.length ? `: ${esc(list.map((e) => `${fmtTime(e.when)} ${e.label}`).join(", "))}` : ", nothing on"}"><span class="cal-num">${i + 1}</span>${list.slice(0, 2).map((e) => `<span class="cal-chip">${esc(e.label)}</span>`).join("")}${list.length > 2 ? `<span class="cal-more">+${list.length - 2} more</span>` : ""}</button>`; }).join("")}
     </div>
-    <div style="display:grid;gap:8px">
+    <div style="display:grid;gap:8px" id="caDayList">
       <p class="cal-dayh" style="margin-top:4px">${esc(dayName(calDay))}${calDay === today ? " · Today" : ""}</p>
       ${sel.length ? sel.map(item).join("") : `<p class="small muted" style="margin:0">Nothing on this day.</p>`}
       <div style="display:flex;gap:16px;flex-wrap:wrap">${canAdd(calDay) ? `<button class="link" id="caAddDay" style="min-height:44px">+ Add on this day</button>` : ""}<button class="link" id="caDiary" style="min-height:44px">Open this day in the diary</button></div>
     </div>`;
   }
+  const was = $("#sheetRoot .sheet[data-cal]"), top = was ? was.scrollTop : 0;
   const s = sheet(`${sheetHead("Calendar")}
     <div class="seg" role="group" aria-label="Calendar view"><button data-cview="month" aria-pressed="${calView === "month"}">Month</button><button data-cview="list" aria-pressed="${calView === "list"}">List</button></div>
-    ${calView === "month" ? `<div style="display:flex;align-items:center;gap:8px"><button class="btn ghost" id="caPrev" aria-label="Previous month" style="flex:0 0 auto">‹</button><strong style="flex:1;text-align:center" aria-live="polite">${esc(first.toLocaleDateString("en-GB", { month: "long", year: "numeric" }))}</strong><button class="btn ghost" id="caToday" style="flex:0 0 auto">Today</button><button class="btn ghost" id="caNext" aria-label="Next month" style="flex:0 0 auto">›</button></div>` : ""}
+    ${calView === "month" ? `<div style="display:flex;align-items:center;gap:8px"><button class="btn ghost cal-nav" id="caPrev" aria-label="Previous month">‹</button><strong style="flex:1;text-align:center" id="caMonth">${esc(first.toLocaleDateString("en-GB", { month: "long", year: "numeric" }))}</strong><button class="btn ghost cal-nav" id="caToday">Today</button><button class="btn ghost cal-nav" id="caNext" aria-label="Next month">›</button></div>` : ""}
     ${body}
     ${isFamily() ? "" : `<button class="btn secondary block" id="caAdd">+ Add appointment or plan</button>`}`);
-  const month2 = (n) => openCalendar(ym(new Date(y, mo + n, 1)));
-  s.root.querySelectorAll("[data-cview]").forEach((b) => (b.onclick = () => { calView = b.dataset.cview; openCalendar(undefined, calDay); }));
-  if ($("#caPrev", s.root)) { $("#caPrev", s.root).onclick = () => month2(-1); $("#caNext", s.root).onclick = () => month2(1); $("#caToday", s.root).onclick = () => openCalendar(undefined, today); }
-  s.root.querySelectorAll("[data-cday]").forEach((b) => (b.onclick = () => openCalendar(undefined, b.dataset.cday)));
+  // Moving around inside the calendar: no slide-in again, same scroll, focus back on the control used,
+  // and a screen reader hears what changed. A chosen day's list is scrolled into view.
+  s.root.dataset.cal = "1";
+  if (was) { s.root.style.animation = "none"; s.root.scrollTop = top; }
+  if (focus) { const f = $(focus, s.root); if (f) f.focus({ preventScroll: true }); }
+  if (was) $("#srSay").textContent = calView === "list" ? "Appointments coming up" : focus && focus.startsWith("[data-cday") ? `${dayName(calDay)}: ${(byDay.get(calDay) || []).length || "nothing"} on` : $("#caMonth", s.root).textContent;
+  if (was && focus && focus.startsWith("[data-cday") && $("#caDayList", s.root)) $("#caDayList", s.root).scrollIntoView({ block: "nearest" });
+  const month2 = (n, f) => openCalendar(undefined, ym(new Date(y, mo + n, 1)) + "-01", f);
+  s.root.querySelectorAll("[data-cview]").forEach((b) => (b.onclick = () => { calView = b.dataset.cview; openCalendar(undefined, calDay, `[data-cview="${calView}"]`); }));
+  if ($("#caPrev", s.root)) { $("#caPrev", s.root).onclick = () => month2(-1, "#caPrev"); $("#caNext", s.root).onclick = () => month2(1, "#caNext"); $("#caToday", s.root).onclick = () => openCalendar(undefined, today, "#caToday"); }
+  s.root.querySelectorAll("[data-cday]").forEach((b) => (b.onclick = () => openCalendar(undefined, b.dataset.cday, `[data-cday="${b.dataset.cday}"]`)));
   s.root.querySelectorAll("[data-calappt]").forEach((b) => (b.onclick = () => openAppt(b.dataset.calappt, back)));
-  const addOn = (k) => openEventSheet(k, () => openCalendar(undefined, calDay));
+  const addOn = (k) => openEventSheet(k, (rec) => openCalendar(undefined, dayKey(new Date(rec.when))), null, back);
   if ($("#caAddDay", s.root)) $("#caAddDay", s.root).onclick = () => addOn(calDay);
   if ($("#caAdd", s.root)) $("#caAdd", s.root).onclick = () => addOn(canAdd(calDay) ? calDay : "");
   if ($("#caDiary", s.root)) $("#caDiary", s.root).onclick = () => { s.close(); logDay = calDay; go("log"); };
@@ -4004,7 +4032,7 @@ function openCalendar(month, day) {
   const grid = $("#caGrid", s.root); let x0 = null, y0 = 0;
   if (grid) {
     grid.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, { passive: true });
-    grid.addEventListener("touchend", (e) => { if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null; if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) month2(dx < 0 ? 1 : -1); });
+    grid.addEventListener("touchend", (e) => { if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null; if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) month2(dx < 0 ? 1 : -1, "#caMonth"); });
   }
 }
 const REMIND_OPTS = [[0, "At the time"], [15, "15 minutes before"], [60, "1 hour before"], [120, "2 hours before"], [1440, "The day before (24 hours)"], [2880, "2 days before"], [10080, "A week before"]];
@@ -4059,7 +4087,7 @@ function openAppt(id, back) {
       ${e.seriesId ? `<label class="check"><input type="checkbox" id="apLater"><span>Also cancel the later ones in this series</span></label>` : ""}
       <button class="btn ghost block" id="apCancel">Cancel the appointment</button>`}`, back ? { onClose: back } : {});
   const cancel = (why) => { const cur = S.schedule.find((x) => x.id === id); if (!cur || cur.cancelledTs) return; Object.assign(cur, { cancelledTs: Date.now(), cancelledBy: stampId(), ...(why ? { cancelReason: why.slice(0, 200) } : {}) }); touch(cur); save(); };
-  if ($("#apChange", s.root)) $("#apChange", s.root).onclick = () => openEventSheet(dayKey(new Date(Math.max(e.when, Date.now()))), (rec) => { cancel(`Moved to ${fmtDay(rec.when)} ${fmtTime(rec.when)}`); render(); if (back) openCalendar(undefined, dayKey(new Date(rec.when))); }, e); // replaces this sheet
+  if ($("#apChange", s.root)) $("#apChange", s.root).onclick = () => openEventSheet(dayKey(new Date(Math.max(e.when, Date.now()))), (rec) => { cancel(`Moved to ${fmtDay(rec.when)} ${fmtTime(rec.when)}`); render(); if (back) openCalendar(undefined, dayKey(new Date(rec.when))); }, e, back); // replaces this sheet
   if ($("#apCancel", s.root)) $("#apCancel", s.root).onclick = (ev) => confirmInline(ev.currentTarget, () => {
     const why = $("#apWhy", s.root).value.trim(), later = $("#apLater", s.root) && $("#apLater", s.root).checked;
     const ids = later ? S.schedule.filter((x) => x.seriesId === e.seriesId && x.when >= e.when && !x.cancelledTs).map((x) => x.id) : [id];
@@ -5237,7 +5265,7 @@ function signedOut(msg) {
   clearDocCache(); saveLocal();
   audioDB.keys().then((ks) => audioDB.del((ks || []).filter((k) => String(k).startsWith("doc_")))); // every client's documents
   try { caches.delete("dn-manual"); } catch {} // the manual copy kept for reading without signal
-  session = null; saveSession(); KEY = null; S = seed(); $("#sheetRoot").innerHTML = ""; handoverDraft = familySummary = null; fbQuestions = { list: [], at: 0, busy: false, drafts: {} }; showLogin(msg);
+  session = null; saveSession(); KEY = null; S = seed(); $("#sheetRoot").innerHTML = ""; calDay = ""; calView = "month"; handoverDraft = familySummary = null; fbQuestions = { list: [], at: 0, busy: false, drafts: {} }; showLogin(msg);
 }
 function showLogin(msg) {
   const local = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
@@ -5992,7 +6020,7 @@ async function checkClient() {
 // never drops a field).
 const clientFromServer = (c) => ({ id: c.id, name: c.name, country: c.country || "UK", consent: c.consent, carers: c.carers || [], family: c.family || [], familyIncidents: !!c.familyIncidents, familyAt: c.familyAt || "", pronouns: c.pronouns || "", care: c.care === "agency" ? "agency" : "private", catchupDays: c.catchupDays || 7, shared: c.shared || [] });
 function chooseClient(client) {
-  session.client = clientFromServer(client);
+  session.client = clientFromServer(client); calDay = ""; calView = "month";
   saveSession(); loadUser(); $("#fullRoot").innerHTML = ""; go("today");
 }
 // manual = opened from Settings; otherwise a single client is picked automatically.

@@ -91,6 +91,8 @@ main{padding-block:20px calc(110px + env(safe-area-inset-bottom,0px))}
 .cal-item.off strong{text-decoration:line-through}
 .cal-when{font-weight:700;font-size:14px}
 .cal-dayh{font-weight:700;font-size:14px;margin:6px 0 0}
+.cal-nav{flex:0 0 auto;padding:8px 10px;min-width:44px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;box-shadow:var(--shadow);min-width:0}
 .card-h{display:flex;align-items:baseline;justify-content:space-between;gap:4px 12px;margin-bottom:10px;flex-wrap:wrap}
 .card-h h3{flex:none;max-width:100%}
@@ -319,6 +321,7 @@ table.mar.who td,table.mar.who th{text-align:left;min-width:120px}
 </nav>
 
 <div id="sheetRoot"></div>
+<div id="srSay" class="sr" aria-live="polite"></div>
 <div id="fullRoot"></div>
 <div id="printRoot"></div>
 <div class="toast" id="toast" role="status" hidden></div>
