@@ -63,6 +63,7 @@ function seed() {
     }],
     flags: [{ id: "f0", ts: at(3, 40), kind: "follow_up", title: "Low fluid intake overnight", detail: "Nana drank about half a cup of water overnight.", status: "open", noteId: null }],
     transfers: [],
+    visits: [],
     handovers: [{ id: "h0", ts: at(4, 0), fromId: "c3", toId: "c1", text: "Nana settled well overnight. She drank about half a cup of water. No changes in mood, mobility or the help she needed." }],
     messages: [{ id: "m0", ts: at(7, 15), from: "family", name: "Family", text: "Morning! Is Nana still up for church today? I'll collect her at 10:15." }],
     settings: { relayUrl: "", accessCode: "", familyAlerts: false },
@@ -186,6 +187,7 @@ function loadUser() {
   if (!S.supplies) { S.supplies = []; if (S.sync) S.sync.seq = 0; } // medicine supplies received: pull them once
   if (!S.forms) { S.forms = []; S.reviews = []; S.acks = []; if (S.sync) S.sync.seq = 0; } // forms, reviews, catch-up ticks: pull them once
   if (!S.pulledV14) { S.pulledV14 = 1; if (S.sync) S.sync.seq = 0; } // 1.3.13/14: assessments, sleep, before and after: an older app skipped them
+  if (!S.visits) { S.visits = []; if (S.sync) S.sync.seq = 0; } // 1.3.24: attendance; an older app skipped visits: pull them once
   if (!S.pulledV19) { S.pulledV19 = 1; if (S.sync) S.sync.seq = 0; } // 1.3.19: cancelled appointments: an older app dropped the cancellation
   if (!S.doses) { S.doses = []; if (S.sync) S.sync.seq = 0; } // medicines chart entries: pull them once
   else { const keep = Date.now() - 70 * 864e5; S.doses = S.doses.filter((d) => d.ts > keep); } // this and last month's chart; older entries stay in the cloud // ticks for this client; an older app skipped them, so pull everything once (duplicates are ignored)
@@ -237,7 +239,7 @@ const audioDB = (() => {
  * Sync runs in the background, so it never signs anyone out or opens a screen in the middle of
  * something: if the sign-in has ended it pauses, and asks once nothing is open.
  */
-const SYNC_KINDS = { note: "notes", obs: "observations", flag: "flags", handover: "handovers", transfer: "transfers", event: "schedule", task: "tasks", message: "messages", summary: "summaries", dose: "doses", supply: "supplies", form: "forms", review: "reviews", ack: "acks" };
+const SYNC_KINDS = { note: "notes", obs: "observations", flag: "flags", handover: "handovers", transfer: "transfers", visit: "visits", event: "schedule", task: "tasks", message: "messages", summary: "summaries", dose: "doses", supply: "supplies", form: "forms", review: "reviews", ack: "acks" };
 const DEMO_IDS = new Set(["n0", "f0", "h0", "s1", "s2", "s3", "m0"]);
 const SYNC_RECORD_MAX = 58000, SYNC_BATCH_MAX = 400000; // the relay allows 60,000 a record, 1,000,000 a request
 // When a record last changed (older records have no mt, so use their latest time).
@@ -267,6 +269,7 @@ const SYNC_SHAPES = {
   form: { req: ["ts", "formId", "type", "data", "status"], f: { ts: "num", formId: "id", prevId: "id", type: ["incident", "skin", "assessment"], noteId: "id", flagId: "id", ref: "str:20", data: "str:20000", status: ["open", "follow_up", "closed"], by: "id", byName: "str:60" } },
   review: { req: ["ts", "formId", "notify"], f: { ts: "num", formId: "id", notify: ["yes", "no", "unsure"], why: "str:1000", candour: ["yes", "no", "unsure"], safeguarding: ["yes", "no", "unsure"], lessons: "str:1000", by: "id", byName: "str:60" } },
   ack: { req: ["ts", "what"], f: { ts: "num", what: ["read", "skin"], since: "num", by: "id", byName: "str:60" } },
+  visit: { req: ["ts", "inTs"], f: { ts: "num", inTs: "num", outTs: "num", inAt: "num", outAt: "num", by: "id", byName: "str:60", outBy: "id", outNote: "str:300" } },
   event: { req: ["ts", "when", "label"], f: { ts: "num", when: "num", label: "str:120", detail: "str:300", by: "id", cancelledTs: "num", cancelledBy: "id", cancelReason: "str:200", remind: "str:40", remindWho: ["all", "me"], seriesId: "id", repeat: "str:60" } },
   transfer: { req: ["outTs", "withWhom"], f: { outTs: "num", withWhom: "str:100", relationship: "str:100", purpose: "str:200", carerId: "id", backTs: "num", backNote: "str:2000", backCarerId: "id" } },
 };
@@ -395,7 +398,7 @@ async function syncNow() {
           const i = arr.findIndex((x) => x.id === id);
           const isNew = i < 0;
           if (isNew) { arr.push(data); changed = true; }
-          else if (mtOf(arr[i]) < mtOf(data) || (kind === "obs" && mtOf(arr[i]) === mtOf(data) && Object.keys(data).some((k) => arr[i][k] === undefined)) || (kind === "flag" && data.status === "resolved" && arr[i].status !== "resolved") || (kind === "transfer" && data.backTs && !arr[i].backTs) || (kind === "event" && data.cancelledTs && !arr[i].cancelledTs)) { arr[i] = { ...arr[i], ...data }; changed = true; }
+          else if (mtOf(arr[i]) < mtOf(data) || (kind === "obs" && mtOf(arr[i]) === mtOf(data) && Object.keys(data).some((k) => arr[i][k] === undefined)) || (kind === "flag" && data.status === "resolved" && arr[i].status !== "resolved") || (kind === "transfer" && data.backTs && !arr[i].backTs) || (kind === "event" && data.cancelledTs && !arr[i].cancelledTs) || (kind === "visit" && data.outTs && !arr[i].outTs)) { arr[i] = { ...arr[i], ...data }; changed = true; }
           const k = kind + ":" + id; si.sent[k] = Math.max(si.sent[k] || 0, mtOf(data));
           // A note new to this phone came from another phone (or from the cloud after this phone was
           // cleared): its recording is the cloud's job. This phone's own recordings are uploaded by step 2.
@@ -2071,7 +2074,7 @@ function openPlan() {
       ${planTasks().length ? planTasks().map((t) => `<div class="small"><strong>${esc(t.title)}</strong> <span class="muted">· ${esc(periodLabel(t.period))}${t.days.length ? " · " + t.days.map((d) => DAY_NAMES[d]).join(", ") : ""}</span></div>`).join("") : '<div class="small muted">No tasks yet.</div>'}
       ${isAdminHere() ? '<button class="link small" id="tkEdit" style="justify-self:start">Edit shift tasks</button>' : ""}</div>
     <div class="card" style="box-shadow:none;display:grid;gap:8px"><h3 style="font-size:17px;margin:0">Documents</h3>
-      ${docs.length ? docs.map((d) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><button class="link" data-opendoc="${esc(d.id)}" style="text-align:left">${esc(d.name)}</button><span class="tiny muted">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</span>${canEditPlan() && d.kind === "care_plan" ? `<button class="link small" data-filldoc="${esc(d.id)}">Fill the care plan from this</button>` : ""}${isAdminHere() ? `<button class="link small" data-deldoc="${esc(d.id)}" style="color:var(--incident)">Remove</button>` : ""}</div>`).join("") : '<p class="small muted" style="margin:0">No documents yet.</p>'}
+      ${docs.length ? docs.map((d) => `<div class="row" style="justify-content:space-between;align-items:center;gap:8px"><button class="link" data-opendoc="${esc(d.id)}" style="text-align:left">${esc(d.name)}</button><span class="tiny muted">${esc(DOC_KIND_LABEL[d.kind] || "Document")}</span>${canEditPlan() && d.kind === "care_plan" ? `<button class="link small" data-filldoc="${esc(d.id)}">Fill the care plan from this</button>` : ""}${isAdminHere() || (d.mine && Date.now() - (d.uploadedAt || 0) < 24 * 3600000) ? `<button class="link small" data-deldoc="${esc(d.id)}" style="color:var(--incident)">Remove</button>` : ""}</div>`).join("") : '<p class="small muted" style="margin:0">No documents yet.</p>'}
     </div>
     ${p.updatedAt ? `<p class="tiny muted" style="margin:0">Last changed ${fmtDay(p.updatedAt)} ${fmtTime(p.updatedAt)}${p.updatedBy ? " by " + esc(p.updatedBy) : ""}.${isAdminHere() && cloudOn() ? ` <button class="link tiny" id="plHist">Earlier versions</button>` : ""}</p>` : ""}
     ${canEditPlan() ? `${planDoneCount() < PLAN_DEFAULTS.length ? `<button class="btn primary block" id="plGuide">${planDoneCount() ? "Finish it step by step" : "Set it up step by step"} (${planDoneCount()} of ${PLAN_DEFAULTS.length} done)</button>` : ""}
@@ -3086,6 +3089,7 @@ function renderToday() {
   v.innerHTML = `
     <div class="hello"><h2>${greet}, ${esc(onDuty().name)}</h2><p>${fmtDay(Date.now())}${onDuty().shift ? " · " + esc(onDuty().shift) : ""}</p></div>
     ${storageBanner()}
+    ${attendHTML()}
     ${catchupHTML()}
     <button class="cta" id="ctaRec">${ICON.mic}Record a note</button>
     ${isSharedPhone() ? `<p class="small" style="margin:-4px 0 0;text-align:center">Recording as <strong>${esc(session.name)}</strong> · <button class="link small" id="shSwitch" style="min-height:40px">Not you? Switch carer</button></p>` : ""}
@@ -3128,6 +3132,9 @@ function renderToday() {
   bindStorageBanner(v); bindCatchup(v); bindVoiceCard(v);
   $("#evCal").onclick = () => openCalendar();
   if ($("#ctaOut")) $("#ctaOut").onclick = () => openTransferSheet();
+  if ($("#atIn")) $("#atIn").onclick = () => openAttendTime("in");
+  if ($("#atOut")) $("#atOut").onclick = () => openAttendTime("out");
+  if ($("#atList")) $("#atList").onclick = () => openAttendance();
   if ($("#ctaBack")) $("#ctaBack").onclick = () => openReturnSheet();
   bindResolve(v);
   v.querySelectorAll("[data-unclamp]").forEach((b) => { const t = b.previousElementSibling; if (t && t.scrollHeight <= t.clientHeight + 2) { t.classList.remove("clamp"); b.hidden = true; } });
@@ -3581,6 +3588,82 @@ function catchupState() {
   if (!last && !S.notes.some((n) => !isExample(n))) return null; // a brand-new client: nothing to catch up on
   S.catchup = { me, client: session.client.id, at: Date.now(), since: last, isNew: !last }; saveLocal();
   return { ...S.catchup, done: new Set() };
+}
+// Attendance (Gavin, 2026-10-22): each carer records when they arrive and when they leave. A time can be put
+// in later (forgot to tap), but the relay keeps when it was recorded, so a late entry shows as one. No
+// location is recorded. Arriving can't be changed afterwards, and leaving is added once.
+const visits = () => (S.visits || []).filter((v) => !isExample(v));
+const myOpenVisit = () => visits().filter((v) => v.by === stampId() && !v.outTs).sort((a, b) => b.inTs - a.inTs)[0];
+const durText = (ms) => { const m = Math.max(0, Math.round(ms / 60000)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`; };
+const enteredLater = (ts, at) => !!at && at - ts > 15 * 60000;
+function attendHTML() {
+  if (!session || session.local || isFamily() || !S.client) return "";
+  const v = myOpenVisit(), list = '<button class="link small" id="atList" style="min-height:40px;padding:0;justify-self:start">Attendance</button>';
+  const line = (text, btn) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div style="display:grid;gap:0"><span class="small">${text}</span>${list}</div>${btn}</div>`;
+  if (!v) return `<div class="card">${line("Not checked in", `<button class="btn secondary" id="atIn" style="flex:0 0 auto">I've arrived</button>`)}</div>`;
+  const long = Date.now() - v.inTs > 16 * 36e5;
+  return `<div class="card" style="display:grid;gap:8px">${long ? `<div class="warn small" style="margin:0">Still checked in since ${esc(dayLabel(v.inTs))} ${fmtTime(v.inTs)}. Did you forget to check out? Tap I'm leaving and put in when you left.</div>` : ""}
+    ${line(`Here since <strong>${fmtTime(v.inTs)}</strong>${isToday(v.inTs) ? "" : " " + esc(dayLabel(v.inTs).toLowerCase())} · ${durText(Date.now() - v.inTs)}`, `<button class="btn secondary" id="atOut" style="flex:0 0 auto">I'm leaving</button>`)}</div>`;
+}
+// Arriving or leaving: now, or a time typed in (today or yesterday) for a tap that was forgotten.
+function openAttendTime(mode) {
+  const v = mode === "out" ? myOpenVisit() : null;
+  if (mode === "out" && !v) return render();
+  const now = new Date(), pad = (n) => String(n).padStart(2, "0"), hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const s = sheet(`${sheetHead(mode === "in" ? "I've arrived" : "I'm leaving")}
+    <p class="small" style="margin:0">${mode === "in" ? `Arriving to care for ${esc(S.client.name)}.` : `Leaving ${esc(S.client.name)}. You arrived ${esc(dayLabel(v.inTs).toLowerCase())} at ${fmtTime(v.inTs)}.`} If you forgot to tap at the time, change the time to when you ${mode === "in" ? "arrived" : "left"}: it's kept as entered later.</p>
+    <div class="row" style="gap:8px"><label class="f" style="flex:1">Day<input type="date" id="atDay" value="${dayKey(now)}" max="${dayKey(now)}" min="${dayKey(new Date(mode === "out" ? v.inTs : Date.now() - 864e5))}"></label>
+      <label class="f" style="flex:1">Time<input type="time" id="atTime" value="${hm(now)}"></label></div>
+    ${mode === "out" ? '<label class="f">Anything to add? (optional)<input id="atNote" maxlength="300" placeholder="e.g. Stayed late: waited for the GP to call back"></label>' : ""}
+    <button class="btn primary block" id="atSave">${mode === "in" ? "Check in" : "Check out"}</button>`);
+  $("#atSave", s.root).onclick = () => {
+    const day = $("#atDay", s.root).value, t = $("#atTime", s.root).value;
+    const ts = day && t ? new Date(`${day}T${t}:00`).getTime() : NaN;
+    if (!Number.isFinite(ts)) return toast("Choose the day and time");
+    const nowMs = Date.now();
+    if (ts > nowMs + 5 * 60000) return toast("That time hasn't happened yet");
+    if (mode === "in") {
+      if (ts < nowMs - 24 * 36e5) return toast("An arrival can be put in up to a day back");
+      const rec = { id: uid(), ts: nowMs, inTs: ts, by: stampId(), byName: (session && session.name) || onDuty().name };
+      touch(rec); S.visits = [...(S.visits || []), rec];
+      save(); s.close(); render(); toast(`Checked in at ${fmtTime(ts)}`);
+    } else {
+      const cur = myOpenVisit(); if (!cur) { s.close(); return render(); }
+      if (ts < cur.inTs) return toast(`That's before you arrived (${fmtTime(cur.inTs)})`);
+      const note = ($("#atNote", s.root).value || "").trim().slice(0, 300);
+      Object.assign(cur, { outTs: ts, outBy: stampId(), ...(note ? { outNote: note } : {}) }); touch(cur);
+      save(); s.close(); render(); toast(`Checked out at ${fmtTime(ts)} · ${durText(ts - cur.inTs)}`);
+    }
+  };
+}
+// Who was here and when, for a period: every carer's visits by day, with time there, and totals.
+function openAttendance(days = 30) {
+  const to = Date.now(), from = new Date(new Date().setHours(0, 0, 0, 0) - (days - 1) * 864e5).getTime();
+  const list = visits().filter((v) => v.inTs >= from && v.inTs <= to).sort((a, b) => b.inTs - a.inTs);
+  const name = (v) => v.byName || carer(v.by).name;
+  const totals = new Map();
+  for (const v of list) if (v.outTs) totals.set(name(v), (totals.get(name(v)) || 0) + (v.outTs - v.inTs));
+  const byDay = new Map(); for (const v of list) { const k = dayKey(new Date(v.inTs)); byDay.set(k, [...(byDay.get(k) || []), v]); }
+  const row = (v) => {
+    const late = [enteredLater(v.inTs, v.inAt) ? `arrival put in at ${fmtTime(v.inAt)}` : "", v.outTs && enteredLater(v.outTs, v.outAt) ? `leaving put in ${sameDay(v.outAt, v.outTs) ? "at" : dayLabel(v.outAt).toLowerCase() + " at"} ${fmtTime(v.outAt)}` : ""].filter(Boolean);
+    const notes = [...late, v.outNote ? esc(v.outNote) : ""].filter(Boolean).join("; ");
+    return `<div class="at-row" style="padding:8px 0;border-top:1px solid var(--line)"><div class="small"><strong>${esc(name(v))}</strong> · ${fmtTime(v.inTs)} to ${v.outTs ? `${fmtTime(v.outTs)}${sameDay(v.outTs, v.inTs) ? "" : ` ${esc(dayLabel(v.outTs).toLowerCase())}`} · ${durText(v.outTs - v.inTs)}` : Date.now() - v.inTs > 16 * 36e5 ? "<em>not checked out</em>" : "<em>still here</em>"}</div>${notes ? `<div class="tiny muted">${notes}</div>` : ""}</div>`;
+  };
+  const root = $("#fullRoot");
+  root.innerHTML = `<div class="full mar-print" role="dialog" aria-modal="true" aria-label="Attendance"><div class="wrap" style="display:grid;gap:8px">
+    <div class="row noprint" style="gap:8px;justify-content:space-between"><button class="btn ghost" id="atClose">Close</button><button class="btn primary" id="atPrint">Print or save as PDF</button></div>
+    <h2 style="font-size:20px">Attendance · ${esc(S.client.name)}</h2>
+    <div class="seg noprint" role="group" aria-label="Period">${[7, 30, 90].map((d) => `<button data-atdays="${d}" aria-pressed="${d === days}">${d} days</button>`).join("")}</div>
+    <p class="small" style="margin:0">${esc(fmtDay(from))} to ${esc(fmtDay(to))}. Times are as each carer recorded them; a time put in later says so.</p>
+    ${totals.size ? `<p class="small" style="margin:0"><strong>Time there:</strong> ${[...totals].map(([n, ms]) => `${esc(n)} ${durText(ms)}`).join(" · ")}</p>` : ""}
+    ${list.length ? [...byDay].map(([k, vs]) => `<h3 style="font-size:15px;margin:12px 0 4px">${esc(fmtDay(new Date(k + "T12:00:00").getTime()))}</h3>
+      <div>${vs.map(row).join("")}</div>`).join("")
+      : '<div class="empty">No visits recorded in this period. Carers check in on Today with I\'ve arrived.</div>'}
+    <p class="tiny muted">Dignity Notes · printed ${esc(fmtDay(Date.now()))} ${fmtTime(Date.now())} · pilot, made-up data only</p></div></div>`;
+  document.body.classList.add("printing-mar");
+  $("#atClose").onclick = () => { root.innerHTML = ""; document.body.classList.remove("printing-mar"); };
+  $("#atPrint").onclick = () => window.print();
+  root.querySelectorAll("[data-atdays]").forEach((b) => (b.onclick = () => openAttendance(+b.dataset.atdays)));
 }
 function catchupHTML() {
   const c = catchupState(); if (!c) return "";
@@ -5123,7 +5206,7 @@ function openSavedNote(id, { unclear = [], background = [], gaps = [], lostAt = 
 }
 
 /* ---------- privacy notice ---------- */
-const PRIVACY_VERSION = "2026-10-21.23";
+const PRIVACY_VERSION = "2026-10-22.24";
 const PRIVACY_HTML = `
 <p class="small muted" style="margin:0">Version 22 · 21 October 2026 · Pilot</p>
 <h3>Who we are</h3>
@@ -5149,7 +5232,7 @@ const PRIVACY_HTML = `
 <p><strong>Medicines chart.</strong> If carers help with a client's medicines, the client's medicine list (names, strengths, doses, times, prescriber, where each detail came from), their date of birth, NHS or Medicare number if given, GP practice and allergies, every dose recorded (given, prompted, refused or not given, with reasons, amounts, whether a when-required dose helped, who recorded it and when), and each new supply received (how much, from where, and whether the label matched) are kept in our cloud storage in the European Union with the client's record. Carers on the client and the pilot administrators can see and add to it; family members cannot. Every change to the list is kept with who made it and who checked it, and dose entries are never changed (a correction is a new entry). The app records what carers did; it does not give medical advice.</p>
 <p>Each client's <strong>contacts</strong> (names, roles, phone numbers, email and postal addresses of people and services involved in their care, such as the GP, pharmacy and family) are kept in our cloud storage in the European Union, shared with the client's carers and the pilot administrators, and can be added or changed by any of them; every change is kept with who made it. The last list seen is kept on the carer's device so it can be read without signal, and is removed if the carer is taken off the client.</p>
 <p>Each client's <strong>care plan and documents</strong> (such as an emergency care plan or risk assessments) are kept in our cloud storage, written by the client's carers and administrators, and shown to the client's carers. A copy of the care plan, and of any document a carer opens, is kept on their device so it can be read without signal; document copies are removed when the document is taken out of the care plan, when the carer signs out, or when the client is removed.</p>
-<p>Care notes (with the words you spoke), voice recordings, flags, handovers and outings are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Your settings stay on your device only.</p>
+<p>Care notes (with the words you spoke), voice recordings, flags, handovers, outings and attendance (when each carer checked in and out, and when they recorded it; never where they were) are saved on your device and <strong>copied to our cloud storage</strong>, so they aren't lost if your device's data is cleared, and every carer on the same client sees the same record. They are stored by Cloudflare in the <strong>European Union</strong>, encrypted, and only the client's carers and pilot administrators can see them. Your settings stay on your device only.</p>
 <h3>AI note writing</h3>
 <p>When you ask the user manual a question, your question (nothing else) is sent through our relay to Anthropic so the AI can answer it from the manual. It isn't stored.</p>
 <p>When you use the feedback helper, your messages and any screenshot are also sent to Anthropic, so the helper can ask questions and write a summary for the developer. Email addresses and phone numbers are removed automatically before a report is stored.</p>
@@ -5182,7 +5265,7 @@ const PRIVACY_HTML = `
 <li><strong>Care records, recordings, care plans and documents:</strong> until the client is removed (for example, if agreement is withdrawn) or the pilot ends. Removing a client deletes them from the cloud straight away, and from carers' devices the next time each device is used.</li>
 </ul>
 <h3>Who can see your information</h3>
-<p>Pilot administrators can see the people list, who cares for each client, which devices each account has used, the sign-in history and feedback reports. Carers on the same client see each other's names and shifts, and the client's care notes, recordings, flags, handovers and outings, including yours. Pilot administrators can see these too.</p>
+<p>Pilot administrators can see the people list, who cares for each client, which devices each account has used, the sign-in history and feedback reports. Carers on the same client see each other's names and shifts, and the client's care notes, recordings, flags, handovers, outings and attendance, including yours. Pilot administrators can see these too.</p>
 <h3>Your rights</h3>
 <p>You can ask to see, correct or delete the information we hold about you, or object to how we use it. Ask the administrator who invited you, who will pass your request to Workgroup (WA) Pty Ltd. If you're unhappy, you can complain to the UK Information Commissioner's Office (ico.org.uk) or, in Australia, the Office of the Australian Information Commissioner (oaic.gov.au).</p>
 <h3>Changes</h3>
