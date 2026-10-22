@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.4.0 - 2026-10-22
+
+
 ## 1.3.0 - 2026-10-15
 
 - 1.3.24: Attendance: tap I've arrived and I'm leaving on Today (a time can be put in later and says so; no location is recorded), and see every carer's visits with time there and totals for 7, 30 or 90 days, ready to print. A carer can remove a document they added, for 24 hours; a client can have up to 100 documents. AI help that fails no longer counts towards the daily limit. Privacy notice version 24.

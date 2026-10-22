@@ -3606,12 +3606,12 @@ function attendHTML() {
     ${line(`Here since <strong>${fmtTime(v.inTs)}</strong>${isToday(v.inTs) ? "" : " " + esc(dayLabel(v.inTs).toLowerCase())} · ${durText(Date.now() - v.inTs)}`, `<button class="btn secondary" id="atOut" style="flex:0 0 auto">I'm leaving</button>`)}</div>`;
 }
 // Arriving or leaving: now, or a time typed in (today or yesterday) for a tap that was forgotten.
-function openAttendTime(mode) {
-  const v = mode === "out" ? myOpenVisit() : null;
+function openAttendTime(mode, other) {
+  const v = mode === "out" ? other || myOpenVisit() : null;
   if (mode === "out" && !v) return render();
   const now = new Date(), pad = (n) => String(n).padStart(2, "0"), hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const s = sheet(`${sheetHead(mode === "in" ? "I've arrived" : "I'm leaving")}
-    <p class="small" style="margin:0">${mode === "in" ? `Arriving to care for ${esc(S.client.name)}.` : `Leaving ${esc(S.client.name)}. You arrived ${esc(dayLabel(v.inTs).toLowerCase())} at ${fmtTime(v.inTs)}.`} If you forgot to tap at the time, change the time to when you ${mode === "in" ? "arrived" : "left"}: it's kept as entered later.</p>
+    <p class="small" style="margin:0">${mode === "in" ? `Arriving to care for ${esc(S.client.name)}.` : other ? `${esc(other.byName || carer(other.by).name)} arrived ${esc(dayLabel(v.inTs).toLowerCase())} at ${fmtTime(v.inTs)} and didn't check out. Put in when they left, if you know it.` : `Leaving ${esc(S.client.name)}. You arrived ${esc(dayLabel(v.inTs).toLowerCase())} at ${fmtTime(v.inTs)}.`} If you forgot to tap at the time, change the time to when you ${mode === "in" ? "arrived" : "left"}: it's kept as entered later.</p>
     <div class="row" style="gap:8px"><label class="f" style="flex:1">Day<input type="date" id="atDay" value="${dayKey(now)}" max="${dayKey(now)}" min="${dayKey(new Date(mode === "out" ? v.inTs : Date.now() - 864e5))}"></label>
       <label class="f" style="flex:1">Time<input type="time" id="atTime" value="${hm(now)}"></label></div>
     ${mode === "out" ? '<label class="f">Anything to add? (optional)<input id="atNote" maxlength="300" placeholder="e.g. Stayed late: waited for the GP to call back"></label>' : ""}
@@ -3628,11 +3628,14 @@ function openAttendTime(mode) {
       touch(rec); S.visits = [...(S.visits || []), rec];
       save(); s.close(); render(); toast(`Checked in at ${fmtTime(ts)}`);
     } else {
-      const cur = myOpenVisit(); if (!cur) { s.close(); return render(); }
-      if (ts < cur.inTs) return toast(`That's before you arrived (${fmtTime(cur.inTs)})`);
+      const cur = other ? (S.visits || []).find((x) => x.id === other.id && !x.outTs) : myOpenVisit(); if (!cur) { s.close(); return render(); }
+      if (ts < cur.inTs) return toast(`That's before ${other ? "they" : "you"} arrived (${fmtTime(cur.inTs)})`);
       const note = ($("#atNote", s.root).value || "").trim().slice(0, 300);
-      Object.assign(cur, { outTs: ts, outBy: stampId(), ...(note ? { outNote: note } : {}) }); touch(cur);
+      // Two phones that were offline can both have checked this carer in: leaving closes every open one.
+      const open = other ? [cur] : visits().filter((x) => x.by === stampId() && !x.outTs && x.inTs <= ts);
+      for (const x of open) { Object.assign(x, { outTs: ts, outBy: stampId(), ...(note ? { outNote: note } : {}) }); touch(x); }
       save(); s.close(); render(); toast(`Checked out at ${fmtTime(ts)} · ${durText(ts - cur.inTs)}`);
+      if (other) openAttendance();
     }
   };
 }
@@ -3647,7 +3650,7 @@ function openAttendance(days = 30) {
   const row = (v) => {
     const late = [enteredLater(v.inTs, v.inAt) ? `arrival put in at ${fmtTime(v.inAt)}` : "", v.outTs && enteredLater(v.outTs, v.outAt) ? `leaving put in ${sameDay(v.outAt, v.outTs) ? "at" : dayLabel(v.outAt).toLowerCase() + " at"} ${fmtTime(v.outAt)}` : ""].filter(Boolean);
     const notes = [...late, v.outNote ? esc(v.outNote) : ""].filter(Boolean).join("; ");
-    return `<div class="at-row" style="padding:8px 0;border-top:1px solid var(--line)"><div class="small"><strong>${esc(name(v))}</strong> · ${fmtTime(v.inTs)} to ${v.outTs ? `${fmtTime(v.outTs)}${sameDay(v.outTs, v.inTs) ? "" : ` ${esc(dayLabel(v.outTs).toLowerCase())}`} · ${durText(v.outTs - v.inTs)}` : Date.now() - v.inTs > 16 * 36e5 ? "<em>not checked out</em>" : "<em>still here</em>"}</div>${notes ? `<div class="tiny muted">${notes}</div>` : ""}</div>`;
+    return `<div class="at-row" style="padding:8px 0;border-top:1px solid var(--line)"><div class="small"><strong>${esc(name(v))}</strong> · ${fmtTime(v.inTs)} to ${v.outTs ? `${fmtTime(v.outTs)}${sameDay(v.outTs, v.inTs) ? "" : ` ${esc(dayLabel(v.outTs).toLowerCase())}`} · ${durText(v.outTs - v.inTs)}` : Date.now() - v.inTs > 16 * 36e5 ? "<em>not checked out</em>" : "<em>still here</em>"}${!v.outTs && isAdminHere() && v.by !== stampId() ? ` <button class="link small noprint" data-atclose="${esc(v.id)}">Put in when they left</button>` : ""}</div>${notes ? `<div class="tiny muted">${notes}</div>` : ""}</div>`;
   };
   const root = $("#fullRoot");
   root.innerHTML = `<div class="full mar-print" role="dialog" aria-modal="true" aria-label="Attendance"><div class="wrap" style="display:grid;gap:8px">
@@ -3664,6 +3667,7 @@ function openAttendance(days = 30) {
   $("#atClose").onclick = () => { root.innerHTML = ""; document.body.classList.remove("printing-mar"); };
   $("#atPrint").onclick = () => window.print();
   root.querySelectorAll("[data-atdays]").forEach((b) => (b.onclick = () => openAttendance(+b.dataset.atdays)));
+  root.querySelectorAll("[data-atclose]").forEach((b) => (b.onclick = () => { const v = visits().find((x) => x.id === b.dataset.atclose); if (v) { root.innerHTML = ""; document.body.classList.remove("printing-mar"); openAttendTime("out", v); } }));
 }
 function catchupHTML() {
   const c = catchupState(); if (!c) return "";
@@ -5208,7 +5212,7 @@ function openSavedNote(id, { unclear = [], background = [], gaps = [], lostAt = 
 /* ---------- privacy notice ---------- */
 const PRIVACY_VERSION = "2026-10-22.24";
 const PRIVACY_HTML = `
-<p class="small muted" style="margin:0">Version 22 · 21 October 2026 · Pilot</p>
+<p class="small muted" style="margin:0">Version 24 · 22 October 2026 · Pilot</p>
 <h3>Who we are</h3>
 <p>Dignity Notes is owned and operated by <strong>Workgroup (WA) Pty Ltd</strong> ("we", "us"). We decide how the personal information described here is used. This version of Dignity Notes is a <strong>pilot for evaluation only</strong>.</p>
 <h3>Important: use fictional information only</h3>
