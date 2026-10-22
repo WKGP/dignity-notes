@@ -2,10 +2,10 @@
 
 ## 1.4.0 - 2026-10-22
 
+- 1.4.0: Attendance: tap I've arrived and I'm leaving on Today (a time can be put in later and says so; no location is recorded), and see every carer's visits with time there and totals for 7, 30 or 90 days, ready to print. A carer can remove a document they added, for 24 hours; a client can have up to 100 documents. AI help that fails no longer counts towards the daily limit. Privacy notice version 24.
 
 ## 1.3.0 - 2026-10-15
 
-- 1.3.24: Attendance: tap I've arrived and I'm leaving on Today (a time can be put in later and says so; no location is recorded), and see every carer's visits with time there and totals for 7, 30 or 90 days, ready to print. A carer can remove a document they added, for 24 hours; a client can have up to 100 documents. AI help that fails no longer counts towards the daily limit. Privacy notice version 24.
 - 1.3.23: Voice notes on iPhone: the words you saw while speaking are no longer lost when you tap Stop, and a recording the phone hands over late is waited for. If nothing at all arrives, a small "Details for support" line shows what the phone did. Administrators can see earlier versions of the care plan and restore one (the current one is kept, so it can be brought back).
 - 1.3.22: Settings, About: Check for updates (gets the newest version straight away). What's new opens inside the app, with Close. Coming up has just Calendar (adding and looking ahead are in the calendar).
 - 1.3.21: Print or share for PDFs (messages from the developer, certificates, documents): opens the phone's share sheet with Print, since a PDF opened inside the installed app on an iPhone has no Share button. Calendar: tapping a day keeps your place and shows that day's list; screen readers hear the day or month; closing an unsaved change goes back to the calendar; a fresh open starts on today.
