@@ -156,6 +156,31 @@ setInterval(() => {
 }, 3000);
 const userIsReading = () => { const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || [...document.querySelectorAll("audio")].some((x) => !x.paused); };
 
+/* ---------- the phone's Back button ----------
+ * On an installed app, Android's Back closed the whole app (Gavin, Samsung, 2026-10-22): there was no
+ * history to go back through. Each open layer (a tab other than Today, a sheet, a full screen) now has one
+ * history step, so Back closes the top one, the way its Close button does (a sheet with unsaved work asks
+ * "Tap again to discard" first). Back on Today with nothing open still leaves the app.
+ */
+let histPushed = 0, histIgnore = 0;
+const histWanted = () => (session && tab !== "today" ? 1 : 0) + ($("#sheetRoot").innerHTML.trim() ? 1 : 0) + ($("#fullRoot").innerHTML.trim() ? 1 : 0);
+function syncHistory() {
+  const want = histWanted();
+  if (want > histPushed) { for (; histPushed < want; histPushed++) history.pushState({ dn: histPushed + 1 }, "", location.href); }
+  else if (want < histPushed) { histIgnore++; history.go(want - histPushed); histPushed = want; } // closed with a button: drop its step
+}
+window.addEventListener("popstate", () => {
+  if (histIgnore) { histIgnore--; return; }
+  histPushed = Math.max(0, histPushed - 1); // the phone has already gone back one step
+  const full = $("#fullRoot"), sheetOpen = $("#sheetRoot").innerHTML.trim();
+  if (full.innerHTML.trim()) { const c = full.querySelector('[id$="Close"]:not(#rpAboutClose)'); if (c) c.click(); else full.innerHTML = ""; }
+  else if (sheetOpen) { const c = $("#sheetRoot [data-close]"); if (c) c.click(); }
+  else if (session && tab !== "today") go("today");
+  setTimeout(syncHistory, 0); // still open (unsaved work, or no way to close it here): keep a step for it
+});
+new MutationObserver(() => syncHistory()).observe($("#sheetRoot"), { childList: true });
+new MutationObserver(() => syncHistory()).observe($("#fullRoot"), { childList: true });
+
 /* ---------- boot ---------- */
 // Whatever empties the full-screen area (Close, sign-out, switching client), print and report modes end with it.
 new MutationObserver(() => { if (!$("#fullRoot").innerHTML.trim()) document.body.classList.remove("printing-mar", "report-open"); }).observe($("#fullRoot"), { childList: true });

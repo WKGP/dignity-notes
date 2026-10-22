@@ -101,6 +101,7 @@ function go(name) {
   document.querySelectorAll(".tab[data-tab]").forEach((b) => b.setAttribute("aria-current", b.dataset.tab === name ? "page" : "false"));
   ["today", "log", "handover", "family"].forEach((v) => ($("#view-" + v).hidden = v !== name));
   render(); window.scrollTo({ top: 0 });
+  if (typeof syncHistory === "function") syncHistory(); // a tab other than Today is one step for Back (js/main.js)
 }
 document.querySelectorAll(".tab[data-tab]").forEach((b) => b.addEventListener("click", () => go(b.dataset.tab)));
 $("#recTab").addEventListener("click", () => openRecorder());
