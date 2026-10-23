@@ -2,6 +2,7 @@
 
 ## 1.4.0 - 2026-10-22
 
+- 1.4.3: Handing over checks you out too (I'm leaving now is ticked on the handover when you're checked in; untick it if you're staying). The Back button handling is steadier when screens open and close quickly.
 - 1.4.2: The phone's Back button (Android) now goes back a step (closes what's open, or returns to Today) instead of closing the app.
 - 1.4.0: Attendance: tap I've arrived and I'm leaving on Today (a time can be put in later and says so; no location is recorded), and see every carer's visits with time there and totals for 7, 30 or 90 days, ready to print. A carer can remove a document they added, for 24 hours; a client can have up to 100 documents. AI help that fails no longer counts towards the daily limit. Privacy notice version 24.
 

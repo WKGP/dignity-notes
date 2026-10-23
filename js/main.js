@@ -162,16 +162,23 @@ const userIsReading = () => { const a = document.activeElement; return !!(a && /
  * history step, so Back closes the top one, the way its Close button does (a sheet with unsaved work asks
  * "Tap again to discard" first). Back on Today with nothing open still leaves the app.
  */
-let histPushed = 0, histIgnore = 0;
+// How many of our steps the phone is on is read from the history entry itself (dn), never counted
+// separately, and nothing is added while a step back is still under way, so it can't go back too far
+// (which would leave the app).
+let histBusy = false;
+const histAt = () => (history.state && history.state.dn) || 0;
+// Opened again on one of our steps (a reload with something open, e.g. Check for updates): start from here.
+if (histAt()) history.replaceState(null, "", location.href);
 const histWanted = () => (session && tab !== "today" ? 1 : 0) + ($("#sheetRoot").innerHTML.trim() ? 1 : 0) + ($("#fullRoot").innerHTML.trim() ? 1 : 0);
 function syncHistory() {
-  const want = histWanted();
-  if (want > histPushed) { for (; histPushed < want; histPushed++) history.pushState({ dn: histPushed + 1 }, "", location.href); }
-  else if (want < histPushed) { histIgnore++; history.go(want - histPushed); histPushed = want; } // closed with a button: drop its step
+  if (histBusy) return; // finishing a step back first; popstate syncs again
+  const want = histWanted(), at = histAt();
+  if (want > at) { for (let k = at + 1; k <= want; k++) history.pushState({ dn: k }, "", location.href); }
+  else if (want < at) { histBusy = true; history.go(want - at); } // closed with a button: drop its step
 }
 window.addEventListener("popstate", () => {
-  if (histIgnore) { histIgnore--; return; }
-  histPushed = Math.max(0, histPushed - 1); // the phone has already gone back one step
+  if (histBusy) { histBusy = false; syncHistory(); return; } // our own step back has finished
+  // The phone's Back: close the top layer, the way its Close button does.
   const full = $("#fullRoot"), sheetOpen = $("#sheetRoot").innerHTML.trim();
   if (full.innerHTML.trim()) { const c = full.querySelector('[id$="Close"]:not(#rpAboutClose)'); if (c) c.click(); else full.innerHTML = ""; }
   else if (sheetOpen) { const c = $("#sheetRoot [data-close]"); if (c) c.click(); }

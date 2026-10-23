@@ -219,6 +219,7 @@ function renderHandover() {
         <label class="f" style="margin-top:10px">Handover (edit if needed)<textarea id="hoText" class="note-edit">${esc(handoverDraft.text)}</textarea></label>
         ${others.length ? `<label class="f" style="margin-top:12px">Handing over to<select id="hoTo"><option value="">Choose who…</option><option value="next">Whoever is on next</option>${others.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}${c.shift ? " · " + esc(c.shift) : ""}</option>`).join("")}</select></label>`
           : `<p class="small muted" style="margin:12px 0 0">No other carers are on ${esc(S.client.name)} yet. The handover is saved for the next carer. An administrator can add carers in Manage people.</p>`}
+        ${myOpenVisit() ? `<label class="check small" style="margin-top:12px"><input type="checkbox" id="hoOut" checked><span>I'm leaving now: check me out too (here since ${fmtTime(myOpenVisit().inTs)}${isToday(myOpenVisit().inTs) ? "" : " " + esc(dayLabel(myOpenVisit().inTs).toLowerCase())})</span></label>` : ""}
         <div class="row" style="margin-top:14px"><button class="btn ghost" id="hoRedo">Prepare again</button><button class="btn primary" id="hoSave">Approve and hand over</button></div>`
       : `<p class="small muted" style="margin:0 0 12px">When your shift ends, prepare the handover. You can edit it before approving.</p>
         <button class="btn primary block" id="hoPrep">Prepare handover</button>`}
@@ -232,8 +233,12 @@ function renderHandover() {
   if ($("#hoSave")) $("#hoSave").onclick = () => {
     if ($("#hoTo") && !$("#hoTo").value) { $("#hoTo").focus(); return toast("Choose who you're handing over to"); }
     const toId = $("#hoTo") && $("#hoTo").value !== "next" ? $("#hoTo").value : null; const text = $("#hoText").value.trim(); if (!text) return toast("The handover is empty");
-    S.handovers.push({ id: uid(), ts: Date.now(), fromId: stampId(), toId, text, source: handoverDraft.source });
-    handoverDraft = null; save(); go("today"); toast(toId ? `Handed over to ${carer(toId).name}` : "Handover saved for the next carer");
+    const now = Date.now();
+    S.handovers.push({ id: uid(), ts: now, fromId: stampId(), toId, text, source: handoverDraft.source });
+    // Handing over usually ends the shift: check out at the same time (Gavin, 2026-10-23), every open visit of yours.
+    const out = $("#hoOut") && $("#hoOut").checked ? visits().filter((x) => x.by === stampId() && !x.outTs && x.inTs <= now) : [];
+    for (const x of out) { Object.assign(x, { outTs: now, outBy: stampId() }); touch(x); }
+    handoverDraft = null; save(); go("today"); toast((toId ? `Handed over to ${carer(toId).name}` : "Handover saved for the next carer") + (out.length ? ` · Checked out at ${fmtTime(now)}` : ""));
   };
 }
 
