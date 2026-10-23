@@ -357,7 +357,7 @@ function openFeedback(kind) {
   let busy = false;
   const s = sheet(`${sheetHead(title)}
     <p class="tiny muted" style="margin:0">Please leave out real names, addresses, phone numbers and health details. Screenshots are seen by the administrators and the AI helper, so avoid screens that show care notes. Nothing is sent until you press Submit.</p>
-    <div class="thread" id="fbThread" style="max-height:44vh"></div>
+    <div class="thread" id="fbThread" style="max-height:none;overflow:visible"></div>
     <div id="fbShot"></div>
     <textarea id="fbText" rows="3" style="min-height:84px" placeholder="Type here, or tap Speak…" aria-label="Your message"></textarea>
     <div class="row">
@@ -375,7 +375,7 @@ function openFeedback(kind) {
     thread.innerHTML = `<div class="msg"><span class="who">Helper</span>${esc(opener)}</div>` + st.transcript.map((t) =>
       `<div class="msg ${t.role === "user" ? "carer" : ""}"><span class="who">${t.role === "user" ? "You" : "Helper"}</span>${esc(t.content)}</div>`).join("")
       + (busy ? '<div class="msg"><span class="who">Helper</span><span class="muted">Thinking…</span></div>' : "");
-    thread.scrollTop = thread.scrollHeight;
+    s.root.scrollTop = s.root.scrollHeight; // the whole sheet scrolls (Sam: a box scrolling inside it trapped her)
     $("#fbShot", s.root).innerHTML = st.screenshot ? `<div class="row" style="align-items:center"><img src="${st.screenshot}" alt="Your screenshot" style="max-height:90px;border-radius:8px;border:1px solid var(--line)"><button class="link" id="fbShotX">Remove screenshot</button></div>` : "";
     if ($("#fbShotX", s.root)) $("#fbShotX", s.root).onclick = () => { st.screenshot = null; persist(); draw(); };
     $("#fbSubmit", s.root).hidden = !st.ready; // latches: once shown it stays

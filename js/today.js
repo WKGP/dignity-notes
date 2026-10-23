@@ -241,12 +241,28 @@ async function sharePdf(btn) {
 document.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-sharepdf]"); if (b) sharePdf(b); });
 const fbQuestionsHTML = () => fbQuestions.list.map((q) => q.info ? `<div class="card" style="border-left:4px solid var(--accent)"><div class="card-h"><h3>A message from the developer</h3></div>
   <p style="margin:0 0 10px;white-space:pre-line">${ownLinks(q.q)}</p>
-  <button class="btn secondary block" data-fbqseen="${esc(q.id)}|${esc(q.qid)}">Got it</button></div>` : `<div class="card" style="border-left:4px solid var(--accent)"><div class="card-h"><h3>A question about your ${q.kind === "bug" ? "problem report" : "idea"}</h3></div>
+  <div data-fbreply="${esc(q.id)}|${esc(q.qid)}" hidden><div style="display:grid;gap:8px;margin-bottom:8px"><textarea class="grow" maxlength="2000" rows="3" placeholder="Your reply: type, or tap Speak" aria-label="Your reply" style="width:100%">${esc(fbQuestions.drafts[q.id + "|" + q.qid] || "")}</textarea>
+    <div class="row"><button class="btn ghost" data-fbrspeak style="flex:0 0 auto"></button><button class="btn primary" data-fbrsend="${esc(q.id)}|${esc(q.qid)}">Send reply</button></div><div class="small" data-fbrstatus role="status"></div></div></div>
+  <div class="row"><button class="btn secondary" data-fbropen="${esc(q.id)}|${esc(q.qid)}">Reply</button><button class="btn secondary" data-fbqseen="${esc(q.id)}|${esc(q.qid)}">Got it</button></div></div>` : `<div class="card" style="border-left:4px solid var(--accent)"><div class="card-h"><h3>A question about your ${q.kind === "bug" ? "problem report" : "idea"}</h3></div>
   ${q.summary ? `<p class="tiny muted" style="margin:0 0 6px">${esc(q.summary)}</p>` : ""}
   <p style="margin:0 0 10px;white-space:pre-line"><strong>${esc(q.q)}</strong></p>
   <textarea class="grow" data-fbqa="${esc(q.id)}|${esc(q.qid)}" maxlength="2000" rows="3" placeholder="Your answer" aria-label="Your answer" style="width:100%">${esc(fbQuestions.drafts[q.id + "|" + q.qid] || "")}</textarea>
   <button class="btn primary block" data-fbqsend="${esc(q.id)}|${esc(q.qid)}" style="margin-top:8px">Send answer</button></div>`).join("");
 function bindFbQuestions(v) {
+  // Replying to a message from the developer (Sam, 2026-10-23: there was no way to answer one in the app).
+  v.querySelectorAll("[data-fbropen]").forEach((b) => (b.onclick = () => {
+    const box = v.querySelector(`[data-fbreply="${CSS.escape(b.dataset.fbropen)}"]`); if (!box) return;
+    box.hidden = false; b.hidden = true; const ta = box.querySelector("textarea"); ta.focus();
+    ta.oninput = () => { fbQuestions.drafts[b.dataset.fbropen] = ta.value; };
+    const st = box.querySelector("[data-fbrstatus]"); dictation(ta, box.querySelector("[data-fbrspeak]"), (t) => (st.textContent = t), { hint: "Check the words, then tap Send reply." });
+  }));
+  v.querySelectorAll("[data-fbrsend]").forEach((b) => (b.onclick = async () => {
+    const key = b.dataset.fbrsend, [id, qid] = key.split("|"), ta = v.querySelector(`[data-fbreply="${CSS.escape(key)}"] textarea`);
+    const answer = (ta ? ta.value : "").trim(); if (!answer) return toast("Write or say your reply first");
+    b.disabled = true;
+    try { await relay("/feedback/answer", { id, qid, answer }); fbQuestions.list = fbQuestions.list.filter((x) => !(x.id === id && x.qid === qid)); delete fbQuestions.drafts[key]; toast("Thanks, your reply was sent"); render(); }
+    catch (e) { toast(e.message); b.disabled = false; }
+  }));
   v.querySelectorAll("[data-fbqa]").forEach((ta) => (ta.oninput = () => { fbQuestions.drafts[ta.dataset.fbqa] = ta.value; }));
   v.querySelectorAll("[data-fbqseen]").forEach((b) => (b.onclick = async () => {
     const [id, qid] = b.dataset.fbqseen.split("|"); b.disabled = true;
